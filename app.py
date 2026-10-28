@@ -1,0 +1,1584 @@
+"""
+🏁 Deadline or Die — make deadlines deadly.
+
+Every task has a deadline, a reward and a penalty.
+  • Prove it's done (photo / screenshot / file / link) → coins + XP → upgrade your car → race your procrastination rivals.
+  • Miss it → lose coins, damage the car, reset your streak, and serve your own real-world consequence.
+    Debt or unserved penalties = BLACK FLAG (no racing) until you fix it.
+
+Run:  streamlit run app.py
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import html
+import io
+import json
+import math
+import os
+import random
+import re
+import time
+import uuid
+from datetime import date, datetime, time as dtime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+import requests
+import streamlit as st
+
+from notify import push
+from notion_store import (Notion, NotionError, STATUS, archive_page, due_to_dt, ensure_workspace, load_json,
+                          pull_rows, save_json, task_props, upload_proof, upsert_task)
+
+# ─────────────────────────── config ───────────────────────────
+TZ = ZoneInfo(os.getenv("DOD_TZ", "America/Edmonton"))
+DATA_DIR = Path(os.getenv("DOD_DATA_DIR", Path(__file__).parent / "data"))
+PROOF_DIR = DATA_DIR / "proofs"
+STATE_FILE = DATA_DIR / "state.json"
+RACE_TICK = float(os.getenv("DOD_RACE_TICK", "0.12"))  # seconds per animation frame
+
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+NOTION_VERSION = "2022-06-28"
+DONE_WORDS = {"done", "complete", "completed", "finished", "✅"}
+
+DIFFICULTY = {
+    "Quick": {"reward": 20, "penalty": 15, "xp": 10, "hint": "under an hour"},
+    "Medium": {"reward": 45, "penalty": 35, "xp": 25, "hint": "one solid session"},
+    "Big": {"reward": 100, "penalty": 80, "xp": 60, "hint": "several sessions"},
+    "Boss": {"reward": 250, "penalty": 200, "xp": 150, "hint": "major milestone"},
+}
+
+PARTS = {
+    "engine": {"label": "Engine", "icon": "🔥", "base": 60, "weight": 6, "desc": "Straight-line pace"},
+    "tires": {"label": "Tires", "icon": "🛞", "base": 50, "weight": 5, "desc": "Corner grip"},
+    "aero": {"label": "Aero", "icon": "🌀", "base": 45, "weight": 4, "desc": "High-speed stability"},
+    "brakes": {"label": "Brakes", "icon": "🛑", "base": 40, "weight": 4, "desc": "Late braking"},
+    "turbo": {"label": "Turbo", "icon": "💨", "base": 80, "weight": 5, "desc": "Overtaking punch"},
+}
+MAX_PART_LEVEL = 5
+
+RIVALS = [
+    "Tomorrow Tom", "Snooze Button", "Doomscroll Dan", "Just-One-Episode",
+    "Night-Before Nate", "Perfectionist Pat", "Inbox Zero-ish", "Busywork Bella",
+    "'Quick Break' Quinn", "Reorganize-My-Desk Rob",
+]
+
+TRACKS = [
+    {"name": "Parking Lot Sprint", "laps": 3, "level": 1, "fee": 10, "ai": (30, 48), "prize": [60, 30, 15]},
+    {"name": "Bow River Circuit", "laps": 5, "level": 2, "fee": 25, "ai": (55, 75), "prize": [150, 75, 35]},
+    {"name": "Foothills Grand Prix", "laps": 7, "level": 4, "fee": 60, "ai": (80, 105), "prize": [360, 180, 90]},
+    {"name": "Rockies 6 Hours", "laps": 10, "level": 6, "fee": 120, "ai": (105, 135), "prize": [800, 400, 200]},
+    {"name": "Thesis Defense Ring", "laps": 12, "level": 8, "fee": 250, "ai": (130, 158), "prize": [2000, 900, 400]},
+]
+
+# ── conditioning layer ──
+# Rivals are your procrastination habits. Every miss feeds them ("heat" = they race faster).
+TAUNTS = [
+    "Tomorrow Tom: \"There's always tomorrow, right {name}?\"",
+    "Doomscroll Dan just lapped you. He didn't even look up from his phone.",
+    "Snooze Button: \"Five more minutes. Then five more. Then the deadline.\"",
+    "Night-Before Nate is pocketing your coins. Thanks for the fuel, {name}.",
+    "Perfectionist Pat: \"If it couldn't be perfect, why start at all?\"",
+    "Just-One-Episode: \"Told you we had time.\"",
+    "Reorganize-My-Desk Rob: \"At least your desk looks nice.\"",
+    "'Quick Break' Quinn waves from the pit lane. Your car's in the wall.",
+]
+HYPE = [
+    "That's how a closer drives, {name}.",
+    "Clean lap. Rivals in the mirror.",
+    "Fanatec-level precision. Send it.",
+    "Tomorrow Tom just watched you leave him for dead.",
+    "Every deadline you hit makes the next one easier. Keep the tires warm.",
+    "That's a purple sector, {name}.",
+    "The car's getting faster. So are you.",
+]
+CONSEQUENCE_PRESETS = [
+    "(write my own)",
+    "No sim racing until it's done",
+    "No gaming (PS5 / Switch) tonight",
+    "No manga/manhwa for 24h",
+    "Phone in another room all evening",
+    "Tell a friend I missed it",
+]
+STARTER_GOALS_DEFAULT = [  # override with a STARTER_GOALS list in secrets to make these yours
+    ("Finish a big writing project", "Future you will thank you."),
+    ("Ship a side project", "Done beats perfect."),
+    ("Get in shape for a goal date", "Show up for yourself."),
+]
+# Pit crate after every approved proof — variable-ratio rewards (with a pity timer).
+CRATE_TABLE = [  # (weight, kind)
+    (52, "coins_small"), (20, "coins_big"), (11, "part"), (8, "shield"), (6, "repair"), (3, "jackpot"),
+]
+PITY_AFTER = 6               # guarantee a rare drop after this many commons in a row
+DANGER_DAYS = {1, 2}         # Tue/Wed: unstructured days → +20% for finishing on them
+IDLE_GRACE_DAYS = 2          # car starts rusting after this many days with nothing finished
+RUST_PER_DAY = 4
+
+MISS_DAMAGE = 15          # car condition lost per missed deadline
+REDEEM_WINDOW_H = 72      # hours after a miss you can still finish it for a partial refund
+FREE_DELETE_MIN = 10      # minutes after creating a task you can delete it for free (typo fixes)
+GOAL_BONUS = (150, 100)   # coins, xp for finishing a whole goal
+REPAIR_COST_PER_PT = 2
+
+PROOF_TYPES = ["png", "jpg", "jpeg", "webp", "gif", "pdf", "txt", "md", "csv", "py", "r", "json",
+               "docx", "xlsx", "pptx"]
+IMAGE_MIME = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+TEXT_EXT = {".txt", ".md", ".csv", ".py", ".r", ".json"}
+
+STEWARD_SYSTEM = (
+    "You are the race steward in a productivity game. The player says they finished a real-world task and "
+    "submitted proof. Decide whether the evidence reasonably shows THIS task was actually done. Be fair but "
+    "skeptical: reject proof that is unrelated to the task, generic, a stock image, or a vague claim with nothing "
+    "backing it. Partial evidence is fine only if it clearly shows meaningful work on this exact task. "
+    'Reply with JSON only: {"approved": true or false, "confidence": number 0-1, '
+    '"comment": "one or two sentences in the voice of a race steward"}'
+)
+
+PLANNER_SYSTEM = (
+    "You break long-term goals into concrete milestones for someone who procrastinates. Every milestone must be a "
+    "specific deliverable that can be proven with a photo, screenshot, file or link. Space them realistically between "
+    "today and the target date and front-load small wins so momentum builds. Reply with JSON only: a list of 4-10 "
+    'objects {"title": str, "due": "YYYY-MM-DD", "difficulty": "Quick"|"Medium"|"Big"|"Boss", "proof_hint": str}.'
+)
+
+
+# ─────────────────────────── state ───────────────────────────
+def default_state() -> dict:
+    return {
+        "version": 1,
+        "coins": 50,
+        "xp": 0,
+        "streak": 0,
+        "best_streak": 0,
+        "car": {"name": "Project GT3", "number": 28, "color": "#e63946",
+                "parts": {k: 0 for k in PARTS}, "condition": 100},
+        "goals": [],
+        "tasks": [],
+        "penalty_box": [],
+        "ledger": [],
+        "races": [],
+        "proof_hashes": [],
+        "rival_heat": 0,
+        "shields": 0,
+        "since_rare": 0,
+        "last_done_date": datetime.now(TZ).date().isoformat(),
+        "rust_days": 0,
+        "dnfs": 0,
+        "settings": {
+            "player_name": os.getenv("PLAYER_NAME", "Driver"),
+            "sounds": True,
+            "grace_minutes": 30,
+            "strict_proof": True,
+            "ai_steward": True,
+            "model": "claude-haiku-5-5",
+            "extension_hours": 24,
+            "max_extensions": 2,
+            "notion_db": "",
+            "notion_date_prop": "",
+            "notion_done_prop": "",
+        },
+    }
+
+
+def _merge(defaults: dict, loaded: dict) -> dict:
+    out = dict(defaults)
+    for k, v in loaded.items():
+        if isinstance(v, dict) and isinstance(defaults.get(k), dict):
+            out[k] = _merge(defaults[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+SESSION_TTL = 20  # seconds before re-reading the save from Notion (and pulling new Notion tasks)
+
+
+def _load_local() -> dict | None:
+    if STATE_FILE.exists():
+        try:
+            return _merge(default_state(), json.loads(STATE_FILE.read_text()))
+        except Exception as e:  # corrupted file: keep a copy, start fresh
+            STATE_FILE.rename(STATE_FILE.with_suffix(f".broken-{int(time.time())}.json"))
+            st.warning(f"Save file was unreadable ({e}); started fresh and kept a copy.")
+    return None
+
+
+def notion_cfg() -> tuple[str, str] | None:
+    token, parent = get_secret("NOTION_TOKEN"), get_secret("NOTION_PARENT_PAGE")
+    return (token, parent) if token and parent else None
+
+
+@st.cache_resource(show_spinner="Setting up your Notion workspace…")
+def _workspace(token: str, parent: str) -> dict:
+    return ensure_workspace(Notion(token), parent)
+
+
+def notion_ctx() -> tuple[Notion, dict] | None:
+    cfg = notion_cfg()
+    return (Notion(cfg[0]), _workspace(*cfg)) if cfg else None
+
+
+def load_state() -> dict:
+    """Notion save if configured (cached per session for SESSION_TTL), else the local file."""
+    if not notion_cfg():
+        return _load_local() or default_state()
+    cached = st.session_state.get("_state")
+    if cached is not None and time.time() - st.session_state.get("_state_ts", 0) < SESSION_TTL:
+        return cached
+    try:
+        n, ids = notion_ctx()
+        data = load_json(n, ids["save_page"])
+    except Exception as e:
+        # Never fall back to a blank game here — a later save would overwrite the real one.
+        st.error(f"Can't reach your Notion save right now: {e}")
+        st.button("Retry")
+        st.stop()
+    if data is None:  # first run on Notion: carry over any local progress
+        data = _load_local() or default_state()
+        st.session_state["_needs_save"] = True
+    state = _merge(default_state(), data)
+    st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
+    st.session_state["_fresh_load"] = True
+    return state
+
+
+def _push_tasks(n: Notion, ids: dict, state: dict) -> list[str]:
+    errors = []
+    for t in state["tasks"]:
+        goal = goal_title(state, t.get("goal_id"))
+        sig = hashlib.md5(json.dumps(task_props(t, goal), sort_keys=True, default=str).encode()).hexdigest()
+        if t.get("_sig") == sig and t.get("sync_page"):
+            continue
+        try:
+            upsert_task(n, ids["tasks_db"], t, goal)
+        except NotionError:
+            try:  # row was deleted in Notion — deleting it there doesn't get you out of it
+                t.pop("sync_page", None)
+                upsert_task(n, ids["tasks_db"], t, goal)
+            except NotionError as e:
+                errors.append(f"{t['title']}: {e}")
+                continue
+        t["_sig"] = sig
+    return errors
+
+
+def save_state(state: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2, default=str))
+    os.replace(tmp, STATE_FILE)
+    if not notion_cfg():
+        return
+    try:
+        n, ids = notion_ctx()
+        errs = _push_tasks(n, ids, state)
+        save_json(n, ids["save_page"], state)
+        st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
+        if errs:
+            flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
+    except Exception as e:
+        flash(f"⚠️ Couldn't save to Notion ({e}). Your progress is kept on this server for now.", "error")
+
+
+def sync_from_notion(state: dict) -> tuple[list[tuple[str, str]], bool]:
+    """Pull new rows added in Notion; undo cheating (Done without proof, moved dates, deleted rows)."""
+    n, ids = notion_ctx()
+    rows = pull_rows(n, ids["tasks_db"])
+    seen = {r["page_id"] for r in rows}
+    mine = {t["sync_page"]: t for t in state["tasks"] if t.get("sync_page")}
+    msgs, changed, no_date = [], False, 0
+    for r in rows:
+        t = mine.get(r["page_id"])
+        if t is None:
+            if r["app_id"] or r["status"] in ("Done", "Failed", "Redeemed"):
+                continue
+            if not r["due"]:
+                no_date += 1
+                continue
+            dl = due_to_dt(r["due"], TZ)
+            if dl <= now() + timedelta(minutes=5):
+                msgs.append(("warning", f"Notion task **{r['title'] or '(untitled)'}** has a past due date — "
+                                        "give it a future one to bring it into the game."))
+                continue
+            size = r["size"] if r["size"] in DIFFICULTY else "Medium"
+            t = make_task(r["title"] or "(untitled)", "", dl, size, r["consequence"], source="notion-sync")
+            t["sync_page"] = r["page_id"]
+            state["tasks"].append(t)
+            changed = True
+            msgs.append(("info", f"📥 Pulled **{t['title']}** in from Notion — due {dl:%a %b %d, %I:%M %p}, "
+                                 f"+{t['reward']}/−{t['penalty']}."))
+            continue
+        if r["title"] and r["title"] != t["title"]:
+            t["title"], changed = r["title"], True
+        if r["status"] != STATUS.get(t["status"]):
+            if t["status"] == "open" and r["status"] in ("Done", "Redeemed"):
+                msgs.append(("error", f"🚩 You ticked **{t['title']}** off in Notion. Nice try — proof happens "
+                                      "in the app. Flipped back to Open."))
+            t.pop("_sig", None)
+            changed = True
+        elif r["due"] and abs((due_to_dt(r["due"], TZ) - parse_dt(t["deadline"])).total_seconds()) > 60:
+            msgs.append(("warning", f"⏳ Moving **{t['title']}**'s date in Notion doesn't count — deadlines only "
+                                    "move by buying an extension. Put it back."))
+            t.pop("_sig", None)
+            changed = True
+    for page, t in mine.items():
+        if page not in seen and t["status"] == "open":
+            try:
+                n.req("PATCH", f"/pages/{page}", json={"archived": False})
+            except NotionError:
+                t.pop("sync_page", None)
+            t.pop("_sig", None)
+            changed = True
+            msgs.append(("error", f"🚩 Deleting **{t['title']}** in Notion doesn't delete the deadline. It's back."))
+    if no_date:
+        msgs.append(("info", f"{no_date} Notion task(s) have no Due date — add one and they'll join the game."))
+    return msgs, changed
+
+
+# ─────────────────────────── helpers ───────────────────────────
+def now() -> datetime:
+    return datetime.now(TZ)
+
+
+def parse_dt(s: str) -> datetime:
+    d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return d if d.tzinfo else d.replace(tzinfo=TZ)
+
+
+def to_date(v) -> date | None:
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return None
+    if isinstance(v, pd.Timestamp):
+        return None if pd.isna(v) else v.date()
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except ValueError:
+        return None
+
+
+def fmt_left(td: timedelta) -> str:
+    secs = int(td.total_seconds())
+    sign = "-" if secs < 0 else ""
+    secs = abs(secs)
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:
+        out = f"{d}d {h}h"
+    elif h:
+        out = f"{h}h {m}m"
+    else:
+        out = f"{m}m"
+    return f"{sign}{out}"
+
+
+def chip(deadline: datetime) -> str:
+    hrs = (deadline - now()).total_seconds() / 3600
+    if hrs < 0:
+        return "💀"
+    if hrs < 12:
+        return "🔴"
+    if hrs < 48:
+        return "🟡"
+    return "🟢"
+
+
+def level_of(xp: int) -> int:
+    return int(math.sqrt(max(xp, 0) / 50)) + 1
+
+
+def xp_for_level(lvl: int) -> int:
+    return 50 * (lvl - 1) ** 2
+
+
+def bank(state: dict, delta: int, reason: str) -> None:
+    state["coins"] += int(delta)
+    state["ledger"].insert(0, {"ts": now().isoformat(), "delta": int(delta), "reason": reason})
+    del state["ledger"][300:]
+
+
+def car_rating(state: dict) -> float:
+    car = state["car"]
+    raw = 40 + sum(car["parts"][k] * PARTS[k]["weight"] for k in PARTS)
+    return raw * (0.55 + 0.45 * car["condition"] / 100)
+
+
+def part_cost(part: str, lvl: int) -> int:
+    return int(PARTS[part]["base"] * 2 ** lvl)
+
+
+def goal_title(state: dict, gid: str | None) -> str:
+    for g in state["goals"]:
+        if g["id"] == gid:
+            return g["title"]
+    return ""
+
+
+def get_secret(name: str) -> str | None:
+    v = st.session_state.get(f"secret_{name}")
+    if v:
+        return v
+    try:
+        v = st.secrets.get(name)
+    except Exception:
+        v = None
+    return v or os.getenv(name)
+
+
+def starter_goals() -> list[tuple[str, str]]:
+    """Your real goals live in secrets (STARTER_GOALS = [["Goal", "Why"], ...]), not in public code."""
+    raw = get_secret("STARTER_GOALS")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = None
+    try:
+        goals = [(str(g[0]), str(g[1]) if len(g) > 1 else "") for g in (raw or [])]
+    except (TypeError, IndexError, KeyError):
+        goals = []
+    return goals or STARTER_GOALS_DEFAULT
+
+
+def flash(msg: str, kind: str = "success", celebrate: bool = False, sound: str | None = None) -> None:
+    st.session_state.setdefault("flash", []).append((kind, msg))
+    if celebrate:
+        st.session_state["celebrate"] = True
+    if sound:
+        st.session_state["sound"] = sound
+
+
+def make_task(title, details, deadline: datetime, difficulty, consequence="", goal_id=None,
+              source="manual", notion=None) -> dict:
+    d = DIFFICULTY[difficulty]
+    t = {
+        "id": uuid.uuid4().hex[:10],
+        "title": title.strip(),
+        "details": details.strip(),
+        "goal_id": goal_id,
+        "deadline": deadline.isoformat(),
+        "created": now().isoformat(),
+        "difficulty": difficulty,
+        "reward": d["reward"],
+        "penalty": d["penalty"],
+        "xp": d["xp"],
+        "consequence": consequence.strip(),
+        "status": "open",
+        "extensions": 0,
+        "rejections": 0,
+        "source": source,
+    }
+    if notion:
+        t.update(notion)
+    return t
+
+
+# ─────────────────────────── game rules ───────────────────────────
+def fail_task(state: dict, t: dict, reason: str) -> str:
+    t["status"] = "failed"
+    t["failed_at"] = now().isoformat()
+    bank(state, -t["penalty"], f"💀 {reason}: {t['title']}")
+    state["car"]["condition"] = max(0, state["car"]["condition"] - MISS_DAMAGE)
+    state["rival_heat"] += 1
+    state["dnfs"] += 1
+    lost_streak = state["streak"]
+    if state["shields"] > 0 and lost_streak:
+        state["shields"] -= 1
+        streak_line = f"🛡️ Streak shield absorbed the hit — {lost_streak}-streak survives ({state['shields']} left)."
+    else:
+        state["streak"] = 0
+        streak_line = f"Your **{lost_streak}-task streak is gone.**" if lost_streak else "Streak: 0."
+    if t.get("consequence"):
+        state["penalty_box"].append({"id": uuid.uuid4().hex[:8], "task": t["title"],
+                                     "consequence": t["consequence"], "created": now().isoformat(),
+                                     "served": False})
+    name = state["settings"].get("player_name") or "driver"
+    msg = (f"### 💀 DNF — {reason.lower()}\n**{t['title']}**\n\n"
+           f"−{t['penalty']} coins · −{MISS_DAMAGE}% car condition · {streak_line}\n\n"
+           f"🔥 Your rivals got faster (heat {state['rival_heat']}).  \n"
+           f"*{random.choice(TAUNTS).format(name=name)}*")
+    if t.get("consequence"):
+        msg += f"\n\n🚨 **Penalty box:** {t['consequence']}"
+    if reason != "Abandoned":
+        msg += f"\n\n🩹 You have {REDEEM_WINDOW_H}h to finish it anyway and claw back half."
+    return msg
+
+
+def process_rust(state: dict) -> str | None:
+    """Loss aversion: an idle car rusts. Finishing anything resets the clock."""
+    idle = (now().date() - date.fromisoformat(state["last_done_date"])).days
+    due = max(0, idle - IDLE_GRACE_DAYS)
+    new = due - state["rust_days"]
+    if new <= 0:
+        return None
+    state["rust_days"] = due
+    loss = RUST_PER_DAY * new
+    state["car"]["condition"] = max(0, state["car"]["condition"] - loss)
+    return (f"🟫 Nothing finished in {idle} days. Your car's been sitting in the garage rusting: "
+            f"−{loss}% condition. Finish *anything* to stop it.")
+
+
+def open_crate(state: dict, t: dict) -> str:
+    """Variable-ratio reward after every approved proof."""
+    rare = {"part", "shield", "repair", "jackpot"}
+    if state["since_rare"] >= PITY_AFTER:
+        pool = [(w, k) for w, k in CRATE_TABLE if k in rare]
+    else:
+        pool = CRATE_TABLE
+    kind = random.choices([k for _, k in pool], weights=[w for w, _ in pool])[0]
+    state["since_rare"] = 0 if kind in rare else state["since_rare"] + 1
+    car = state["car"]
+    if kind == "coins_small":
+        n = random.randint(5, 15)
+        bank(state, n, "📦 Pit crate")
+        return f"📦 Pit crate: **+{n} coins**"
+    if kind == "coins_big":
+        n = max(20, t["reward"] // 2)
+        bank(state, n, "📦 Pit crate (big)")
+        return f"📦✨ Big crate: **+{n} coins**"
+    if kind == "part":
+        open_parts = [k for k in PARTS if car["parts"][k] < MAX_PART_LEVEL]
+        if not open_parts:
+            bank(state, 150, "📦 Pit crate (parts maxed)")
+            return "📦💎 Rare crate: parts maxed, so **+150 coins**"
+        k = random.choice(open_parts)
+        car["parts"][k] += 1
+        return f"📦💎 **RARE DROP — free {PARTS[k]['icon']} {PARTS[k]['label']} upgrade → L{car['parts'][k]}**"
+    if kind == "shield":
+        state["shields"] += 1
+        return f"📦🛡️ **RARE DROP — streak shield** (you have {state['shields']}). Absorbs one miss."
+    if kind == "repair":
+        car["condition"] = min(100, car["condition"] + 25)
+        return "📦🔧 **RARE DROP — pit crew repair, +25% condition**"
+    n = t["reward"] * 3
+    bank(state, n, "📦 JACKPOT")
+    return f"📦💰💰💰 **JACKPOT — +{n} coins!!!**"
+
+
+def tone_wav(notes: tuple) -> bytes:
+    """Signature sounds — same cue every time so the brain learns it."""
+    import struct
+    import wave
+    rate, frames = 22050, bytearray()
+    for freq, dur in notes:
+        n = int(rate * dur)
+        for i in range(n):
+            env = min(1.0, i / 300) * min(1.0, (n - i) / 900)
+            v = 0.35 * env * (math.sin(2 * math.pi * freq * i / rate)
+                              + 0.3 * math.sin(4 * math.pi * freq * i / rate))
+            frames += struct.pack("<h", int(max(-1, min(1, v)) * 32767))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+SOUNDS = {
+    "win": ((523, .08), (659, .08), (784, .08), (1047, .25)),
+    "jackpot": ((784, .07), (988, .07), (1175, .07), (1568, .07), (1175, .07), (1568, .35)),
+    "fail": ((196, .28), (147, .55)),
+}
+
+
+def process_overdue(state: dict) -> list[str]:
+    grace = timedelta(minutes=state["settings"]["grace_minutes"])
+    msgs = []
+    for t in state["tasks"]:
+        if t["status"] == "open" and now() > parse_dt(t["deadline"]) + grace:
+            msgs.append(fail_task(state, t, "Missed deadline"))
+    return msgs
+
+
+def black_flag_reasons(state: dict) -> list[str]:
+    reasons = []
+    if state["coins"] < 0:
+        reasons.append(f"you're {abs(state['coins'])} coins in debt")
+    unserved = [p for p in state["penalty_box"] if not p["served"]]
+    if unserved:
+        reasons.append(f"{len(unserved)} real-world penalt{'y' if len(unserved) == 1 else 'ies'} not served")
+    if state["car"]["condition"] < 20:
+        reasons.append("your car is wrecked (under 20%) — repair it in the Garage")
+    return reasons
+
+
+def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
+    base = t["reward"]
+    hours_early = (parse_dt(t["deadline"]) - at).total_seconds() / 3600
+    early = 0.25 if hours_early >= 24 else 0.10 if hours_early >= 6 else 0.0
+    danger = 0.20 if at.weekday() in DANGER_DAYS else 0.0
+    streak_mult = 1 + 0.1 * min(state["streak"], 10)
+    ext_cut = 1 - 0.15 * t.get("extensions", 0)
+    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut))
+    parts = [f"base {base}"]
+    if early:
+        parts.append(f"+{int(early * 100)}% early")
+    if danger:
+        parts.append("+20% danger-day")
+    if state["streak"]:
+        parts.append(f"×{streak_mult:.1f} streak")
+    if t.get("extensions"):
+        parts.append(f"−{int((1 - ext_cut) * 100)}% extensions")
+    return total, ", ".join(parts)
+
+
+# ─────────────────────────── Claude (optional) ───────────────────────────
+def claude(messages: list, system: str, model: str, max_tokens: int = 700) -> str:
+    key = get_secret("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("No ANTHROPIC_API_KEY set")
+    r = requests.post(
+        ANTHROPIC_URL,
+        headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        json={"model": model, "max_tokens": max_tokens, "system": system, "messages": messages},
+        timeout=90,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"Claude API {r.status_code}: {r.text[:300]}")
+    return "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
+
+
+def extract_json(text: str):
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"(\{.*\}|\[.*\])", text, re.S)
+        if not m:
+            raise ValueError(f"No JSON in reply: {text[:200]}")
+        return json.loads(m.group(1))
+
+
+def shrink_image(data: bytes) -> tuple[bytes, str]:
+    from PIL import Image, ImageOps
+    im = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
+    im.thumbnail((1568, 1568))
+    if im.mode not in ("RGB", "L"):
+        im = im.convert("RGB")
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=85)
+    return buf.getvalue(), "image/jpeg"
+
+
+def ai_verify(state: dict, t: dict, note: str, link: str, data: bytes | None, filename: str, mime: str) -> dict:
+    content = []
+    if data:
+        ext = Path(filename).suffix.lower()
+        if mime in IMAGE_MIME:
+            img, img_mime = shrink_image(data)
+            content.append({"type": "image", "source": {"type": "base64", "media_type": img_mime,
+                                                        "data": base64.b64encode(img).decode()}})
+        elif mime == "application/pdf" and len(data) < 20_000_000:
+            content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                                           "data": base64.b64encode(data).decode()}})
+        elif ext in TEXT_EXT:
+            content.append({"type": "text", "text": f"Attached file {filename}:\n"
+                                                    f"{data.decode('utf-8', 'replace')[:8000]}"})
+        else:
+            content.append({"type": "text", "text": f"(Attached {filename}, type {mime}, can't be displayed. "
+                                                    "Judge from the note and link.)"})
+    content.append({"type": "text", "text": (
+        f"TASK: {t['title']}\nDETAILS: {t.get('details') or '-'}\n"
+        f"GOAL: {goal_title(state, t.get('goal_id')) or '-'}\n"
+        f"DEADLINE: {t['deadline']}\nSUBMITTED: {now().isoformat()}\n"
+        f"PLAYER NOTE: {note}\nLINK: {link or '-'}\n\nVerdict?")})
+    out = extract_json(claude([{"role": "user", "content": content}], STEWARD_SYSTEM,
+                              state["settings"]["model"], 400))
+    return {"approved": bool(out.get("approved")), "confidence": float(out.get("confidence", 0)),
+            "comment": str(out.get("comment", ""))}
+
+
+def ai_plan(state: dict, goal: dict, extra: str) -> list[dict]:
+    prompt = (f"GOAL: {goal['title']}\nWHY IT MATTERS: {goal.get('why') or '-'}\n"
+              f"TODAY: {now().date().isoformat()}\nTARGET DATE: {goal['target']}\n"
+              f"CONTEXT: {extra or '-'}")
+    out = extract_json(claude([{"role": "user", "content": prompt}], PLANNER_SYSTEM,
+                              state["settings"]["model"], 1500))
+    return out if isinstance(out, list) else out.get("milestones", [])
+
+
+# ─────────────────────────── Notion (optional) ───────────────────────────
+def clean_notion_id(s: str) -> str:
+    from notion_store import clean_id
+    return clean_id(s)
+
+
+def notion_headers() -> dict:
+    token = get_secret("NOTION_TOKEN")
+    if not token:
+        raise RuntimeError("No NOTION_TOKEN set (Settings tab or .streamlit/secrets.toml).")
+    return {"Authorization": f"Bearer {token}", "Notion-Version": NOTION_VERSION,
+            "Content-Type": "application/json"}
+
+
+def _notion_err(r) -> str:
+    try:
+        return f"Notion {r.status_code}: {r.json().get('message')}"
+    except Exception:
+        return f"Notion {r.status_code}: {r.text[:200]}"
+
+
+def notion_fetch(db: str) -> list[dict]:
+    headers, out, cursor = notion_headers(), [], None
+    while True:
+        body = {"page_size": 100}
+        if cursor:
+            body["start_cursor"] = cursor
+        r = requests.post(f"https://api.notion.com/v1/databases/{clean_notion_id(db)}/query",
+                          headers=headers, json=body, timeout=30)
+        if r.status_code != 200:
+            raise RuntimeError(_notion_err(r))
+        data = r.json()
+        out += data.get("results", [])
+        if not data.get("has_more"):
+            return out
+        cursor = data.get("next_cursor")
+
+
+def notion_parse(page: dict, date_prop: str, done_prop: str) -> dict:
+    props = page.get("properties", {})
+    title = "".join(x.get("plain_text", "") for p in props.values() if p.get("type") == "title"
+                    for x in p.get("title", []))
+    dp = props.get(date_prop) if date_prop else next((p for p in props.values() if p.get("type") == "date"), None)
+    start = ((dp or {}).get("date") or {}).get("start") if (dp or {}).get("type") == "date" else None
+    done, done_type = False, None
+    fp = props.get(done_prop) if done_prop else None
+    if fp:
+        done_type = fp.get("type")
+        if done_type == "checkbox":
+            done = bool(fp.get("checkbox"))
+        elif done_type in ("status", "select"):
+            done = ((fp.get(done_type) or {}).get("name", "")).lower() in DONE_WORDS
+    return {"notion_id": page["id"], "title": title.strip() or "(untitled)", "due": start,
+            "done": done, "done_type": done_type}
+
+
+def notion_mark_done(state: dict, t: dict) -> str | None:
+    prop, typ = state["settings"].get("notion_done_prop"), t.get("notion_done_type")
+    if not t.get("notion_id") or not prop or not typ:
+        return None
+    value = {"checkbox": {"checkbox": True}, "status": {"status": {"name": "Done"}},
+             "select": {"select": {"name": "Done"}}}.get(typ)
+    if not value:
+        return None
+    try:
+        r = requests.patch(f"https://api.notion.com/v1/pages/{t['notion_id']}", headers=notion_headers(),
+                           json={"properties": {prop: value}}, timeout=30)
+        return None if r.status_code == 200 else _notion_err(r)
+    except Exception as e:
+        return str(e)
+
+
+# ─────────────────────────── car art ───────────────────────────
+def car_svg(car: dict) -> str:
+    c, p, cond = car["color"], car["parts"], car["condition"]
+    num = html.escape(str(car["number"]))
+    extras = []
+    if p["aero"] >= 2:
+        extras.append('<rect x="6" y="32" width="38" height="6" rx="2" fill="#1d1d1d"/>'
+                      '<rect x="22" y="38" width="4" height="18" fill="#1d1d1d"/>')
+    if p["engine"] >= 3:
+        extras.append('<path d="M60 58 L300 66 L300 72 L60 64 Z" fill="#ffffff" opacity=".85"/>')
+    if p["turbo"] >= 1:
+        size = 8 + p["turbo"] * 3
+        extras.append(f'<path d="M18 76 l-{size} -5 l{size} -4 z" fill="#ff9f1c"/>')
+    if cond < 60:
+        extras.append('<path d="M200 60 l18 8 M230 58 l10 14 M110 66 l14 6" stroke="#222" stroke-width="2"/>')
+    if cond < 30:
+        extras.append('<circle cx="280" cy="40" r="9" fill="#777" opacity=".5"/>'
+                      '<circle cx="292" cy="26" r="12" fill="#777" opacity=".35"/>')
+    wheel = ('<circle cx="{x}" cy="84" r="18" fill="#111"/><circle cx="{x}" cy="84" r="10" fill="#c9c9c9"/>'
+             '<circle cx="{x}" cy="84" r="3" fill="#333"/>')
+    return f"""
+<svg viewBox="0 0 320 112" width="100%" style="max-width:420px" xmlns="http://www.w3.org/2000/svg">
+  <ellipse cx="160" cy="102" rx="140" ry="7" fill="#000" opacity=".18"/>
+  <path d="M18 84 L22 64 Q26 54 48 52 L104 46 Q128 28 170 26 Q205 26 232 44 L286 54 Q306 58 308 74 L306 84 Z"
+        fill="{c}" stroke="#111" stroke-width="2"/>
+  <path d="M112 47 Q132 32 168 31 Q196 31 218 45 Z" fill="#1b2430" opacity=".9"/>
+  <line x1="165" y1="31" x2="165" y2="46" stroke="{c}" stroke-width="4"/>
+  {''.join(extras)}
+  <circle cx="150" cy="70" r="12" fill="#fff" stroke="#111" stroke-width="1.5"/>
+  <text x="150" y="75" font-size="13" font-family="Arial, sans-serif" font-weight="700"
+        text-anchor="middle" fill="#111">{num}</text>
+  <rect x="295" y="62" width="10" height="5" rx="2" fill="#ffe66d"/>
+  {wheel.format(x=74)}{wheel.format(x=252)}
+</svg>"""
+
+
+# ─────────────────────────── UI pieces ───────────────────────────
+def render_proof_form(state: dict, t: dict, mode: str) -> None:
+    """mode: 'open' (normal completion) or 'redeem' (finishing a missed task for a partial refund)."""
+    s = state["settings"]
+    k = f"{mode}_{t['id']}"
+    use_ai = s["ai_steward"] and bool(get_secret("ANTHROPIC_API_KEY"))
+    note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.")
+    up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)", type=PROOF_TYPES, key=f"file_{k}")
+    link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}")
+    honor = True
+    if use_ai:
+        st.caption("🧑‍⚖️ The AI race steward will review this proof.")
+    else:
+        honor = st.checkbox("On my honor (and my car's paint job), this proof is real.", key=f"honor_{k}")
+    if not st.button("📸 Submit proof", key=f"submit_{k}", type="primary"):
+        return
+
+    errors, data, h = [], None, None
+    if len(note.strip()) < 15:
+        errors.append("Write at least a real sentence about what you did.")
+    if s["strict_proof"] and not up:
+        errors.append("Strict mode: attach a file (turn off in Settings if you must).")
+    if not up and not link.strip():
+        errors.append("Attach a file or a link.")
+    if up:
+        data = up.getvalue()
+        h = hashlib.sha256(data).hexdigest()
+        if h in state["proof_hashes"]:
+            errors.append("That exact file was already used as proof for another task. Nice try. 🚩")
+    if not honor:
+        errors.append("Tick the honor box.")
+    if errors:
+        for e in errors:
+            st.error(e)
+        return
+
+    verdict = None
+    if use_ai:
+        with st.spinner("Race steward reviewing your proof…"):
+            try:
+                verdict = ai_verify(state, t, note, link, data, up.name if up else "", up.type if up else "")
+            except Exception as e:
+                st.error(f"Steward unreachable: {e}. Try again, or turn off the AI steward in Settings.")
+                return
+        if not verdict["approved"]:
+            t["rejections"] = t.get("rejections", 0) + 1
+            save_state(state)
+            st.error(f"🚩 Proof rejected — {verdict['comment']}")
+            return
+
+    # ✅ accepted
+    proof_path = None
+    if up:
+        PROOF_DIR.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", up.name)[-60:]
+        proof_path = str(PROOF_DIR / f"{t['id']}_{safe}")
+        Path(proof_path).write_bytes(data)
+        state["proof_hashes"].append(h)
+    at = now()
+    old_level = level_of(state["xp"])
+    t.update({"completed_at": at.isoformat(), "proof_note": note.strip(), "proof_link": link.strip(),
+              "proof_file": proof_path, "verdict": verdict})
+    if mode == "open":
+        reward, why = compute_reward(state, t, at)
+        bank(state, reward, f"🏁 Done: {t['title']}")
+        state["xp"] += t["xp"]
+        state["streak"] += 1
+        state["best_streak"] = max(state["best_streak"], state["streak"])
+        t["status"], t["earned"] = "done", reward
+        name = state["settings"].get("player_name") or "driver"
+        g = goal_title(state, t.get("goal_id"))
+        msg = (f"### 🏁 CHECKERED FLAG\n**{t['title']}**\n\n"
+               f"**+{reward} coins** ({why}) · +{t['xp']} XP · streak **{state['streak']}** 🔥\n\n"
+               f"*{random.choice(HYPE).format(name=name)}*")
+        if g:
+            mine = [x for x in state["tasks"] if x.get("goal_id") == t.get("goal_id")]
+            msg += f"\n\n🎯 One lap closer to **{g}** ({sum(x['status'] == 'done' for x in mine)}/{len(mine)})."
+        crate = open_crate(state, t)
+        msg += f"\n\n{crate}"
+        if state["rival_heat"]:
+            state["rival_heat"] -= 1
+            msg += f"\n\n❄️ You took speed back from the rivals (heat {state['rival_heat']})."
+        sound = "jackpot" if ("JACKPOT" in crate or "RARE" in crate) else "win"
+    else:
+        refund = t["penalty"] // 2
+        bank(state, refund, f"🩹 Redeemed: {t['title']}")
+        state["xp"] += t["xp"] // 2
+        t["status"], t["earned"] = "redeemed", refund
+        msg = f"🩹 Redeemed **{t['title']}** — +{refund} coins back, +{t['xp'] // 2} XP. Late, but done."
+        sound = "win"
+    state["last_done_date"] = at.date().isoformat()
+    state["rust_days"] = 0
+    if verdict:
+        msg += f"\n\n🧑‍⚖️ Steward: *{verdict['comment']}*"
+    if level_of(state["xp"]) > old_level:
+        msg += f"\n\n⬆️ **Driver level {level_of(state['xp'])}!** Check the Race tab for new tracks."
+    err = notion_mark_done(state, t)
+    if err:
+        msg += f"\n\n(Couldn't tick it off in your Notion list: {err})"
+    if up and t.get("sync_page") and notion_cfg():
+        try:
+            n, _ = notion_ctx()
+            fname = up.name
+            body, ctype = (shrink_image(data) if up.type in IMAGE_MIME else (data, up.type or "application/octet-stream"))
+            if up.type in IMAGE_MIME:
+                fname = Path(up.name).stem + ".jpg"
+            upload_proof(n, t["sync_page"], fname, body, ctype)
+        except Exception as e:
+            msg += f"\n\n(Proof file didn't upload to Notion: {e})"
+    save_state(state)
+    # Reward hits the phone too — the buzz becomes the cue.
+    plain_msg = re.sub(r"[*#]", "", msg.split("\n\n🧑‍⚖️")[0]).replace("CHECKERED FLAG\n", "")
+    push(get_secret("NTFY_TOPIC"), "🏁 Checkered flag" if mode == "open" else "🩹 Redeemed", plain_msg.strip(),
+         priority=4 if sound == "jackpot" else 3,
+         tags=["checkered_flag", "moneybag"] if sound == "jackpot" else ["checkered_flag"],
+         click=get_secret("APP_URL"))
+    flash(msg, celebrate=(mode == "open"), sound=sound)
+    st.rerun()
+
+
+def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
+    with st.form(key, clear_on_submit=True):
+        title = st.text_input("Task", placeholder="e.g. Draft the methods section")
+        details = st.text_area("Details / what counts as done", height=70)
+        if goal_id is None and state["goals"]:
+            opts = ["(no goal)"] + [g["title"] for g in state["goals"]]
+            pick = st.selectbox("Part of goal", opts)
+            gid = None if pick == "(no goal)" else state["goals"][opts.index(pick) - 1]["id"]
+        else:
+            gid = goal_id
+        c1, c2 = st.columns(2)
+        d = c1.date_input("Due date", value=now().date() + timedelta(days=1), min_value=now().date())
+        tm = c2.time_input("Due time", value=dtime(23, 59))
+        diff = st.radio("Size", list(DIFFICULTY), horizontal=True, index=1,
+                        format_func=lambda x: f"{x} (+{DIFFICULTY[x]['reward']}/−{DIFFICULTY[x]['penalty']})")
+        preset = st.selectbox("Real-world consequence if I miss it", CONSEQUENCE_PRESETS, index=1)
+        custom = st.text_input("…or write your own", placeholder="Overrides the preset if filled in")
+        cons = custom.strip() or ("" if preset == CONSEQUENCE_PRESETS[0] else preset)
+        if st.form_submit_button("➕ Add task", type="primary"):
+            dl = datetime.combine(d, tm, TZ)
+            if not title.strip():
+                st.error("Give it a name.")
+            elif dl <= now() + timedelta(minutes=5):
+                st.error("Deadline has to be in the future.")
+            else:
+                state["tasks"].append(make_task(title, details, dl, diff, cons, gid))
+                save_state(state)
+                flash(f"Added **{title.strip()}** — due {dl:%a %b %d, %I:%M %p}.")
+                st.rerun()
+
+
+def notion_import(state: dict) -> None:
+    s = state["settings"]
+    if not (s["notion_db"] and get_secret("NOTION_TOKEN")):
+        if notion_cfg():
+            st.caption("Your 🏁 Deadline or Die table in Notion syncs automatically — just add rows with a Due date. "
+                       "To pull from a different task list, paste its link in ⚙️ Settings.")
+        else:
+            st.info("Add your Notion token and database link in ⚙️ Settings first.")
+        return
+    if st.button("🔄 Fetch from Notion"):
+        try:
+            with st.spinner("Reading your Notion database…"):
+                pages = notion_fetch(s["notion_db"])
+            known = {t.get("notion_id") for t in state["tasks"]}
+            rows = [notion_parse(p, s["notion_date_prop"], s["notion_done_prop"]) for p in pages]
+            st.session_state["notion_rows"] = [r for r in rows if not r["done"] and r["notion_id"] not in known]
+        except Exception as e:
+            st.error(str(e))
+    rows = st.session_state.get("notion_rows")
+    if rows is None:
+        return
+    if not rows:
+        st.success("Nothing new to import — everything open is already here.")
+        return
+    df = pd.DataFrame([{
+        "import": bool(r["due"]),
+        "title": r["title"],
+        "due_date": to_date(r["due"]) if r["due"] else None,
+        "due_time": (r["due"][11:16] if r["due"] and len(r["due"]) > 10 else "23:59"),
+        "size": "Medium",
+        "consequence": "",
+        "notion_id": r["notion_id"],
+        "done_type": r["done_type"],
+    } for r in rows])
+    edited = st.data_editor(
+        df, hide_index=True, key="notion_editor",
+        column_order=["import", "title", "due_date", "due_time", "size", "consequence"],
+        column_config={
+            "import": st.column_config.CheckboxColumn("✔"),
+            "due_date": st.column_config.DateColumn("Due"),
+            "due_time": st.column_config.TextColumn("Time (HH:MM)"),
+            "size": st.column_config.SelectboxColumn("Size", options=list(DIFFICULTY)),
+        },
+    )
+    if st.button("📥 Import selected", type="primary"):
+        added, skipped = 0, 0
+        for r in edited.to_dict("records"):
+            if not r["import"]:
+                continue
+            d = to_date(r["due_date"])
+            try:
+                hh, mm = (int(x) for x in str(r["due_time"] or "23:59").split(":")[:2])
+            except ValueError:
+                hh, mm = 23, 59
+            if not d or datetime.combine(d, dtime(hh, mm), TZ) <= now():
+                skipped += 1
+                continue
+            state["tasks"].append(make_task(
+                r["title"], "", datetime.combine(d, dtime(hh, mm), TZ), r["size"] or "Medium",
+                r["consequence"] or "", source="notion",
+                notion={"notion_id": r["notion_id"], "notion_done_type": r["done_type"]}))
+            added += 1
+        save_state(state)
+        st.session_state.pop("notion_rows", None)
+        flash(f"Imported {added} task(s) from Notion."
+              + (f" Skipped {skipped} with no due date or a past one — set a future date to import them." if skipped else ""))
+        st.rerun()
+
+
+def simulate_race(state: dict, track: dict) -> None:
+    car = state["car"]
+    you = {"name": f"#{car['number']} {car['name']} (you)", "you": True,
+           "rating": car_rating(state) + random.gauss(0, 5)}
+    heat = 3 * state["rival_heat"]  # your misses literally make them faster
+    rivals = [{"name": n, "you": False, "rating": random.uniform(*track["ai"]) + heat + random.gauss(0, 5)}
+              for n in random.sample(RIVALS, 5)]
+    field = [you] + rivals
+    for f in field:
+        f["dist"], f["dnf"] = 0.0, False
+    ticks = track["laps"] * 6
+    dnf_risk = 0.004 if car["condition"] < 40 else 0.0
+    board = st.empty()
+    for i in range(ticks):
+        for f in field:
+            if f["dnf"]:
+                continue
+            if f["you"] and random.random() < dnf_risk:
+                f["dnf"] = True
+                continue
+            f["dist"] += max(0, f["rating"] + random.gauss(0, 9))
+        order = sorted(field, key=lambda f: (not f["dnf"], f["dist"]), reverse=True)
+        lead = max(order[0]["dist"], 1)
+        lines = [f"LAP {min(track['laps'], i // 6 + 1)}/{track['laps']}"]
+        for pos, f in enumerate(order, 1):
+            n = int(22 * f["dist"] / lead)
+            tag = "DNF" if f["dnf"] else f"P{pos}"
+            arrow = "◀" if f["you"] else " "
+            lines.append(f"{tag:>3} {'█' * n}{'░' * (22 - n)} {f['name'][:24]} {arrow}")
+        board.code("\n".join(lines), language=None)
+        time.sleep(RACE_TICK)
+
+    order = sorted(field, key=lambda f: (not f["dnf"], f["dist"]), reverse=True)
+    pos = next(i for i, f in enumerate(order, 1) if f["you"])
+    payout = 0 if you["dnf"] else (track["prize"][pos - 1] if pos <= 3 else 0)
+    wear = 2 + track["laps"] // 3
+    car["condition"] = max(0, car["condition"] - wear)
+    state["xp"] += 5
+    if payout:
+        bank(state, payout, f"🏆 P{pos} at {track['name']}")
+    state["races"].insert(0, {"ts": now().isoformat(), "track": track["name"],
+                              "pos": "DNF" if you["dnf"] else pos, "payout": payout})
+    del state["races"][100:]
+    save_state(state)
+    winner = order[0]
+    gap = (winner["dist"] - you["dist"]) / max(you["rating"], 1) * 1.7  # pseudo-seconds
+    if you["dnf"]:
+        flash(f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "error",
+              sound="fail")
+    elif pos == 1:
+        flash(f"🏆 **WIN** at {track['name']}! +{payout} coins. Tomorrow Tom eats your dust.", celebrate=True,
+              sound="jackpot")
+    elif payout:
+        flash(f"P{pos} at {track['name']} — +{payout} coins. **{gap:.1f}s** off {winner['name']}. "
+              f"One more upgrade and that's yours.", sound="win")
+    else:
+        flash(f"P{pos} at {track['name']}, **{gap:.1f}s** off the win. "
+              + (f"Your misses gave the rivals +{heat} pace. " if heat else "")
+              + "Finish a task, upgrade, come back.", "warning", sound="fail")
+    st.rerun()
+
+
+# ─────────────────────────── app ───────────────────────────
+st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="centered")
+
+# Password gate — set APP_PASSWORD in secrets so nobody else can see your tasks and proof.
+_pw = get_secret("APP_PASSWORD")
+if _pw and not st.session_state.get("_authed"):
+    st.title("🏁 Deadline or Die")
+    entered = st.text_input("Password", type="password")
+    if entered:
+        if hashlib.sha256(entered.encode()).digest() == hashlib.sha256(_pw.encode()).digest():
+            st.session_state["_authed"] = True
+            st.rerun()
+        st.error("Wrong password.")
+    st.stop()
+
+state = load_state()
+
+sync_msgs = []
+if st.session_state.pop("_fresh_load", False) and notion_cfg():
+    try:
+        sync_msgs, changed = sync_from_notion(state)
+        if changed:
+            st.session_state["_needs_save"] = True
+    except Exception as e:
+        sync_msgs = [("warning", f"Couldn't sync tasks with Notion: {e}")]
+
+crash_msgs = process_overdue(state)
+rust_msg = process_rust(state)
+if crash_msgs or rust_msg or st.session_state.pop("_needs_save", False):
+    save_state(state)
+    if crash_msgs:
+        st.session_state["sound"] = "fail"
+
+PLAYER = state["settings"].get("player_name") or "driver"
+st.title("🏁 Deadline or Die")
+hour = now().hour
+greet = "Late night" if hour < 5 else "Morning" if hour < 12 else "Afternoon" if hour < 18 else "Evening"
+st.caption(f"{greet}, {PLAYER}. Prove it or pay for it."
+           + (" It's a danger day — no one's watching you today. +20% on everything you finish."
+              if now().weekday() in DANGER_DAYS else ""))
+
+for kind, m in sync_msgs:
+    getattr(st, kind)(m)
+for m in crash_msgs:
+    st.error(m)
+if rust_msg:
+    st.warning(rust_msg)
+for kind, m in st.session_state.pop("flash", []):
+    getattr(st, kind)(m)
+if st.session_state.pop("celebrate", False):
+    st.balloons()
+snd = st.session_state.pop("sound", None)
+if snd and state["settings"].get("sounds", True):
+    st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
+
+lvl = level_of(state["xp"])
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("🪙 Coins", state["coins"])
+c2.metric("🧑‍✈️ Level", lvl, f"{state['xp'] - xp_for_level(lvl)}/{xp_for_level(lvl + 1) - xp_for_level(lvl)} XP",
+          delta_color="off")
+c3.metric("🔥 Streak", state["streak"], f"best {state['best_streak']}", delta_color="off")
+c4.metric("🔧 Car", f"{state['car']['condition']}%")
+
+tab_pit, tab_tasks, tab_goals, tab_garage, tab_race, tab_set = st.tabs(
+    ["🏁 Pit Wall", "✅ Tasks", "🎯 Goals", "🔧 Garage", "🏎️ Race", "⚙️ Settings"])
+
+open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
+
+# ── Pit Wall ──
+with tab_pit:
+    reasons = black_flag_reasons(state)
+    if reasons:
+        st.error("⬛ **BLACK FLAG** — racing locked: " + "; ".join(reasons) + ".")
+    else:
+        st.success("🟢 **Green flag** — you're clear to race.")
+
+    h1, h2, h3 = st.columns(3)
+    h1.metric("🔥 Rival heat", state["rival_heat"], "your misses fuel them", delta_color="off")
+    h2.metric("🛡️ Shields", state["shields"])
+    left = max(0, PITY_AFTER - state["since_rare"])
+    h3.metric("📦 Rare drop", f"≤{left} away" if left else "NEXT", delta_color="off")
+    if open_tasks:
+        nxt = open_tasks[0]
+        hrs = (parse_dt(nxt["deadline"]) - now()).total_seconds() / 3600
+        if hrs < 24:
+            st.warning(f"⏱️ **{nxt['title']}** dies in {fmt_left(parse_dt(nxt['deadline']) - now())}. "
+                       f"That's {nxt['penalty']} coins, {MISS_DAMAGE}% of your car and a {state['streak']}-streak "
+                       f"on the line. Start for 10 minutes. Just 10.")
+
+    unserved = [p for p in state["penalty_box"] if not p["served"]]
+    if unserved:
+        st.subheader("🚨 Penalty box")
+        for p in unserved:
+            with st.container(border=True):
+                st.markdown(f"**{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
+                            unsafe_allow_html=True)
+                if st.checkbox("I actually served this", key=f"served_chk_{p['id']}") and \
+                        st.button("Release me", key=f"served_{p['id']}"):
+                    p["served"], p["served_at"] = True, now().isoformat()
+                    save_state(state)
+                    flash("Penalty served. Back on track.")
+                    st.rerun()
+
+    st.subheader("⏱️ Next up")
+    if not open_tasks:
+        st.info("No open tasks. Add one in ✅ Tasks — or break a goal down in 🎯 Goals.")
+    for t in open_tasks[:6]:
+        dl = parse_dt(t["deadline"])
+        g = goal_title(state, t.get("goal_id"))
+        st.markdown(f"{chip(dl)} **{t['title']}** — {fmt_left(dl - now())} left  \n"
+                    f"<small>{dl:%a %b %d, %I:%M %p} · +{t['reward']} / −{t['penalty']}"
+                    f"{' · 🎯 ' + html.escape(g) if g else ''}</small>", unsafe_allow_html=True)
+
+    with st.expander("📜 Ledger"):
+        if not state["ledger"]:
+            st.caption("Nothing yet.")
+        for e in state["ledger"][:15]:
+            st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
+                        f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
+
+    with st.expander("📖 Rules"):
+        st.markdown(f"""
+- **Every task** has a deadline, a reward and a penalty (set by its size).
+- **Finish it → submit proof** (file and/or link + a note). With an Anthropic key, an AI race steward checks it; otherwise it's on your honor. The same file can never be reused.
+- **Rewards:** +25% if done 24h+ early (+10% if 6h+), ×0.1 per streak (up to ×2), XP toward driver level.
+- **Miss it** (after a {state['settings']['grace_minutes']}-min grace): lose the penalty coins, −{MISS_DAMAGE}% car condition, streak resets, and your real-world consequence lands in the penalty box.
+- **Black flag** (no racing) while you're in debt, have unserved penalties, or your car is under 20%.
+- **Redemption:** finish a missed task within {REDEEM_WINDOW_H}h for half the penalty back.
+- **Extensions** cost 30% of the penalty and cut the reward 15% each (max {state['settings']['max_extensions']}).
+- **Abandoning** a task = taking the penalty (free only in the first {FREE_DELETE_MIN} min, for typos).
+- **Goals:** finish every task in a goal (3+) for a +{GOAL_BONUS[0]} coin bonus.
+- **Pit crates:** every approved proof opens one — coins, free part upgrades, streak shields, repairs, or a 3× jackpot. A rare drop is guaranteed after {PITY_AFTER} commons.
+- **Danger days** (Tue/Wed, no one's watching): +20% on anything finished.
+- **Rival heat:** every miss makes your rivals +3 faster in races. Every finish takes 1 back.
+- **Rust:** finish nothing for {IDLE_GRACE_DAYS}+ days and the car loses {RUST_PER_DAY}%/day sitting in the garage.
+""")
+
+# ── Tasks ──
+with tab_tasks:
+    with st.expander("➕ New task", expanded=not open_tasks):
+        task_form(state, "new_task_form")
+    with st.expander("📥 Import from Notion"):
+        notion_import(state)
+
+    st.subheader(f"Open ({len(open_tasks)})")
+    s = state["settings"]
+    for t in open_tasks:
+        dl = parse_dt(t["deadline"])
+        with st.expander(f"{chip(dl)} {t['title']} · {fmt_left(dl - now())}"):
+            g = goal_title(state, t.get("goal_id"))
+            st.markdown(
+                f"**Due** {dl:%a %b %d, %I:%M %p} · **{t['difficulty']}** · +{t['reward']} 🪙 / −{t['penalty']} 🪙"
+                + (f"  \n🎯 {g}" if g else "")
+                + (f"  \n{t['details']}" if t.get("details") else "")
+                + (f"  \n🚨 If missed: *{t['consequence']}*" if t.get("consequence") else "")
+                + (f"  \n🚩 Rejected {t['rejections']}×" if t.get("rejections") else ""))
+            render_proof_form(state, t, "open")
+
+            st.divider()
+            ca, cb = st.columns(2)
+            ext_cost = math.ceil(t["penalty"] * 0.3)
+            if t["extensions"] < s["max_extensions"]:
+                if ca.button(f"⏳ +{s['extension_hours']}h ({ext_cost} 🪙)", key=f"ext_{t['id']}"):
+                    if state["coins"] < ext_cost:
+                        st.error("Can't afford it. Guess you're doing it on time.")
+                    else:
+                        bank(state, -ext_cost, f"⏳ Extension: {t['title']}")
+                        t["deadline"] = (dl + timedelta(hours=s["extension_hours"])).isoformat()
+                        t["extensions"] += 1
+                        save_state(state)
+                        flash(f"Extended to {parse_dt(t['deadline']):%a %b %d, %I:%M %p}. Reward cut 15%.", "warning")
+                        st.rerun()
+            else:
+                ca.caption("No extensions left.")
+            young = now() - parse_dt(t["created"]) < timedelta(minutes=FREE_DELETE_MIN)
+            label = "🗑️ Delete (free)" if young else f"🏳️ Abandon (−{t['penalty']} 🪙)"
+            if cb.checkbox("Confirm", key=f"conf_{t['id']}") and cb.button(label, key=f"ab_{t['id']}"):
+                if young:
+                    state["tasks"].remove(t)
+                    if t.get("sync_page") and notion_cfg():
+                        try:
+                            archive_page(notion_ctx()[0], t["sync_page"])
+                        except Exception:
+                            pass
+                    save_state(state)
+                    flash("Deleted.")
+                else:
+                    t["abandoned"] = True
+                    save_state(state)
+                    flash(fail_task(state, t, "Abandoned"), "error", sound="fail")
+                    save_state(state)
+                st.rerun()
+
+    redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
+                  and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
+    if redeemable:
+        st.subheader("🩹 Redeemable")
+        st.caption(f"Missed — but finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
+        for t in redeemable:
+            left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
+            with st.expander(f"💀 {t['title']} · {fmt_left(left)} to redeem"):
+                render_proof_form(state, t, "redeem")
+
+    done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
+    if done:
+        with st.expander(f"🏆 Completed ({len(done)})"):
+            for t in sorted(done, key=lambda t: t["completed_at"], reverse=True)[:30]:
+                icon = "🏁" if t["status"] == "done" else "🩹"
+                st.markdown(f"{icon} **{t['title']}** · +{t.get('earned', 0)} 🪙 "
+                            f"<small>· {parse_dt(t['completed_at']):%b %d}</small>", unsafe_allow_html=True)
+
+# ── Goals ──
+with tab_goals:
+    existing = {g["title"] for g in state["goals"]}
+    starters = [s_ for s_ in starter_goals() if s_[0] not in existing]
+    if starters:
+        with st.expander("⚡ Quick-start goals", expanded=not state["goals"]):
+            with st.form("starter_form"):
+                pick = st.selectbox("Goal", [s_[0] for s_ in starters])
+                tgt = st.date_input("Target date", value=now().date() + timedelta(days=60),
+                                    min_value=now().date(), key="starter_target")
+                if st.form_submit_button("Start this goal", type="primary"):
+                    why = dict(starters)[pick]
+                    state["goals"].append({"id": uuid.uuid4().hex[:10], "title": pick, "why": why,
+                                           "target": tgt.isoformat(), "created": now().isoformat(),
+                                           "claimed": False})
+                    save_state(state)
+                    flash(f"🎯 **{pick}** is on the board. Break it into deadlines below.")
+                    st.rerun()
+
+    with st.expander("🎯 New long-term goal", expanded=not state["goals"] and not starters):
+        with st.form("goal_form", clear_on_submit=True):
+            gt = st.text_input("Goal", placeholder="e.g. Submit the paper to a journal")
+            why = st.text_input("Why it matters (shown when you need it)")
+            target = st.date_input("Target date", value=now().date() + timedelta(days=60), min_value=now().date())
+            if st.form_submit_button("Create goal", type="primary") and gt.strip():
+                state["goals"].append({"id": uuid.uuid4().hex[:10], "title": gt.strip(), "why": why.strip(),
+                                       "target": target.isoformat(), "created": now().isoformat(),
+                                       "claimed": False})
+                save_state(state)
+                flash(f"Goal created. Now break it down into deadlines.")
+                st.rerun()
+
+    has_key = bool(get_secret("ANTHROPIC_API_KEY"))
+    for g in state["goals"]:
+        gtasks = [t for t in state["tasks"] if t.get("goal_id") == g["id"]]
+        n_done = sum(t["status"] == "done" for t in gtasks)
+        target = date.fromisoformat(g["target"])
+        with st.container(border=True):
+            st.markdown(f"### 🎯 {g['title']}")
+            if g.get("why"):
+                st.caption(f"Why: {g['why']}")
+            st.progress(n_done / len(gtasks) if gtasks else 0.0,
+                        text=f"{n_done}/{len(gtasks)} milestones · target {target:%b %d, %Y} "
+                             f"({(target - now().date()).days} days)")
+            for t in sorted(gtasks, key=lambda t: t["deadline"]):
+                icon = {"open": chip(parse_dt(t["deadline"])), "done": "🏁", "redeemed": "🩹",
+                        "failed": "💀"}[t["status"]]
+                st.markdown(f"{icon} {t['title']} <small>· {parse_dt(t['deadline']):%b %d}</small>",
+                            unsafe_allow_html=True)
+
+            if gtasks and len(gtasks) >= 3 and n_done == len(gtasks) and not g.get("claimed"):
+                if st.button(f"🏆 Claim finish-line bonus (+{GOAL_BONUS[0]} 🪙)", key=f"claim_{g['id']}",
+                             type="primary"):
+                    g["claimed"] = True
+                    bank(state, GOAL_BONUS[0], f"🏆 Goal complete: {g['title']}")
+                    state["xp"] += GOAL_BONUS[1]
+                    save_state(state)
+                    flash(f"🏆 Goal **{g['title']}** complete! +{GOAL_BONUS[0]} coins, +{GOAL_BONUS[1]} XP.",
+                          celebrate=True)
+                    st.rerun()
+
+            with st.expander("➕ Add a milestone"):
+                task_form(state, f"ms_form_{g['id']}", goal_id=g["id"])
+
+            with st.expander("🤖 Break it down with Claude"):
+                if not has_key:
+                    st.caption("Add an Anthropic API key in ⚙️ Settings to let Claude draft milestones.")
+                else:
+                    extra = st.text_area("Anything Claude should know (constraints, busy weeks…)",
+                                         key=f"ctx_{g['id']}", height=70)
+                    if st.button("Draft milestones", key=f"plan_{g['id']}"):
+                        with st.spinner("Planning…"):
+                            try:
+                                st.session_state[f"plan_{g['id']}"] = ai_plan(state, g, extra)
+                            except Exception as e:
+                                st.error(str(e))
+                    plan = st.session_state.get(f"plan_{g['id']}")
+                    if plan:
+                        df = pd.DataFrame([{
+                            "add": True, "title": p.get("title", ""), "due": to_date(p.get("due")),
+                            "size": p.get("difficulty") if p.get("difficulty") in DIFFICULTY else "Medium",
+                            "proof": p.get("proof_hint", ""), "consequence": "",
+                        } for p in plan])
+                        ed = st.data_editor(df, hide_index=True, key=f"plan_ed_{g['id']}", column_config={
+                            "add": st.column_config.CheckboxColumn("✔"),
+                            "due": st.column_config.DateColumn("Due"),
+                            "size": st.column_config.SelectboxColumn("Size", options=list(DIFFICULTY)),
+                            "proof": st.column_config.TextColumn("Proof idea"),
+                        })
+                        if st.button("Add selected as deadlines", key=f"plan_add_{g['id']}", type="primary"):
+                            n = 0
+                            for r in ed.to_dict("records"):
+                                d = to_date(r["due"])
+                                if r["add"] and d and str(r["title"]).strip():
+                                    dl = datetime.combine(d, dtime(23, 59), TZ)
+                                    if dl > now():
+                                        state["tasks"].append(make_task(
+                                            r["title"], f"Proof: {r['proof']}" if r["proof"] else "", dl,
+                                            r["size"] or "Medium", r["consequence"] or "", g["id"]))
+                                        n += 1
+                            save_state(state)
+                            st.session_state.pop(f"plan_{g['id']}", None)
+                            flash(f"Added {n} deadline(s) to **{g['title']}**.")
+                            st.rerun()
+
+            if not any(t["status"] == "open" for t in gtasks):
+                if st.checkbox("Delete this goal", key=f"gdel_chk_{g['id']}") and \
+                        st.button("Delete", key=f"gdel_{g['id']}"):
+                    state["goals"].remove(g)
+                    save_state(state)
+                    st.rerun()
+
+# ── Garage ──
+with tab_garage:
+    car = state["car"]
+    st.markdown(car_svg(car), unsafe_allow_html=True)
+    st.markdown(f"### #{car['number']} {car['name']}")
+    st.caption(f"Performance rating **{car_rating(state):.0f}** (max 160)")
+
+    st.progress(car["condition"] / 100, text=f"Condition {car['condition']}%")
+    missing = 100 - car["condition"]
+    if missing:
+        afford = min(missing, max(state["coins"], 0) // REPAIR_COST_PER_PT)
+        if afford:
+            if st.button(f"🔧 Repair +{afford}% ({afford * REPAIR_COST_PER_PT} 🪙)"):
+                car["condition"] += afford
+                bank(state, -afford * REPAIR_COST_PER_PT, "🔧 Repairs")
+                save_state(state)
+                flash("Repaired.")
+                st.rerun()
+        else:
+            st.caption("Can't afford repairs. Go finish something.")
+
+    st.subheader("Upgrades")
+    for key, p in PARTS.items():
+        lv = car["parts"][key]
+        c1, c2 = st.columns([3, 2])
+        c1.progress(lv / MAX_PART_LEVEL, text=f"{p['icon']} {p['label']} · L{lv}/{MAX_PART_LEVEL} — {p['desc']}")
+        if lv >= MAX_PART_LEVEL:
+            c2.caption("Maxed ✅")
+        else:
+            cost = part_cost(key, lv)
+            if c2.button(f"Upgrade ({cost} 🪙)", key=f"up_{key}", disabled=state["coins"] < cost):
+                car["parts"][key] += 1
+                bank(state, -cost, f"⚙️ {p['label']} → L{lv + 1}")
+                save_state(state)
+                flash(f"{p['icon']} {p['label']} upgraded to L{lv + 1}.")
+                st.rerun()
+
+    with st.expander("🎨 Livery"):
+        with st.form("livery"):
+            name = st.text_input("Car name", value=car["name"], max_chars=24)
+            num = st.number_input("Number", 1, 99, value=int(car["number"]))
+            color = st.color_picker("Paint", value=car["color"])
+            if st.form_submit_button("Save livery"):
+                car.update({"name": name.strip() or car["name"], "number": int(num), "color": color})
+                save_state(state)
+                st.rerun()
+
+# ── Race ──
+with tab_race:
+    reasons = black_flag_reasons(state)
+    if reasons:
+        st.error("⬛ **Black flag.** Race control won't let you out: " + "; ".join(reasons) + ".")
+        st.caption("Clear it on the Pit Wall / Garage, or finish tasks to get out of debt.")
+    else:
+        rating = car_rating(state)
+        names = [t["name"] for t in TRACKS]
+        def track_label(n: str) -> str:
+            t = next(t for t in TRACKS if t["name"] == n)
+            locked = lvl < t["level"]
+            return f"{'🔒 ' if locked else ''}{n} — {t['laps']} laps" + (f" (level {t['level']})" if locked else "")
+
+        pick = st.selectbox("Track", names, format_func=track_label)
+        track = TRACKS[names.index(pick)]
+        lo, hi = track["ai"]
+        st.markdown(f"Your car **{rating:.0f}** vs rivals **{lo}–{hi}** · Entry **{track['fee']} 🪙** · "
+                    f"Prizes 🥇{track['prize'][0]} 🥈{track['prize'][1]} 🥉{track['prize'][2]}")
+        if car["condition"] < 40:
+            st.warning("Car under 40% — real risk of a DNF.")
+        if lvl < track["level"]:
+            st.info(f"Unlocks at driver level {track['level']}. Earn XP by finishing tasks.")
+        elif state["coins"] < track["fee"]:
+            st.info("Can't cover the entry fee.")
+        elif st.button("🚦 Lights out", type="primary"):
+            bank(state, -track["fee"], f"🎟️ Entry: {track['name']}")
+            simulate_race(state, track)
+
+        if state["races"]:
+            with st.expander("Race history"):
+                for r in state["races"][:15]:
+                    pos = r["pos"] if r["pos"] == "DNF" else f"P{r['pos']}"
+                    st.markdown(f"**{pos}** {r['track']} · +{r['payout']} 🪙 "
+                                f"<small>· {parse_dt(r['ts']):%b %d}</small>", unsafe_allow_html=True)
+
+# ── Settings ──
+with tab_set:
+    s = state["settings"]
+    with st.form("settings"):
+        st.subheader("You")
+        pname = st.text_input("Driver name", value=s.get("player_name", "Driver"))
+        sounds = st.toggle("Sound cues (win chime / fail buzzer)", value=s.get("sounds", True))
+        st.subheader("Rules")
+        grace = st.number_input("Grace period after deadline (minutes)", 0, 240, value=int(s["grace_minutes"]))
+        strict = st.toggle("Strict proof — a file is always required", value=s["strict_proof"])
+        ext_h = st.number_input("Extension length (hours)", 1, 72, value=int(s["extension_hours"]))
+        max_ext = st.number_input("Max extensions per task", 0, 5, value=int(s["max_extensions"]))
+        st.subheader("AI race steward (Claude)")
+        ai = st.toggle("Have Claude verify proof", value=s["ai_steward"])
+        model = st.text_input("Model", value=s["model"])
+        st.subheader("Import from another Notion database (optional)")
+        st.caption("Your synced Deadline or Die table is automatic. This is for pulling from an existing task list.")
+        db = st.text_input("Database link or ID", value=s["notion_db"])
+        dprop = st.text_input("Due-date property name (blank = first date property)", value=s["notion_date_prop"])
+        fprop = st.text_input("Done property name (checkbox / status / select — optional)",
+                              value=s["notion_done_prop"])
+        if st.form_submit_button("Save settings", type="primary"):
+            s.update({"player_name": pname.strip() or "Driver", "sounds": sounds, "grace_minutes": int(grace), "strict_proof": strict, "extension_hours": int(ext_h),
+                      "max_extensions": int(max_ext), "ai_steward": ai, "model": model.strip(),
+                      "notion_db": db.strip(), "notion_date_prop": dprop.strip(),
+                      "notion_done_prop": fprop.strip()})
+            save_state(state)
+            flash("Settings saved.")
+            st.rerun()
+
+    st.subheader("Connections")
+    if notion_cfg():
+        try:
+            _ids = notion_ctx()[1]
+            st.success("💾 Saving to Notion — your tasks table, save file and nagger memory live under your "
+                       "Deadline or Die page.")
+        except Exception as e:
+            st.error(f"Notion configured but not reachable: {e}")
+    else:
+        st.info("💾 Saving to this machine only. Add NOTION_TOKEN + NOTION_PARENT_PAGE to save to Notion "
+                "(required on Streamlit Cloud — its disk gets wiped).")
+    topic = get_secret("NTFY_TOPIC")
+    if topic:
+        if st.button("📳 Send a test buzz to my phone"):
+            ok = push(topic, "🏁 Deadline or Die", f"Test buzz, {PLAYER}. This is what a checkered flag feels like.",
+                      priority=4, tags=["checkered_flag"], click=get_secret("APP_URL"))
+            st.success("Sent — check your phone.") if ok else st.error("ntfy didn't accept it. Check the topic name.")
+    else:
+        st.caption("📳 Phone buzzes off — set NTFY_TOPIC (see README).")
+
+    st.subheader("Keys")
+    st.caption("Best: put them in `.streamlit/secrets.toml` (or the Streamlit Cloud secrets box). "
+               "Anything typed here lasts for this session only.")
+    for name in ("ANTHROPIC_API_KEY", "NOTION_TOKEN", "NOTION_PARENT_PAGE", "NTFY_TOPIC", "APP_URL"):
+        if get_secret(name) and not st.session_state.get(f"secret_{name}"):
+            st.caption(f"{name}: ✅ set in secrets")
+            continue
+        val = st.text_input(name, type="password" if "KEY" in name or "TOKEN" in name else "default",
+                            key=f"in_{name}")
+        if val:
+            st.session_state[f"secret_{name}"] = val.strip()
+        st.caption(f"{name}: {'✅ set' if get_secret(name) else '❌ not set'}")
+
+    st.subheader("Backup")
+    st.download_button("⬇️ Download save file", json.dumps(state, indent=2, default=str),
+                       file_name=f"deadline-or-die-{now():%Y%m%d}.json", mime="application/json")
+    restore = st.file_uploader("Restore from a save file", type=["json"], key="restore")
+    if restore and st.button("Restore"):
+        try:
+            save_state(_merge(default_state(), json.loads(restore.getvalue())))
+            flash("Save restored.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Couldn't read that file: {e}")
+
+    with st.expander("☠️ Danger zone"):
+        if st.checkbox("I want to wipe everything") and st.button("Reset game"):
+            save_state(default_state())
+            flash("Fresh start.", "warning")
+            st.rerun()
