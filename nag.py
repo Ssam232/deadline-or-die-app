@@ -307,6 +307,15 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                 body += f"\n\n🚦 Qualifying closes {stt['deadline']:%I:%M %p} — lock in today's mission."
             body += f"\n📅 Day streak: {stt['day_streak']}"
             body += "\n⏱️ Focus challenges can drop any time today. Keep your phone close."
+            for g in save.get("goals", []):
+                if not g.get("event_kind") or g.get("claimed"):
+                    continue
+                left = (date.fromisoformat(g["target"]) - now.date()).days
+                if 0 <= left <= 21:
+                    gt = [t for t in save["tasks"] if t.get("goal_id") == g["id"]]
+                    done = sum(t.get("status") in ("done", "redeemed") for t in gt)
+                    body += (f"\n🗓️ {g['title']}: {'TODAY' if left == 0 else f'{left} days'} · prep {done}/{len(gt)}"
+                             + (" — behind!" if gt and done / len(gt) < 1 - left / 21 else ""))
         if now.weekday() in DANGER_DAYS:
             body += "\n\n⚠️ Danger day. No one's watching you today — that's exactly why it counts. +20% on everything."
         send(f"🏁 Morning, {ctx['name']}", body, 3, ["checkered_flag"])

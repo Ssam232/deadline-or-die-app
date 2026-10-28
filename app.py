@@ -36,6 +36,8 @@ import events as EV
 import garage as G
 import daily
 import locks as LK
+import pomo as PM
+import prep as P
 import quickparse as Q
 import raceviz as RV
 import lounge as L
@@ -258,6 +260,12 @@ def _board_map(token: str, db: str) -> dict:
 def _board_today(token: str, db: str, day_iso: str) -> list[dict]:
     m = _board_map(token, db)
     return B.pull_day(Notion(token), m, date.fromisoformat(day_iso))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _board_range(token: str, db: str, start_iso: str, days: int) -> list[dict]:
+    m = _board_map(token, db)
+    return B.pull_range(Notion(token), m, date.fromisoformat(start_iso), days, tz=TZ)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1253,6 +1261,114 @@ def _next_half_hour() -> dtime:
     return dtime(n.hour, 0 if n.minute < 30 else 30)
 
 
+BOARD_LOOKAHEAD = 7       # qualifying shows today + this many days of board cards
+EVENT_LOOKAHEAD = 60      # the event planner looks this far ahead
+
+
+def _board_label(b: dict, today: date) -> str:
+    d = date.fromisoformat(b["date"]) if b.get("date") else today
+    day = "Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else f"{d:%a %b %d}"
+    return f"{day} · {b['title']}" + (f" · {b['when']}" if b.get("when") else "")
+
+
+def render_coming_up(state: dict) -> None:
+    """Countdown strip for event goals in the next 30 days — with the very next prep step."""
+    today = now().date()
+    lines = []
+    for g in state["goals"]:
+        if not g.get("event_page") and not g.get("event_kind"):
+            continue
+        days = (date.fromisoformat(g["target"]) - today).days
+        if not 0 <= days <= 30:
+            continue
+        gt = [t for t in state["tasks"] if t.get("goal_id") == g["id"]]
+        nxt = min((t for t in gt if t["status"] == "open"), key=lambda t: t["deadline"], default=None)
+        done = sum(t["status"] in ("done", "redeemed") for t in gt)
+        when = "TODAY" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+        lines.append(f"🗓️ **{g['title']}** {when} · prep {done}/{len(gt)}"
+                     + (f" · next: *{nxt['title']}* ({parse_dt(nxt['deadline']):%a})" if nxt else ""))
+    if lines:
+        st.caption("  \n".join(lines[:3]))
+
+
+def render_event_planner(state: dict) -> None:
+    """Pick an upcoming event (board or typed) → a goal with a back-planned prep schedule."""
+    today = now().date()
+    bc = board_cfg(state)
+    events = []
+    if bc:
+        try:
+            taken = {B.clean_id(g.get("event_page") or "") for g in state["goals"]}
+            events = [b for b in _board_range(*bc, (today + timedelta(days=1)).isoformat(), EVENT_LOOKAHEAD)
+                      if B.clean_id(b["id"]) not in taken]
+        except Exception as e:
+            st.caption(f"(Couldn't read your board: {e})")
+    opts = {b["id"]: _board_label(b, today) for b in events}
+    opts["__typed"] = "✏️ Not on the board — type it"
+    pick = st.selectbox("Event", list(opts), format_func=opts.get, key="ev_pick")
+    if pick == "__typed":
+        c1, c2 = st.columns([2, 1])
+        title = c1.text_input("What is it?", placeholder="e.g. CSB conference — poster", key="ev_title")
+        ev_date = c2.date_input("When", value=today + timedelta(days=21), min_value=today + timedelta(days=1),
+                                key="ev_date")
+        page = None
+    else:
+        b = next(x for x in events if x["id"] == pick)
+        title, ev_date, page = b["title"], date.fromisoformat(b["date"]), b["id"]
+    if not title.strip():
+        return
+    kinds = list(P.KINDS)
+    c1, c2 = st.columns(2)
+    kind = c1.selectbox("What do you need to prepare?", kinds, index=kinds.index(P.guess_kind(title)),
+                        format_func=lambda k: P.KINDS[k][0], key=f"ev_kind_{pick}")
+    gopts = ["__new"] + [g["id"] for g in state["goals"]]
+    gl = {"__new": f"New goal: {title[:50]}", **{g["id"]: f"Feeds into: {g['title']}" for g in state["goals"]}}
+    into = c2.selectbox("Goal", gopts, format_func=gl.get, key=f"ev_into_{pick}",
+                        help="Make it its own goal, or let the prep count toward a bigger one you already have.")
+    days = (ev_date - today).days
+    st.caption(f"📅 {ev_date:%a %b %d} — **{days} days** away. Steps are planned backwards from the date"
+               + (" (squeezed — it's close)." if days <= max(-o for o, *_ in P.KINDS[kind][1]) else ".")
+               + " Edit anything, untick what you don't need.")
+    plan = P.plan(kind, ev_date, today, label=title)
+    df = pd.DataFrame([{"add": True, "title": s["title"], "due": s["due"], "minutes": s["minutes"],
+                        "category": s["category"]} for s in plan])
+    ed = st.data_editor(df, hide_index=True, key=f"ev_ed_{pick}_{kind}_{into}", use_container_width=True,
+                        column_config={
+                            "add": st.column_config.CheckboxColumn("✔", width="small"),
+                            "title": st.column_config.TextColumn("Prep step", width="large"),
+                            "due": st.column_config.DateColumn("Due", min_value=today, max_value=ev_date),
+                            "minutes": st.column_config.SelectboxColumn("Honest time", options=V.MINUTES),
+                            "category": st.column_config.SelectboxColumn("Type", options=list(V.CATEGORIES)),
+                        })
+    rows = [r for r in ed.to_dict("records") if r["add"] and str(r["title"]).strip() and to_date(r["due"])]
+    total = sum(V.value(r["category"], int(r["minutes"]))["reward"] for r in rows)
+    if st.button(f"🎯 Lock in the prep plan · {len(rows)} steps · worth {total} 🪙", type="primary",
+                 key=f"ev_go_{pick}", disabled=not rows):
+        if into == "__new":
+            g = {"id": uuid.uuid4().hex[:10], "title": title.strip(), "why": f"📅 {ev_date:%a %b %d} — show up ready.",
+                 "target": ev_date.isoformat(), "created": now().isoformat(), "claimed": False,
+                 "event_page": page, "event_kind": kind}
+            state["goals"].append(g)
+        else:
+            g = next(x for x in state["goals"] if x["id"] == into)
+            g.setdefault("events", []).append({"title": title.strip(), "date": ev_date.isoformat(), "page": page})
+            if page and not g.get("event_page"):
+                g["event_page"] = page
+        n_ = 0
+        for r in rows:
+            d = to_date(r["due"])
+            dl = datetime.combine(d, dtime(23, 59), TZ)
+            if dl <= now():
+                continue
+            state["tasks"].append(make_task(str(r["title"]).strip(), f"Prep for {title.strip()} ({ev_date:%b %d}).",
+                                            dl, None, "", g["id"], category=r["category"], minutes=int(r["minutes"])))
+            n_ += 1
+        save_state(state)
+        flash(f"🎯 **{g['title']}** — {n_} prep steps on the clock. The next 7 days of them are on your DECK 12 "
+              "board now. Every step you finish fills the goal.", sound="win")
+        st.rerun()
+
+
 def render_qualify_form(state: dict) -> None:
     today = now().date()
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
@@ -1267,13 +1383,17 @@ def render_qualify_form(state: dict) -> None:
         if bc:
             try:
                 known = {t.get("board_page") for t in state["tasks"]}
-                board_items = [b for b in _board_today(*bc, today.isoformat()) if b["id"] not in known]
+                board_items = [b for b in _board_range(*bc, today.isoformat(), BOARD_LOOKAHEAD + 1)
+                               if b["id"] not in known]
             except Exception as e:
                 st.caption(f"(Couldn't read your board: {e})")
             if board_items:
-                blabels = {b["id"]: b["title"] + (f" · {b['when']}" if b["when"] else "") for b in board_items}
-                board_pick = st.multiselect("📅 From your DECK 12 board today", list(blabels), format_func=blabels.get,
-                                            help="Pick the ones that actually need doing — they'll tick off on your board too.")
+                blabels = {b["id"]: _board_label(b, today) for b in board_items}
+                board_pick = st.multiselect(f"📅 From your DECK 12 board · today + next {BOARD_LOOKAHEAD} days",
+                                            list(blabels), format_func=blabels.get,
+                                            help="Today's cards: finish them and they tick off on your board. "
+                                                 "Upcoming ones: you put in an hour on them TODAY (the card stays "
+                                                 "open). Big events like a conference? Turn them into a goal in 🎯 Goals.")
         zc = zotero_cfg(state)
         paper_pick, papers = [], []
         if zc:
@@ -1314,6 +1434,17 @@ def render_qualify_form(state: dict) -> None:
                 ids = list(picked)
                 for bid in board_pick:
                     b = next(x for x in board_items if x["id"] == bid)
+                    if b["date"] and b["date"] > today.isoformat():  # future card → today's work session on it
+                        g = next((g for g in state["goals"] if B.clean_id(g.get("event_page") or "") == B.clean_id(bid)),
+                                 None)
+                        pdl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
+                        t = make_task(f"Work on: {b['title']}",
+                                      f"For {b['title']} on {date.fromisoformat(b['date']):%a %b %d} (DECK 12 board). "
+                                      "Proof: show what you made in the hour.", pdl, None, "",
+                                      g["id"] if g else None, minutes=60)
+                        state["tasks"].append(t)
+                        ids.append(t["id"])
+                        continue
                     try:
                         bt = datetime.strptime(b["when"].upper().replace(".", ""), "%I:%M %p").time()
                         bdue = min(datetime.combine(today, bt, TZ) + timedelta(hours=2),
@@ -1349,6 +1480,7 @@ def render_today(state: dict) -> None:
     stt = daily.status(state, n_)
     c = daily.cfg(state)
     with st.container(border=True):
+        render_coming_up(state)
         if stt["rest"]:
             st.markdown("### 🛌 Pit stop day")
             st.caption("Recharge. Nothing counts against you today. Back on the grid tomorrow.")
@@ -1434,6 +1566,26 @@ def render_quick_add(state: dict, key: str = "qa") -> None:
                 st.rerun()
 
 
+def _pomo_pick(state: dict) -> tuple[int | None, int | None]:
+    """Break-at picker. Remembers your choice."""
+    cfg = state["settings"]
+    keys = list(PM.PRESETS)
+    cur = cfg.get("pomo", "off")
+    c1, c2, c3 = st.columns([2, 1, 1])
+    mode = c1.selectbox("Breaks", keys, index=keys.index(cur) if cur in keys else 0,
+                        format_func=lambda k: PM.PRESETS[k][0], key="pomo_mode")
+    if mode == "custom":
+        work = c2.number_input("Break at (min)", 10, 120, int(cfg.get("pomo_work", 45)), 5, key="pomo_w")
+        brk = c3.number_input("Break (min)", 2, 30, int(cfg.get("pomo_brk", 10)), 1, key="pomo_b")
+    else:
+        work, brk = PM.PRESETS[mode][1] or (None, None)
+    if (mode, work, brk) != (cur, cfg.get("pomo_work"), cfg.get("pomo_brk")) and \
+            (mode != cur or mode == "custom"):
+        cfg.update(pomo=mode, pomo_work=work, pomo_brk=brk)
+        save_state(state)
+    return (int(work), int(brk)) if work and brk else (None, None)
+
+
 def render_timer(state: dict) -> None:
     tm = state.get("timer")
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
@@ -1444,11 +1596,13 @@ def render_timer(state: dict) -> None:
             if not open_t:
                 st.caption("Add a task first — the timer is a receipt for real work.")
                 return
+            work, brk = _pomo_pick(state)
             if st.button("🎲 Just tell me what to do", use_container_width=True, key="pick_next"):
                 pick = Q.pick_next(state["tasks"], now())
                 if pick:
                     plen = Q.session_length(pick)
-                    state["timer"] = {"task_id": pick["id"], "start": now().isoformat(), "planned": plen}
+                    state["timer"] = {"task_id": pick["id"], "start": now().isoformat(), "planned": plen,
+                                      "work": work, "brk": brk}
                     save_state(state)
                     flash(f"🎲 **Do this now: {pick['title']}** — {plen}-min focus timer started. Nothing else exists.",
                           sound="win")
@@ -1457,9 +1611,13 @@ def render_timer(state: dict) -> None:
             c1, c2 = st.columns([3, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
-            planned = c2.selectbox("Minutes", [25, 50, 60, 90], key="timer_len", label_visibility="collapsed")
-            if st.button("▶️ Start focus", type="primary", use_container_width=True):
-                state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned}
+            planned = c2.selectbox("Minutes", [25, 50, 60, 90, 120], key="timer_len", label_visibility="collapsed",
+                                   format_func=lambda m: f"{m} min focus")
+            wall = PM.wall_minutes(planned, work, brk)
+            if st.button(f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
+                         type="primary", use_container_width=True):
+                state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned,
+                                  "work": work, "brk": brk}
                 save_state(state)
                 st.rerun()
             tok = state.get("tokens", {})
@@ -1479,22 +1637,36 @@ def render_timer(state: dict) -> None:
             return
         t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
         start = parse_dt(tm["start"])
-        end_ms = int((start + timedelta(minutes=tm["planned"])).timestamp() * 1000)
+        work, brk = tm.get("work"), tm.get("brk")
+        end_ms = int((start + timedelta(minutes=PM.wall_minutes(tm["planned"], work, brk))).timestamp() * 1000)
+        start_ms = int(start.timestamp() * 1000)
         st.markdown(f"#### ⏱️ Focusing: {t['title'] if t else '—'}")
+        if work and brk:
+            st.caption(f"🍅 {tm['planned']} min of work · {PM.label(work, brk)}. Breaks don't count toward the log.")
         _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
         _embed(f"""
 <div id="t" style="font:700 46px ui-monospace,Menlo,monospace;color:#e63946;text-align:center;"></div>
 <div id="s" style="font:14px system-ui;color:#aaa;text-align:center;"></div>
 <script>
-const end={end_ms};
-function f(){{const r=end-Date.now();const a=Math.floor(Math.abs(r)/1000);
-document.getElementById('t').textContent=(r<0?'+':'')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');
-document.getElementById('s').textContent=r<0?'🏁 Session done — log it.':'Phone face-down. One thing only.';}}
+const st0={start_ms},end={end_ms},W={work or 0},B={brk or 0},T={tm["planned"]};
+let last=null,ac=null;
+function beep(n){{try{{ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+ for(let i=0;i<n;i++){{const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=n>1?660:880;
+ o.connect(g);g.connect(ac.destination);g.gain.value=.15;o.start(ac.currentTime+i*.25);o.stop(ac.currentTime+i*.25+.18);}}}}catch(e){{}}}}
+function mmss(ms){{const a=Math.floor(Math.abs(ms)/1000);return String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');}}
+function f(){{const now=Date.now(),r=end-now,el=(now-st0)/60000;let ph='work',left=r;
+ if(r<=0)ph='done';else if(W&&B){{const c=W+B,rest=el%c,done=Math.floor(el/c)*W+Math.min(rest,W);
+   if(rest<W)left=Math.min(W-rest,T-done)*60000;else{{ph='break';left=(c-rest)*60000;}}}}
+ const t=document.getElementById('t'),s=document.getElementById('s');
+ if(ph==='done'){{t.textContent='+'+mmss(r);t.style.color='#e63946';s.textContent='🏁 Session done — log it.';}}
+ else if(ph==='break'){{t.textContent=mmss(left);t.style.color='#4cc9f0';s.textContent='☕ BREAK — stand up, water, no phone. Back at 00:00.';}}
+ else{{t.textContent=mmss(left);t.style.color='#e63946';s.textContent=(W&&B&&r>left+1000)?'Work — break in '+mmss(left)+'. Phone face-down.':'Phone face-down. One thing only.';}}
+ if(last&&last!==ph)beep(ph==='work'?2:ph==='break'?1:3);last=ph;}}
 f();setInterval(f,500);
 </script>""", height=90)  # our own static markup only — no user content goes in here
         c1, c2 = st.columns(2)
         if c1.button("⏹️ Stop & log", type="primary", use_container_width=True):
-            mins = min((now() - start).total_seconds() / 60, tm["planned"] + 15)
+            mins = min(PM.work_done((now() - start).total_seconds() / 60, work, brk), tm["planned"] + 15)
             state.pop("timer", None)
             if mins >= 1 and t:
                 full = mins >= tm["planned"]
@@ -1944,17 +2116,27 @@ with tab_goals:
                 flash(f"Goal created. Now break it down into deadlines.")
                 st.rerun()
 
+    with st.expander("🗓️ Prep for an upcoming event (conference, talk, exam, submission…)",
+                     expanded=not any(g.get("event_kind") for g in state["goals"])):
+        st.caption("Pick something coming up on your DECK 12 board. It becomes a goal with prep steps planned "
+                   "backwards from the date — each step is a real deadline, and finishing them fills the goal.")
+        render_event_planner(state)
+
     has_key = bool(get_secret("ANTHROPIC_API_KEY"))
     for g in state["goals"]:
         gtasks = [t for t in state["tasks"] if t.get("goal_id") == g["id"]]
         n_done = sum(t["status"] == "done" for t in gtasks)
         target = date.fromisoformat(g["target"])
         with st.container(border=True):
-            st.markdown(f"### 🎯 {g['title']}")
+            st.markdown(f"### {P.KINDS[g['event_kind']][0].split()[0] if g.get('event_kind') in P.KINDS else '🎯'} "
+                        f"{g['title']}")
             if g.get("why"):
                 st.caption(f"Why: {g['why']}")
+            for ev in g.get("events", []):
+                st.caption(f"🗓️ Feeds in: {ev['title']} · {date.fromisoformat(ev['date']):%b %d}")
             st.progress(n_done / len(gtasks) if gtasks else 0.0,
-                        text=f"{n_done}/{len(gtasks)} milestones · target {target:%b %d, %Y} "
+                        text=f"{n_done}/{len(gtasks)} milestones · {'📅 event' if g.get('event_kind') else 'target'} "
+                             f"{target:%b %d, %Y} "
                              f"({(target - now().date()).days} days)")
             for t in sorted(gtasks, key=lambda t: t["deadline"]):
                 icon = {"open": chip(parse_dt(t["deadline"])), "done": "🏁", "redeemed": "🩹",

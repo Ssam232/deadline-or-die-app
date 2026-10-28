@@ -89,32 +89,59 @@ def _day_filter(m: dict, d: date) -> dict | None:
     return None
 
 
+def _item(p: dict, m: dict, d: date | None, skip_ids, tz=None) -> dict | None:
+    pr = p.get("properties", {})
+    title = plain((pr.get(m["title"]) or {}).get("title")).strip()
+    if not title or title.startswith(MARK) or title.startswith("✅") or clean_id(p["id"]) in skip_ids:
+        return None
+    if m["done"]:
+        dp = pr.get(m["done"]) or {}
+        if m["done_type"] == "checkbox":
+            if dp.get("checkbox"):
+                return None
+        elif ((dp.get(m["done_type"]) or {}).get("name")) == m["done_opt"]:
+            return None
+    when = ""
+    if m["date"]:
+        start = ((pr.get(m["date"]) or {}).get("date") or {}).get("start") or ""
+        if len(start) > 10:
+            dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            dt = dt.astimezone(tz) if tz else dt
+            when, d = dt.strftime("%I:%M %p").lstrip("0"), dt.date()
+        elif start:
+            d = date.fromisoformat(start[:10])
+    if not when and m["time"]:
+        when = plain((pr.get(m["time"]) or {}).get("rich_text")).strip()
+    return {"id": p["id"], "title": title, "when": when, "date": d.isoformat() if d else ""}
+
+
 def pull_day(n: Notion, m: dict, d: date, skip_ids: set[str] = frozenset()) -> list[dict]:
     flt = _day_filter(m, d)
     if not flt:
         return []
+    skip_ids = {clean_id(x) for x in skip_ids}
+    return [x for p in n.query(m["db"], {"filter": flt}) if (x := _item(p, m, d, skip_ids))]
+
+
+def pull_range(n: Notion, m: dict, start: date, days: int, skip_ids: set[str] = frozenset(), tz=None) -> list[dict]:
+    """Every open card from `start` through the next `days` days, soonest first."""
+    skip_ids = {clean_id(x) for x in skip_ids}
     out = []
-    for p in n.query(m["db"], {"filter": flt}):
-        pr = p.get("properties", {})
-        title = plain((pr.get(m["title"]) or {}).get("title")).strip()
-        if not title or title.startswith(MARK) or title.startswith("✅") or clean_id(p["id"]) in skip_ids:
-            continue
-        if m["done"]:
-            dp = pr.get(m["done"]) or {}
-            if m["done_type"] == "checkbox":
-                if dp.get("checkbox"):
-                    continue
-            elif ((dp.get(m["done_type"]) or {}).get("name")) == m["done_opt"]:
-                continue
-        when = ""
-        if m["date"]:
-            start = ((pr.get(m["date"]) or {}).get("date") or {}).get("start") or ""
-            if len(start) > 10:
-                when = datetime.fromisoformat(start.replace("Z", "+00:00")).strftime("%I:%M %p").lstrip("0")
-        if not when and m["time"]:
-            when = plain((pr.get(m["time"]) or {}).get("rich_text")).strip()
-        out.append({"id": p["id"], "title": title, "when": when})
-    return out
+    if m["date"]:
+        end = start + timedelta(days=days)
+        flt = {"and": [{"property": m["date"], "date": {"on_or_after": start.isoformat()}},
+                       {"property": m["date"], "date": {"before": end.isoformat()}}]}
+        out = [x for p in n.query(m["db"], {"filter": flt, "sorts": [{"property": m["date"], "direction": "ascending"}]})
+               if (x := _item(p, m, None, skip_ids, tz)) and x["date"]]
+    elif m["weekday"]:  # weekday-only boards repeat every week: show each card on its next occurrence
+        seen = set()
+        for i in range(min(days, 7)):
+            d = start + timedelta(days=i)
+            for x in pull_day(n, m, d, skip_ids):
+                if x["id"] not in seen:
+                    seen.add(x["id"])
+                    out.append(x)
+    return sorted(out, key=lambda x: (x["date"], x["when"] or "99"))
 
 
 def push(n: Notion, m: dict, t: dict, tz) -> str:

@@ -87,7 +87,8 @@ Value = **honest minutes × category**: 🧠 Deep work ×1.5 · 📨 Academic ad
 Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 claimed hours/day pays 25% · 90+ min tasks need a real file · ⏱️ timer-verified work pays +15%.
 
 ## ⏱️ Focus timer · 📜 Weekly contracts · 🎰 Paddock Lounge
-- Timer: pick a task, 25/50/90 min, log it. Counts toward contracts and the +15% verified bonus.
+- Timer: pick a task, 25/50/60/90/120 min of work, log it. Counts toward contracts and the +15% verified bonus.
+- 🍅 Breaks: pick **25/5 pomodoro**, **50/10**, or a custom *break at N min* interval (remembered). The clock turns blue on breaks and beeps at each switch; only work minutes are logged, so breaks never pad the receipt.
 - Contracts: 3 rotating weekly challenges, big payouts.
 - Lounge: blackjack + snake eyes. Opens only after a finish today, max bet 50, 15 hands/day, closes at +200 or −300. House edge ~6% (blackjack) / ~17% (dice).
 
@@ -95,7 +96,10 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 0–2 random events a day (10 AM–8 PM), pushed to your phone: ⚡ double coins & XP (3h) · 🎁 supply drop (free crate, 2h) · 🎯 bounty (+75 for a deep-work finish, 4h) · 🔧 pit crew (free +30% repair).
 
 ## 🗓️ Your DECK 12 board
-Settings → 🔎 Find my boards → Link it. Today's cards become one-tap mission suggestions; Deadline or Die tasks due within 7 days appear on your board as 🏁 cards and turn ✅ when finished. Columns are auto-detected (title, date or weekday select, time text, done checkbox/status).
+Settings → 🔎 Find my boards → Link it. Cards from **today + the next 7 days** become one-tap mission suggestions (an upcoming card becomes "Work on: …" — an hour on it today, the card itself stays open); Deadline or Die tasks due within 7 days appear on your board as 🏁 cards and turn ✅ when finished. Columns are auto-detected (title, date or weekday select, time text, done checkbox/status).
+
+## 🗓️ Events → goals (conference, talk, exam, submission)
+🎯 Goals → *Prep for an upcoming event*: pick anything on your board in the next 60 days (or type one). It becomes a goal with a prep plan worked **backwards from the date** — e.g. a conference poster: story → figures → draft → supervisor feedback → revise → order print → practice pitch → pack. Squeezed automatically if the event is close; edit or untick any step. Each step is a real deadline (proof, coins, penalties) that fills the goal's bar, lands on your board as a 🏁 card within 7 days, and shows as a countdown on the Today card and in the morning push ("behind!" if prep is lagging). Or let the prep **feed into a bigger goal** you already have.
 
 ## 🔒 Consequences that actually bite
 Pick **🔒 Games locked on PC + phone until it's done** as a task's consequence (it's the default). Miss it and you're LOCKED until you finish it late (🩹 redeem) or 24h pass. A running focus session also locks (toggle in Settings). 🆘 Emergency unlock in the app: 1 hour for 100 coins (more at higher levels).
