@@ -715,7 +715,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
                      and (x.get("completed_at") or "")[:10] == at.date().isoformat())
     guard, guard_why = V.payout(base, t, parse_dt(t["created"]), at, paid_today, t.get("focus_min", 0))
     t["_guard"] = guard
-    dbl = 2 if EV.is_double(at) else 1
+    boost = state.get("boost_until")
+    dbl = 2 if EV.is_double(at) or (boost and parse_dt(boost) > at) else 1
     tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
     used_token = False
     if dbl == 1 and tok.get("double", 0) > 0:
@@ -723,7 +724,7 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
         dbl, used_token = 2, True
     t["_guard"] = guard * dbl
     total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl))
-    parts = [f"base {base}"] + guard_why + (["×2 ⚡ token"] if used_token else ["×2 ⚡ event"] if dbl == 2 else [])
+    parts = [f"base {base}"] + guard_why + (["×2 ⚡ token"] if used_token else ["×2 ⚡ double"] if dbl == 2 else [])
     if early:
         parts.append(f"+{int(early * 100)}% early")
     if danger:
@@ -1413,18 +1414,23 @@ def render_timer(state: dict) -> None:
             c1, c2 = st.columns([3, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
-            planned = c2.selectbox("Minutes", [25, 50, 90], key="timer_len", label_visibility="collapsed")
+            planned = c2.selectbox("Minutes", [25, 50, 60, 90], key="timer_len", label_visibility="collapsed")
             if st.button("▶️ Start focus", type="primary", use_container_width=True):
                 state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned}
                 save_state(state)
                 st.rerun()
-            g0, g1 = EV.golden_hour(now().date(), TZ)
             tok = state.get("tokens", {})
-            golden_txt = (f"🌅 **Golden hour is NOW** (till {g1:%I:%M %p}) — sessions started now drop guaranteed loot."
-                          if g0 <= now() < g1 else f"🌅 Golden hour today: {g0:%I:%M}–{g1:%I:%M %p}.")
+            claimed = state.get("challenge_claims", [])
+            for ch in EV.focus_challenges(now().date(), TZ):
+                if ch["id"] in claimed:
+                    st.markdown(f"✅ ~~{ch['label']}~~")
+                elif ch["start"] <= now() < ch["end"]:
+                    st.markdown(f"🔥 **LIVE CHALLENGE:** {ch['label']} — {fmt_left(ch['end'] - now())} left to start")
+                elif now() < ch["start"]:
+                    st.caption(f"⏱️ Later: {ch['label']}")
             drops_left = EV.DROPS_PER_DAY - sum(1 for x in state.get("focus_log", [])
                                                  if x["date"] == now().date().isoformat() and x.get("drop"))
-            st.caption(f"Full 25+ min sessions drop loot ({max(0, drops_left)} left today). {golden_txt} "
+            st.caption(f"Full 25+ min sessions also drop loot ({max(0, drops_left)} left today). "
                        f"Timer-verified tasks pay **+{int(V.TIMER_BONUS * 100)}%**. Today: **{focus_today(state)} min**."
                        + (f" Tokens: ⚡×{tok.get('double', 0)} 🔧×{tok.get('upgrade', 0)}"
                           if tok.get("double") or tok.get("upgrade") else ""))
@@ -1458,9 +1464,7 @@ f();setInterval(f,500);
                 drop_msg, snd = "", ("win" if full else None)
                 today_log = [x for x in state["focus_log"] if x["date"] == now().date().isoformat()]
                 if full and mins >= 25 and sum(1 for x in today_log if x.get("drop")) < EV.DROPS_PER_DAY:
-                    g0, g1 = EV.golden_hour(now().date(), TZ)
-                    golden = g0 <= start < g1
-                    kind = EV.roll_drop(golden)
+                    kind = EV.roll_drop()
                     state["focus_log"][-1]["drop"] = kind
                     tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
                     if kind == "xp":
@@ -1477,9 +1481,24 @@ f();setInterval(f,500);
                     else:
                         tok["upgrade"] = tok.get("upgrade", 0) + 1
                         drop_msg = "🎁 Session drop: **🔧 free-upgrade token** — install any part for free in the Garage."
-                    if golden:
-                        drop_msg = "🌅 **Golden hour bonus!** " + drop_msg
-                    snd = "jackpot" if kind in ("double_token", "upgrade_token") or golden else "win"
+                    snd = "jackpot" if kind in ("double_token", "upgrade_token") else "win"
+                done_ch = state.setdefault("challenge_claims", [])
+                for ch in EV.focus_challenges(now().date(), TZ):
+                    if ch["id"] not in done_ch and ch["start"] <= start < ch["end"] and mins >= ch["minutes"]:
+                        done_ch.append(ch["id"])
+                        if ch["kind"] == "coins":
+                            bank(state, ch["val"], "⏱️ Focus challenge")
+                        elif ch["kind"] == "crate":
+                            drop_msg += "\n\n" + open_crate(state, {"reward": 45})
+                        elif ch["kind"] == "double":
+                            state["boost_until"] = (now() + timedelta(minutes=ch["val"])).isoformat()
+                        else:
+                            tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
+                            tok["upgrade"] = tok.get("upgrade", 0) + 1
+                        drop_msg = (f"🏆 **FOCUS CHALLENGE WON** — {EV.prize_label(ch['kind'], ch['val'])}!"
+                                    + (" Everything you finish now pays double." if ch["kind"] == "double" else "")
+                                    + ("\n\n" + drop_msg if drop_msg else ""))
+                        snd = "jackpot"
                 save_state(state)
                 flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
                       + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),

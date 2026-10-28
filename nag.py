@@ -269,6 +269,16 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                     title, body = cands[(i + now.day) % len(cands)]
                     send(title, body, 3, ["bulb"])
 
+    sent_ch = mem.setdefault("challenges", [])
+    claimed = set((save or {}).get("challenge_claims", []))
+    for ch in EV.focus_challenges(now.date(), TZ):  # ping when a challenge window opens
+        if ch["start"] <= now < ch["end"] and ch["id"] not in sent_ch and ch["id"] not in claimed and not quiet:
+            sent_ch.append(ch["id"])
+            send("⏱️ FOCUS CHALLENGE — window open",
+                 f"Start a {ch['minutes']}-min session before {ch['end']:%I:%M %p} → {EV.prize_label(ch['kind'], ch['val'])}. "
+                 "Open the app, pick a task, hit Start.", 4, ["stopwatch"])
+    del sent_ch[:-30]
+
     sent_ev = mem.setdefault("events", [])
     for e in EV.active(now):  # random live events — the reason to open the app right now
         if e["id"] not in sent_ev and not quiet:
@@ -296,8 +306,9 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             elif not stt["qualified"]:
                 body += f"\n\n🚦 Qualifying closes {stt['deadline']:%I:%M %p} — lock in today's mission."
             body += f"\n📅 Day streak: {stt['day_streak']}"
-            g0, g1 = EV.golden_hour(now.date(), TZ)
-            body += f"\n🌅 Golden hour {g0:%I:%M}–{g1:%I:%M %p}: start a focus session then for guaranteed loot."
+            chs = EV.focus_challenges(now.date(), TZ)
+            if chs:
+                body += "\n\n⏱️ Today's focus challenges:\n" + "\n".join(f"• {c['label']}" for c in chs)
         if now.weekday() in DANGER_DAYS:
             body += "\n\n⚠️ Danger day. No one's watching you today — that's exactly why it counts. +20% on everything."
         send(f"🏁 Morning, {ctx['name']}", body, 3, ["checkered_flag"])

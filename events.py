@@ -51,23 +51,47 @@ def is_double(now: datetime) -> bool:
     return any(e["type"] == "double" for e in active(now))
 
 
-# ── 🌅 Golden hour + focus-session drops ──
+# ── ⏱️ Focus challenges + per-session drops ──
 DROPS_PER_DAY = 3
 DROP_TABLE = [  # (weight, kind)
     (40, "xp"), (25, "crate"), (15, "double_token"), (12, "coins"), (8, "upgrade_token"),
 ]
-GOLDEN_TABLE = [(55, "crate"), (30, "double_token"), (15, "upgrade_token")]
 
 
-def golden_hour(d: date, tz) -> tuple[datetime, datetime]:
-    """A 2-hour window each day (between 8 AM and 6 PM). Start a focus session inside it → guaranteed good drop."""
-    rng = random.Random(f"golden-{d.isoformat()}")
-    start_min = rng.randrange(8 * 60, 16 * 60 + 1, 30)
-    start = datetime.combine(d, dtime(start_min // 60, start_min % 60), tz)
-    return start, start + timedelta(hours=2)
+CHALLENGE_PRIZES = {  # by session length: what a challenge can pay out
+    25: [("coins", 25), ("crate", None)],
+    50: [("crate", None), ("double", 120)],
+    60: [("crate", None), ("double", 120)],
+    90: [("double", 180), ("upgrade_token", None)],
+}
 
 
-def roll_drop(golden: bool, rng: random.Random | None = None) -> str:
-    table = GOLDEN_TABLE if golden else DROP_TABLE
+def prize_label(kind: str, val) -> str:
+    if kind == "coins":
+        return f"+{val} coins"
+    if kind == "double":
+        return f"⚡ double coins & XP for {val // 60}h"
+    return "🎁 a pit crate" if kind == "crate" else "🔧 a free-upgrade token"
+
+
+def focus_challenges(d: date, tz) -> list[dict]:
+    """1–3 timed challenges a day: start a session of N minutes inside the window, win the prize."""
+    rng = random.Random(f"challenges-{d.isoformat()}")
+    n = rng.choice([1, 2, 2, 3])
+    starts = sorted(rng.sample(range(9 * 60, 19 * 60 + 1, 30), n))
+    out = []
+    for i, s in enumerate(starts):
+        minutes = rng.choices([25, 50, 60, 90], weights=[3, 3, 3, 2])[0]
+        kind, val = rng.choice(CHALLENGE_PRIZES[minutes])
+        start = datetime.combine(d, dtime(s // 60, s % 60), tz)
+        end = start + timedelta(hours=2)
+        out.append({"id": f"{d.isoformat()}#c{i}", "start": start, "end": end, "minutes": minutes, "kind": kind,
+                    "val": val, "label": f"Start a {minutes}-min focus session between {start:%I:%M}–{end:%I:%M %p} "
+                                         f"→ {prize_label(kind, val)}"})
+    return out
+
+
+def roll_drop(rng: random.Random | None = None) -> str:
+    table = DROP_TABLE
     r = rng or random
     return r.choices([k for _, k in table], weights=[w for w, _ in table])[0]
