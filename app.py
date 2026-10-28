@@ -1419,23 +1419,23 @@ def _round_up(d: datetime, step: int = 5) -> datetime:
     return d + timedelta(minutes=(-d.minute) % step)
 
 
-def start_picker(key: str, default: str | None = "30m", label: str = "I'll start in") -> datetime | None:
-    """'I'll start in: Now · 30m · 1h · 2h · 3h · 🎡 (pick on the wheel)'. Returns the start datetime (None = not set)."""
+def start_picker(key: str, default: str | None = "30m", label: str = "Start") -> datetime | None:
+    """'Start: Now · 30m · 1h · 2h · 3h · 🎡'. The chosen time shows in the label. Returns None if not set."""
     opts = list(START_CHIPS)
-    pick = st.pills(label, opts, default=default, key=f"{key}_chip", selection_mode="single",
+    sel = st.session_state.get(f"{key}_chip", default)
+    if sel in START_CHIPS and START_CHIPS[sel] is not None:
+        shown = f"{label} · {_round_up(now() + timedelta(minutes=START_CHIPS[sel])):%I:%M %p}".replace("· 0", "· ")
+    else:
+        shown = label
+    pick = st.pills(shown, opts, default=default, key=f"{key}_chip", selection_mode="single",
                     help="🎡 = pick an exact time on the wheel")
     if pick is None:
         return None
     if START_CHIPS[pick] is None:
         t = time_wheel("", _round_up(now() + timedelta(minutes=30), 15).time(), key=f"{key}_wheel")
         start = datetime.combine(now().date(), t, TZ)
-        if start < now() - timedelta(minutes=5):
-            start += timedelta(days=1)
-    else:
-        start = _round_up(now() + timedelta(minutes=START_CHIPS[pick]))
-    day = "" if start.date() == now().date() else f" {start:%a}"
-    st.caption(f"▶️ starts **{start:%I:%M %p}{day}**".replace("**0", "**"))
-    return start
+        return start + timedelta(days=1) if start < now() - timedelta(minutes=5) else start
+    return _round_up(now() + timedelta(minutes=START_CHIPS[pick]))
 
 
 def render_dailies(state: dict) -> None:
@@ -1475,10 +1475,8 @@ def render_dailies(state: dict) -> None:
                     if n_ >= h["target"]:
                         flash(f"🔁 **{h['name']}** {n_}/{h['target']} — claim it!", sound="win")
                     st.rerun()
-        else:
-            st.markdown("#### 🔁 Dailies")
-            st.caption("Small things that must happen every day — water, prayers, brushing. Low reward, big penalty.")
-        with st.expander("➕ Add / manage dailies"):
+        with st.expander("➕ Add / manage dailies" if rows else
+                         "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)"):
             names = [p[0] for p in DL.PRESETS] + ["✏️ Custom…"]
             c1, c2 = st.columns([3, 1])
             pick = c1.selectbox("Daily", names, key="dl_pick")
@@ -1508,124 +1506,134 @@ def render_dailies(state: dict) -> None:
                         st.rerun()
 
 
+DUE_CHIPS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 59), "🎡": None}
+
+
+def due_picker(key: str, default: str = "9 PM") -> dtime:
+    """'Done by: 6 PM · 9 PM · Midnight · 🎡'. Chips already in the past are hidden."""
+    opts = [k for k, v in DUE_CHIPS.items() if v is None or datetime.combine(now().date(), v, TZ) > now()
+            + timedelta(minutes=20)]
+    default = default if default in opts else opts[0]
+    pick = st.pills("Done by", opts, default=default, key=f"{key}_chip", selection_mode="single") or default
+    if DUE_CHIPS[pick] is None:
+        return time_wheel("", dtime(21, 0), key=f"{key}_wheel")
+    return DUE_CHIPS[pick]
+
+
 def render_qualify_form(state: dict) -> None:
     today = now().date()
-    open_t = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
-    fk = st.session_state.setdefault("_qf_n", 0)  # form instance (bumped after a lock-in to reset the pickers)
-    c1, c2 = st.columns(2)
+    fk = st.session_state.setdefault("_qf_n", 0)  # bumped after a lock-in to reset every field
+    # ── one picker for everything you already have: your tasks, DECK 12 cards, Zotero papers ──
+    opts, default = {}, []
+    for t in sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"]):
+        opts[f"t:{t['id']}"] = (f"✅ {t['title']} · {parse_dt(t['deadline']):%a %I:%M %p}".replace(" 0", " "), t)
+        if parse_dt(t["deadline"]).date() <= today:
+            default.append(f"t:{t['id']}")
+    bc = board_cfg(state)
+    if bc:
+        try:
+            known = {B.clean_id(t.get("board_src") or t.get("board_page") or "") for t in state["tasks"]
+                     if t["status"] == "open" or (t.get("completed_at") or "")[:10] == today.isoformat()}
+            for b in _board_range(*bc, today.isoformat(), BOARD_LOOKAHEAD + 1):
+                if B.clean_id(b["id"]) not in known:
+                    opts[f"b:{b['id']}"] = ("📅 " + _board_label(b, today), b)
+        except Exception as e:
+            st.caption(f"(Couldn't read your board: {e})")
+    zc = zotero_cfg(state)
+    if zc:
+        try:
+            known_z = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
+            for p_ in [p_ for p_ in _zotero_list(*zc) if p_["key"] not in known_z][:8]:
+                opts[f"z:{p_['key']}"] = ("📄 " + Z.label(p_), p_)
+        except Exception as e:
+            st.caption(f"(Couldn't read Zotero: {e})")
+    picked = []
+    if opts:
+        picked = st.multiselect("Pick from your list", list(opts), default=default, format_func=lambda k: opts[k][0],
+                                key=f"q_pick{fk}", placeholder="Your tasks, DECK 12 cards, papers…",
+                                help="✅ your tasks · 📅 DECK 12 (read-only; upcoming cards = an hour on them today) · "
+                                     "📄 Zotero papers (45 min)")
+    new_txt = st.text_area("Or add new — one per line" if opts else "What will you finish today? One per line",
+                           key=f"q_new{fk}", height=68,
+                           placeholder="write methods 45m\nemail walter 15m by 3pm")
+    c1, c2 = st.columns([1.15, 1])
     with c1:
         start_dt = start_picker(f"q_start{fk}", default="30m")
     with c2:
-        due_t = time_wheel("Done by", dtime(21, 0), key=f"q_due{fk}")
+        due_t = due_picker(f"q_due{fk}")
     start_t = (start_dt or now()).time()
-    with st.form("qualify_form", clear_on_submit=True):
-        picked = []
-        if open_t:
-            labels = {t["id"]: f"{t['title']} — {parse_dt(t['deadline']):%a %I:%M %p}" for t in open_t}
-            picked = st.multiselect("Already on the board", list(labels), format_func=labels.get,
-                                    default=[t["id"] for t in open_t if parse_dt(t["deadline"]).date() <= today])
-        bc = board_cfg(state)
-        board_pick, board_items = [], []
-        if bc:
-            try:
-                known = {B.clean_id(t.get("board_src") or t.get("board_page") or "") for t in state["tasks"]
-                         if t["status"] == "open" or (t.get("completed_at") or "")[:10] == today.isoformat()}
-                board_items = [b for b in _board_range(*bc, today.isoformat(), BOARD_LOOKAHEAD + 1)
-                               if B.clean_id(b["id"]) not in known]
-            except Exception as e:
-                st.caption(f"(Couldn't read your board: {e})")
-            if board_items:
-                blabels = {b["id"]: _board_label(b, today) for b in board_items}
-                board_pick = st.multiselect(f"📅 From your DECK 12 board · today + next {BOARD_LOOKAHEAD} days",
-                                            list(blabels), format_func=blabels.get,
-                                            help="Read-only: nothing is ever written back to this board. Upcoming cards "
-                                                 "become an hour of work on them TODAY. Big events like a conference? "
-                                                 "Turn them into a goal in 🎯 Goals.")
-        zc = zotero_cfg(state)
-        paper_pick, papers = [], []
-        if zc:
-            try:
-                known_z = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
-                papers = [p for p in _zotero_list(*zc) if p["key"] not in known_z][:8]
-            except Exception as e:
-                st.caption(f"(Couldn't read Zotero: {e})")
-            if papers:
-                plabels = {p["key"]: Z.label(p) for p in papers}
-                paper_pick = st.multiselect(f"📄 From your Zotero “{zc[2]}”", list(plabels), format_func=plabels.get,
-                                            help="45 min of deep work each. Proof: your notes + a 2-line summary.")
-        st.caption("Add what you'll finish **today** — small and specific beats big and vague. "
-                   "Value = category × honest minutes (guide in ✅ Tasks).")
-        new = [st.text_input(f"Mission {i + 1}", key=f"q_new_{i}", label_visibility="collapsed",
-                             placeholder=["e.g. Write 300 words of the methods section",
-                                          "e.g. Email supervisor about the OVx timeline",
-                                          "optional third one"][i]) for i in range(3)]
-        c3, c4 = st.columns(2)
-        cat = c3.selectbox("Category of new ones", CAT_OPTS, format_func=cat_label, key="q_cat")
-        mins = c4.select_slider("Honest time each", V.MINUTES, value=30, format_func=min_label, key="q_min")
-        if st.form_submit_button("🚦 Lock it in", type="primary", use_container_width=True):
-            titles = [x.strip() for x in new if x.strip()]
-            dl = datetime.combine(today, due_t, TZ)
-            if titles and dl <= now() + timedelta(minutes=5):
-                st.error("'Done by' has to be later today.")
-            elif not titles and not picked and not board_pick and not paper_pick:
-                st.error("Pick at least one thing. One small thing counts.")
-            elif (sum(x.get("minutes") or 60 for x in state["tasks"] if x["id"] in picked) + len(titles) * mins
-                  + len(board_pick) * 60 + len(paper_pick) * 45) < daily.min_mission_minutes(state):
-                st.error(f"Too easy. Today's mission needs at least {daily.min_mission_minutes(state)} minutes of "
-                         "honest work in total — add something or pick a bigger time.")
+    if not st.button("🚦 Lock it in", type="primary", use_container_width=True, key=f"q_go{fk}"):
+        return
+    dl = datetime.combine(today, due_t, TZ)
+    lines = [ln.strip() for ln in new_txt.splitlines() if ln.strip()]
+    parsed = [Q.parse(ln, now()) for ln in lines]
+    minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked if k.startswith("t:"))
+               + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
+               + sum(p_["minutes"] for p_ in parsed))
+    if parsed and dl <= now() + timedelta(minutes=5):
+        st.error("'Done by' has to be later today.")
+        return
+    if not parsed and not picked:
+        st.error("Pick at least one thing. One small thing counts.")
+        return
+    if minutes < daily.min_mission_minutes(state):
+        st.error(f"Too easy — {minutes} min. Today's mission needs at least {daily.min_mission_minutes(state)} "
+                 "minutes of honest work. Add something, or put a time on it (e.g. “45m”).")
+        return
+    late_dl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
+    ids = []
+    for k in picked:
+        kind, obj = k[0], opts[k][1]
+        if kind == "t":
+            ids.append(obj["id"])
+        elif kind == "b":
+            b = obj
+            if b["date"] and b["date"] > today.isoformat():  # future card → an hour of work on it today
+                g = next((g for g in state["goals"] if B.clean_id(g.get("event_page") or "") == B.clean_id(b["id"])), None)
+                t = make_task(f"Work on: {b['title']}", f"For {b['title']} on {date.fromisoformat(b['date']):%a %b %d} "
+                              "(DECK 12 board). Proof: show what you made in the hour.", late_dl, None, "",
+                              g["id"] if g else None, minutes=60)
             else:
-                ids = list(picked)
-                for bid in board_pick:
-                    b = next(x for x in board_items if x["id"] == bid)
-                    if b["date"] and b["date"] > today.isoformat():  # future card → today's work session on it
-                        g = next((g for g in state["goals"] if B.clean_id(g.get("event_page") or "") == B.clean_id(bid)),
-                                 None)
-                        pdl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
-                        t = make_task(f"Work on: {b['title']}",
-                                      f"For {b['title']} on {date.fromisoformat(b['date']):%a %b %d} (DECK 12 board). "
-                                      "Proof: show what you made in the hour.", pdl, None, "",
-                                      g["id"] if g else None, minutes=60)
-                        state["tasks"].append(t)
-                        ids.append(t["id"])
-                        continue
-                    try:
-                        bt = datetime.strptime(b["when"].upper().replace(".", ""), "%I:%M %p").time()
-                        bdue = min(datetime.combine(today, bt, TZ) + timedelta(hours=2),
-                                   datetime.combine(today, dtime(23, 59), TZ))
-                    except ValueError:
-                        bdue = datetime.combine(today, dtime(21, 0), TZ)
-                    if bdue <= now() + timedelta(minutes=5):
-                        bdue = datetime.combine(today, dtime(23, 59), TZ)
-                    t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
-                    t["board_src"] = b["id"]  # remembered so it isn't suggested twice — never written to
-                    if b["when"] and bdue != datetime.combine(today, dtime(21, 0), TZ):
-                        t.update(scheduled=datetime.combine(today, bt, TZ).isoformat(), scheduled_time=True)
-                    state["tasks"].append(t)
-                    ids.append(t["id"])
-                for pk in paper_pick:
-                    p = next(x for x in papers if x["key"] == pk)
-                    pdl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
-                    t = make_task(f"📄 Read: {p['title'][:80]}", f"Proof: photo/screenshot of your notes + a 2-line "
-                                  f"summary. {p['url']}", pdl, None, "", category="deep", minutes=45)
-                    t["zotero_key"] = pk
-                    state["tasks"].append(t)
-                    ids.append(t["id"])
-                for title in titles:
-                    t = make_task(title, "", dl, None, "", category=None if cat == "auto" else cat, minutes=mins)
-                    state["tasks"].append(t)
-                    ids.append(t["id"])
-                msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
-                st.session_state["_qf_n"] = fk + 1
-                cursor = max(datetime.combine(today, start_t, TZ), now().replace(second=0, microsecond=0))
-                for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
-                    t = next(x for x in state["tasks"] if x["id"] == tid)
-                    if t.get("scheduled") and parse_dt(t["scheduled"]).date() >= today:
-                        continue
-                    t.update(scheduled=cursor.isoformat(), scheduled_time=True)
-                    cursor += timedelta(minutes=(t.get("minutes") or 30) + 10)
-                save_state(state)
-                flash(msg + f" You start at **{start_t:%I:%M %p}** — the phone will check.", sound="win")
-                st.rerun()
+                bt = None
+                try:
+                    bt = datetime.strptime(b["when"].upper().replace(".", ""), "%I:%M %p").time()
+                    bdue = min(datetime.combine(today, bt, TZ) + timedelta(hours=2), datetime.combine(today, dtime(23, 59), TZ))
+                except ValueError:
+                    bdue = late_dl
+                if bdue <= now() + timedelta(minutes=5):
+                    bdue = datetime.combine(today, dtime(23, 59), TZ)
+                t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
+                if bt:
+                    t.update(scheduled=datetime.combine(today, bt, TZ).isoformat(), scheduled_time=True)
+            t["board_src"] = b["id"]  # remembered so it isn't suggested twice — never written to
+            state["tasks"].append(t)
+            ids.append(t["id"])
+        else:
+            p_ = obj
+            t = make_task(f"📄 Read: {p_['title'][:80]}", f"Proof: photo/screenshot of your notes + a 2-line summary. "
+                          f"{p_['url']}", late_dl, None, "", category="deep", minutes=45)
+            t["zotero_key"] = p_["key"]
+            state["tasks"].append(t)
+            ids.append(t["id"])
+    for p_ in parsed:
+        t = make_task(p_["title"], "", p_["due"] if p_["when_given"] else dl, None, "", category=p_["category"],
+                      minutes=p_["minutes"])
+        if p_["at"]:
+            t.update(scheduled=p_["at"].isoformat(), scheduled_time=True)
+        state["tasks"].append(t)
+        ids.append(t["id"])
+    msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
+    st.session_state["_qf_n"] = fk + 1
+    cursor = max(datetime.combine(today, start_t, TZ), now().replace(second=0, microsecond=0))
+    for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
+        t = next(x for x in state["tasks"] if x["id"] == tid)
+        if t.get("scheduled") and parse_dt(t["scheduled"]).date() >= today:
+            continue
+        t.update(scheduled=cursor.isoformat(), scheduled_time=True)
+        cursor += timedelta(minutes=(t.get("minutes") or 30) + 10)
+    save_state(state)
+    flash(msg + f" You start at **{start_t:%I:%M %p}** — the phone will check.".replace("**0", "**"), sound="win")
+    st.rerun()
 
 
 def render_today(state: dict) -> None:
@@ -1698,32 +1706,31 @@ def _add_quick(state: dict, title: str, minutes: int, due: datetime, category: s
     return t
 
 
+def _tpl_add(state: dict, key: str) -> None:
+    label = st.session_state.get(f"{key}_tpls")
+    if not label:
+        return
+    _, mins, cat = next(x for x in Q.TEMPLATES if x[0] == label)
+    t = _add_quick(state, label.split(" ", 1)[1], mins, datetime.combine(now().date(), dtime(23, 59), TZ), cat)
+    st.session_state[f"{key}_tpls"] = None
+    flash(f"⚡ Added **{t['title']}** → +{t['reward']}" + (" · in today's mission" if t.get("mission_day") else ""))
+
+
 def render_quick_add(state: dict, key: str = "qa") -> None:
     with st.container(border=True):
         with st.form(f"{key}_form", clear_on_submit=True, border=False):
             c1, c2 = st.columns([5, 1])
             text = c1.text_input("⚡ Quick add", label_visibility="collapsed",
-                                 placeholder="⚡ Quick add — e.g. email walter re surgery dates 15m by 3pm")
+                                 placeholder="⚡ Quick add — “email walter 15m by 3pm”, “gym at 6pm”, “read in 1h”")
             go = c2.form_submit_button("Add", type="primary", use_container_width=True)
-        qn = st.session_state.setdefault(f"_{key}_n", 0)
-        start_dt = start_picker(f"{key}_s{qn}", default=None, label="I'll start in (optional)")
         if go and text.strip():
             p = Q.parse(text, now())
-            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"], at=p["at"] or start_dt)
-            st.session_state[f"_{key}_n"] = qn + 1
+            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"], at=p["at"])
             flash(f"⚡ Added **{t['title']}** · {V.CATEGORIES[t['category']]['label']} · {min_label(t['minutes'])} → "
                   f"**+{t['reward']}** · due {p['due']:%a %I:%M %p}" + (" · added to today's mission" if t.get("mission_day") else ""))
             st.rerun()
-        st.caption("Type it like a text: time (15m, 1.5h) and when (by 3pm, tonight, tomorrow, fri, eod). "
-                   "Or tap one:")
-        cols = st.columns(3)
-        for i, (label, mins, cat) in enumerate(Q.TEMPLATES):
-            if cols[i % 3].button(f"{label} · {min_label(mins)}", key=f"{key}_tpl{i}", use_container_width=True):
-                t = _add_quick(state, label.split(" ", 1)[1], mins, datetime.combine(now().date(), dtime(23, 59), TZ), cat,
-                               at=start_dt)
-                st.session_state[f"_{key}_n"] = qn + 1
-                flash(f"⚡ Added **{t['title']}** → +{t['reward']}" + (" · in today's mission" if t.get("mission_day") else ""))
-                st.rerun()
+        st.pills("One tap", [x[0] for x in Q.TEMPLATES], key=f"{key}_tpls", selection_mode="single",
+                 label_visibility="collapsed", on_change=_tpl_add, args=(state, key))
 
 
 def _mark_started(t: dict) -> None:

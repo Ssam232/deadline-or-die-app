@@ -22,6 +22,11 @@ TEMPLATES = [
 
 def parse(text: str, now: datetime) -> dict:
     t = " " + text.strip() + " "
+    start_in = None
+    m = re.search(r"\sin\s+(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minutes)\b", t, re.I)
+    if m:
+        start_in = round(float(m.group(1)) * (60 if m.group(2).lower().startswith("h") else 1))
+        t = t.replace(m.group(0), " ")
     minutes = None
     m = re.search(r"\s(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours)\b", t, re.I)
     if m:
@@ -33,6 +38,9 @@ def parse(text: str, now: datetime) -> dict:
         t = t.replace(m.group(0), " ")
 
     day = now.date()
+    when_given = bool(re.search(r"\b(tomorrow|tmrw|today|tonight|eod|by|at|before|mon|monday|tue|tues|tuesday|wed|"
+                                r"wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)\b", t, re.I)
+                      or "@" in t)
     for word, delta in (("tomorrow", 1), ("tmrw", 1), ("today", 0), ("tonight", 0)):
         mm = re.search(rf"\b{word}\b", t, re.I)
         if mm:
@@ -74,9 +82,13 @@ def parse(text: str, now: datetime) -> dict:
     cat = V.guess_category(title)
     mins = minutes or {"show": 60, "life": 30, "health": 60, "admin": 30, "deep": 45}[cat]
     mins = min(V.MINUTES, key=lambda x: abs(x - mins))  # snap to the honest-time buckets
-    out = {"title": title, "minutes": mins, "due": due, "category": cat, "at": None}
+    out = {"title": title, "minutes": mins, "due": due, "category": cat, "at": None, "when_given": when_given}
     if at_time:  # happens at that time → due when it's over
         out["at"], out["due"] = due, due + timedelta(minutes=mins)
+    elif start_in is not None:  # "in 1h" = I'll start in an hour
+        out["at"] = now.replace(second=0, microsecond=0) + timedelta(minutes=start_in)
+        if out["due"] < out["at"] + timedelta(minutes=mins):
+            out["due"] = out["at"] + timedelta(minutes=mins)
     return out
 
 
