@@ -1460,11 +1460,11 @@ def render_dailies(state: dict) -> None:
                     save_state(state)
                     st.rerun()
                 if r["done"] and not r["claimed"]:
-                    if c3.button(f"🏆 Claim +{h['reward']}", key=f"dl_claim_{h['id']}", type="primary",
+                    if c3.button(f"🏆 Claim +{DL.reward(h)}", key=f"dl_claim_{h['id']}", type="primary",
                                  use_container_width=True):
                         DL.claim(state, h["id"], today, bank)
                         save_state(state)
-                        flash(f"🔁 **{h['name']}** done for today — +{h['reward']} 🪙 · streak {h['streak']} 🔥",
+                        flash(f"🔁 **{h['name']}** done for today — +{DL.reward(h)} 🪙 · streak {h['streak']} 🔥",
                               sound="win")
                         st.rerun()
                 elif r["claimed"]:
@@ -1484,15 +1484,14 @@ def render_dailies(state: dict) -> None:
             pick = c1.selectbox("Daily", names, key="dl_pick")
             name = st.text_input("Name", key="dl_name", placeholder="e.g. 🌙 Journal") if pick == names[-1] else pick
             target = c2.number_input("Times / day", 1, 20, dict(DL.PRESETS).get(pick, 1), key=f"dl_target_{pick}")
-            c3, c4 = st.columns(2)
-            reward = c3.slider("Reward when done (🪙)", 1, 10, DL.DEFAULT_REWARD, key="dl_reward")
-            penalty = c4.slider("Penalty if missed (🪙)", 10, 100, DL.DEFAULT_PENALTY, 5, key="dl_penalty")
+            st.caption(f"Worth **+{DL.reward(target)}** 🪙 when done · **−{DL.penalty(target)}** 🪙 if missed at midnight. "
+                       "Set by the game: once-a-day dailies pay least and cost most.")
             days = st.multiselect("Days", list(range(7)), default=list(range(7)), format_func=lambda i: DL.WEEKDAYS[i],
                                   key="dl_days")
             if st.button("➕ Add daily", type="primary", disabled=not (name or "").strip()):
-                h = DL.add(state, name, target, reward, penalty, days, today)
+                h = DL.add(state, name, target, days, today)
                 save_state(state)
-                flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{h['reward']} when done, −{h['penalty']} if missed. "
+                flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{DL.reward(h)} when done, −{DL.penalty(h)} if missed. "
                       "Starts counting today.")
                 st.rerun()
             live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
@@ -1500,7 +1499,7 @@ def render_dailies(state: dict) -> None:
                 st.caption("Removing a daily takes effect tomorrow — today still counts.")
                 for h in live:
                     a, b = st.columns([5, 2], vertical_alignment="center")
-                    a.markdown(f"{h['name']} ×{h['target']} · +{h['reward']} / −{h['penalty']} · "
+                    a.markdown(f"{h['name']} ×{h['target']} · +{DL.reward(h)} / −{DL.penalty(h)} · "
                                f"{'every day' if len(h['days']) == 7 else ', '.join(DL.WEEKDAYS[i] for i in h['days'])}"
                                + (" · *ends tonight*" if h.get("end") == today.isoformat() else ""))
                     if not h.get("end") and b.button("Remove", key=f"dl_rm_{h['id']}", use_container_width=True):

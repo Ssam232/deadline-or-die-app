@@ -4,6 +4,13 @@
 Low gain, high penalty: hitting the day's count pays a little (and grows the daily's streak); missing it at midnight
 costs a lot. Tap +1 each time. Honour system — no proof — which is exactly why the penalty is big.
 
+Values are set by the game, not by you, from how many times a day it has to happen:
+  once a day = smallest reward, biggest penalty (it's one thing — no excuse);
+  many times a day = a bit more reward, smaller penalty (harder to land every single one).
+  1×: +2 / −45 · 2×: +3 / −40 · 3×: +4 / −35 · 5×: +6 / −25 · 6×+: up to +10 / −20
+
+Dailies never touch your Notion boards.
+
 Anti-dodge rules: removing or pausing a daily only takes effect tomorrow (today still counts), and you can't
 lower today's target after the fact. Pit-stop days skip dailies. After a long absence at most
 MAX_CHARGED_DAYS missed days are charged.
@@ -17,8 +24,17 @@ PRESETS = [  # (name, times per day)
     ("💧 Drink water (glasses)", 8), ("🕌 Prayers", 5), ("🦷 Brush teeth", 2), ("🚶 10k steps", 1),
     ("📖 Read 10 pages", 1), ("🧘 Stretch", 1), ("🛏️ In bed by midnight", 1),
 ]
-DEFAULT_REWARD = 3
-DEFAULT_PENALTY = 30
+
+
+def reward(h_or_target) -> int:
+    n = h_or_target["target"] if isinstance(h_or_target, dict) else int(h_or_target)
+    return min(10, 1 + n)
+
+
+def penalty(h_or_target) -> int:
+    n = h_or_target["target"] if isinstance(h_or_target, dict) else int(h_or_target)
+    return max(20, 50 - 5 * n)
+
 MAX_CHARGED_DAYS = 3
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -27,10 +43,9 @@ def habits(save: dict) -> list[dict]:
     return save.setdefault("habits", [])
 
 
-def add(save: dict, name: str, target: int, reward: int, penalty: int, days: list[int], today: date) -> dict:
-    h = {"id": uuid.uuid4().hex[:8], "name": name.strip(), "target": max(1, int(target)), "reward": int(reward),
-         "penalty": int(penalty), "days": sorted(days) or list(range(7)), "start": today.isoformat(),
-         "end": None, "streak": 0, "best": 0}
+def add(save: dict, name: str, target: int, days: list[int], today: date) -> dict:
+    h = {"id": uuid.uuid4().hex[:8], "name": name.strip(), "target": max(1, int(target)),
+         "days": sorted(days) or list(range(7)), "start": today.isoformat(), "end": None, "streak": 0, "best": 0}
     habits(save).append(h)
     return h
 
@@ -78,9 +93,9 @@ def claim(save: dict, hid: str, d: date, bank, why: str = "") -> int:
     del save["habit_claims"][:-400]
     h["streak"] = h.get("streak", 0) + 1
     h["best"] = max(h.get("best", 0), h["streak"])
-    bank(save, h["reward"], f"🔁 {h['name']}{why}")
+    bank(save, reward(h), f"🔁 {h['name']}{why}")
     save["xp"] = save.get("xp", 0) + 2
-    return h["reward"]
+    return reward(h)
 
 
 def today_status(save: dict, d: date) -> list[dict]:
@@ -113,8 +128,8 @@ def settle(save: dict, today: date, bank, is_rest) -> list[str]:
                 elif charged < MAX_CHARGED_DAYS:
                     lost = h.get("streak", 0)
                     h["streak"] = 0
-                    bank(save, -h["penalty"], f"🔁 Missed daily: {h['name']} ({d:%a})")
-                    missed.append(f"{h['name']} {count(save, h['id'], d)}/{h['target']} → **−{h['penalty']}**"
+                    bank(save, -penalty(h), f"🔁 Missed daily: {h['name']} ({d:%a})")
+                    missed.append(f"{h['name']} {count(save, h['id'], d)}/{h['target']} → **−{penalty(h)}**"
                                   + (f" (streak {lost} lost)" if lost else ""))
                 else:
                     h["streak"] = 0
@@ -134,7 +149,7 @@ def at_stake(save: dict, d: date) -> tuple[int, list[str]]:
     total, lines = 0, []
     for s in today_status(save, d):
         if not s["done"]:
-            total += s["h"]["penalty"]
+            total += penalty(s["h"])
             lines.append(f"{s['h']['name']} {s['count']}/{s['h']['target']}")
     return total, lines
 
