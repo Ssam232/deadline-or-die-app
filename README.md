@@ -67,6 +67,19 @@ streamlit run app.py
 
 Quiet hours are 11 PM–7 AM (`QUIET_HOURS` in the workflow). Only final warnings and DNFs break through.
 
+## 🚦 Daily qualifying (no empty days)
+| | |
+|---|---|
+| Mission | Every day, lock in 1–3 things you'll finish **today** before the cutoff (default 11 AM, Settings). On time = +15 fuel. |
+| Start time | You say when you'll start; the phone fires "LIGHTS OUT" at that time if nothing's done. |
+| Missed cutoff | −20 coins, rivals faster, and the **safety car** assigns: 30 min focused work, proof by 6 PM. |
+| Zero day | Nothing finished by midnight → −40 coins, −10% car, day streak dies. |
+| Pit stop | 1 per week for sick/rest days, plus any standing rest weekdays you set. |
+| Comeback rule | Back after a long gap? At most 3 zero days are charged; the rest are forgiven. |
+
+## 🏢 The Honda ladder
+Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Parts upgrades carry over between cars.
+
 ## The rules
 | Mechanic | What it does |
 |---|---|

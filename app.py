@@ -29,6 +29,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
+import daily
 from notify import push
 from notion_store import (Notion, NotionError, STATUS, archive_page, due_to_dt, ensure_workspace, load_json,
                           pull_rows, save_json, task_props, update_dashboard, upload_proof, upsert_task)
@@ -66,12 +67,31 @@ RIVALS = [
     "'Quick Break' Quinn", "Reorganize-My-Desk Rob",
 ]
 
+# Your garage: a real-model progression, unlocked by driver level + coins. Drawings are stylized silhouettes.
+CARS = [
+    {"id": "civic_si", "name": "Honda Civic Si", "base": 40, "cost": 0, "level": 1, "body": "sedan",
+     "blurb": "Where every Honda guy starts. Rev it out."},
+    {"id": "integra_r", "name": "Honda Integra Type R (DC2)", "base": 50, "cost": 400, "level": 2, "body": "coupe",
+     "blurb": "Hand-ported legend. Earned, not bought."},
+    {"id": "s2000", "name": "Honda S2000", "base": 60, "cost": 900, "level": 3, "body": "roadster",
+     "blurb": "9,000 rpm. Roof down, deadlines done."},
+    {"id": "ctr", "name": "Honda Civic Type R (FL5)", "base": 72, "cost": 1800, "level": 4, "body": "hatch",
+     "blurb": "The wing says it all."},
+    {"id": "nsx", "name": "Honda NSX (NA1)", "base": 85, "cost": 3500, "level": 5, "body": "super",
+     "blurb": "The one that embarrassed Ferrari."},
+    {"id": "nsx_s", "name": "Honda NSX Type S", "base": 100, "cost": 6000, "level": 7, "body": "super",
+     "blurb": "Final form of the road car."},
+    {"id": "nsx_gt3", "name": "Honda NSX GT3 Evo", "base": 120, "cost": 10000, "level": 9, "body": "gt3",
+     "blurb": "The race car. Same class as your rig — park it next to it."},
+]
+CAR_BY_ID = {c["id"]: c for c in CARS}
+
 TRACKS = [
     {"name": "Parking Lot Sprint", "laps": 3, "level": 1, "fee": 10, "ai": (30, 48), "prize": [60, 30, 15]},
     {"name": "Bow River Circuit", "laps": 5, "level": 2, "fee": 25, "ai": (55, 75), "prize": [150, 75, 35]},
     {"name": "Foothills Grand Prix", "laps": 7, "level": 4, "fee": 60, "ai": (80, 105), "prize": [360, 180, 90]},
-    {"name": "Rockies 6 Hours", "laps": 10, "level": 6, "fee": 120, "ai": (105, 135), "prize": [800, 400, 200]},
-    {"name": "Thesis Defense Ring", "laps": 12, "level": 8, "fee": 250, "ai": (130, 158), "prize": [2000, 900, 400]},
+    {"name": "Rockies 6 Hours", "laps": 10, "level": 6, "fee": 120, "ai": (115, 150), "prize": [800, 400, 200]},
+    {"name": "Thesis Defense Ring", "laps": 12, "level": 8, "fee": 250, "ai": (150, 200), "prize": [2000, 900, 400]},
 ]
 
 # ── conditioning layer ──
@@ -153,7 +173,7 @@ def default_state() -> dict:
         "xp": 0,
         "streak": 0,
         "best_streak": 0,
-        "car": {"name": "Project GT3", "number": 28, "color": "#e63946",
+        "car": {"name": "Project GT3", "number": 28, "color": "#e63946", "model": "civic_si", "owned": ["civic_si"],
                 "parts": {k: 0 for k in PARTS}, "condition": 100},
         "goals": [],
         "tasks": [],
@@ -411,7 +431,7 @@ def bank(state: dict, delta: int, reason: str) -> None:
 
 def car_rating(state: dict) -> float:
     car = state["car"]
-    raw = 40 + sum(car["parts"][k] * PARTS[k]["weight"] for k in PARTS)
+    raw = CAR_BY_ID.get(car.get("model"), CARS[0])["base"] + sum(car["parts"][k] * PARTS[k]["weight"] for k in PARTS)
     return raw * (0.55 + 0.45 * car["condition"] / 100)
 
 
@@ -784,11 +804,37 @@ def notion_mark_done(state: dict, t: dict) -> str | None:
 
 
 # ─────────────────────────── car art ───────────────────────────
+BODIES = {
+    "sedan": ('M18 84 L22 64 Q26 54 48 52 L104 46 Q128 28 170 26 Q205 26 232 44 L286 54 Q306 58 308 74 L306 84 Z',
+              'M112 47 Q132 32 168 31 Q196 31 218 45 Z'),
+    "coupe": ('M18 84 L22 66 Q28 56 52 54 L112 48 Q140 32 176 31 Q206 33 226 48 L288 56 Q306 60 308 74 L306 84 Z',
+              'M120 49 Q144 36 174 35 Q200 37 216 48 Z'),
+    "roadster": ('M18 84 L22 68 Q30 60 60 58 L150 56 L168 50 L176 56 L288 60 Q306 63 308 74 L306 84 Z',
+                 'M150 56 L166 40 L170 41 L160 56 Z'),
+    "hatch": ('M18 84 L20 56 Q22 46 44 44 L100 42 Q126 26 168 25 Q206 26 232 42 L286 52 Q306 56 308 72 L306 84 Z',
+              'M106 43 Q130 30 166 29 Q196 30 218 43 Z'),
+    "super": ('M16 84 L20 72 Q40 64 90 60 Q130 42 172 40 Q214 42 246 58 L300 66 Q312 72 310 84 Z',
+              'M134 57 Q158 45 186 45 Q208 47 226 58 Z'),
+    "gt3": ('M12 86 L16 72 Q38 63 90 59 Q130 41 172 39 Q214 41 246 57 L302 65 Q316 72 314 86 Z',
+            'M134 56 Q158 44 186 44 Q208 46 226 57 Z'),
+}
+
+
 def car_svg(car: dict) -> str:
     c, p, cond = car["color"], car["parts"], car["condition"]
+    model = CAR_BY_ID.get(car.get("model"), CARS[0])
+    body, glass = BODIES[model["body"]]
     num = html.escape(str(car["number"]))
     extras = []
-    if p["aero"] >= 2:
+    if model["body"] in ("hatch", "gt3"):  # factory wing
+        wy = 30 if model["body"] == "hatch" else 48
+        extras.append(f'<rect x="4" y="{wy}" width="44" height="6" rx="2" fill="#3a3d46" stroke="#888" stroke-width=".8"/>'
+                      f'<rect x="18" y="{wy + 6}" width="4" height="16" fill="#3a3d46"/>'
+                      f'<rect x="34" y="{wy + 6}" width="4" height="16" fill="#3a3d46"/>')
+    if model["body"] == "gt3":
+        extras.append('<path d="M290 84 L318 84 L318 88 L286 88 Z" fill="#111"/>'
+                      '<path d="M60 70 L300 74" stroke="#fff" stroke-width="3" opacity=".8"/>')
+    elif p["aero"] >= 2:
         extras.append('<rect x="6" y="32" width="38" height="6" rx="2" fill="#1d1d1d"/>'
                       '<rect x="22" y="38" width="4" height="18" fill="#1d1d1d"/>')
     if p["engine"] >= 3:
@@ -806,10 +852,8 @@ def car_svg(car: dict) -> str:
     return f"""
 <svg viewBox="0 0 320 112" width="100%" style="max-width:420px" xmlns="http://www.w3.org/2000/svg">
   <ellipse cx="160" cy="102" rx="140" ry="7" fill="#000" opacity=".18"/>
-  <path d="M18 84 L22 64 Q26 54 48 52 L104 46 Q128 28 170 26 Q205 26 232 44 L286 54 Q306 58 308 74 L306 84 Z"
-        fill="{c}" stroke="#111" stroke-width="2"/>
-  <path d="M112 47 Q132 32 168 31 Q196 31 218 45 Z" fill="#1b2430" opacity=".9"/>
-  <line x1="165" y1="31" x2="165" y2="46" stroke="{c}" stroke-width="4"/>
+  <path d="{body}" fill="{c}" stroke="#111" stroke-width="2"/>
+  <path d="{glass}" fill="#1b2430" opacity=".9"/>
   {''.join(extras)}
   <circle cx="150" cy="70" r="12" fill="#fff" stroke="#111" stroke-width="1.5"/>
   <text x="150" y="75" font-size="13" font-family="Arial, sans-serif" font-weight="700"
@@ -820,10 +864,10 @@ def car_svg(car: dict) -> str:
 
 
 # ─────────────────────────── UI pieces ───────────────────────────
-def render_proof_form(state: dict, t: dict, mode: str) -> None:
+def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     """mode: 'open' (normal completion) or 'redeem' (finishing a missed task for a partial refund)."""
     s = state["settings"]
-    k = f"{mode}_{t['id']}"
+    k = f"{scope}{mode}_{t['id']}"
     use_ai = s["ai_steward"] and bool(get_secret("ANTHROPIC_API_KEY"))
     note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.")
     up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)", type=PROOF_TYPES, key=f"file_{k}")
@@ -1101,6 +1145,106 @@ def simulate_race(state: dict, track: dict) -> None:
     st.rerun()
 
 
+def make_safety_car(due: datetime) -> dict:
+    return make_task(daily.SAFETY_CAR_TITLE, "Proof: a screenshot of a 30-min timer + one line on what you did.",
+                     due, "Medium", "No gaming tonight")
+
+
+def _next_half_hour() -> dtime:
+    n = now() + timedelta(minutes=30)
+    return dtime(n.hour, 0 if n.minute < 30 else 30)
+
+
+def render_qualify_form(state: dict) -> None:
+    today = now().date()
+    open_t = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
+    with st.form("qualify_form", clear_on_submit=True):
+        picked = []
+        if open_t:
+            labels = {t["id"]: f"{t['title']} — {parse_dt(t['deadline']):%a %I:%M %p}" for t in open_t}
+            picked = st.multiselect("Already on the board", list(labels), format_func=labels.get,
+                                    default=[t["id"] for t in open_t if parse_dt(t["deadline"]).date() <= today])
+        st.caption("Add what you'll finish **today** — small and specific beats big and vague.")
+        new = [st.text_input(f"Mission {i + 1}", key=f"q_new_{i}", label_visibility="collapsed",
+                             placeholder=["e.g. Write 300 words of the methods section",
+                                          "e.g. Email supervisor about the OVx timeline",
+                                          "optional third one"][i]) for i in range(3)]
+        c1, c2 = st.columns(2)
+        due_t = c1.time_input("Done by", value=dtime(21, 0))
+        start_t = c2.time_input("I'll START at", value=_next_half_hour(),
+                                help="Your phone will hold you to this.")
+        size = st.radio("Size of new ones", list(DIFFICULTY), index=0, horizontal=True)
+        if st.form_submit_button("🚦 Lock it in", type="primary", use_container_width=True):
+            titles = [x.strip() for x in new if x.strip()]
+            dl = datetime.combine(today, due_t, TZ)
+            if titles and dl <= now() + timedelta(minutes=5):
+                st.error("'Done by' has to be later today.")
+            elif not titles and not picked:
+                st.error("Pick at least one thing. One small thing counts.")
+            else:
+                ids = list(picked)
+                for title in titles:
+                    t = make_task(title, "", dl, size, "")
+                    state["tasks"].append(t)
+                    ids.append(t["id"])
+                msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
+                save_state(state)
+                flash(msg + f" You start at **{start_t:%I:%M %p}** — the phone will check.", sound="win")
+                st.rerun()
+
+
+def render_today(state: dict) -> None:
+    n_ = now()
+    stt = daily.status(state, n_)
+    c = daily.cfg(state)
+    with st.container(border=True):
+        if stt["rest"]:
+            st.markdown("### 🛌 Pit stop day")
+            st.caption("Recharge. Nothing counts against you today. Back on the grid tomorrow.")
+            return
+        if not stt["qualified"]:
+            left = stt["deadline"] - n_
+            if left.total_seconds() > 0:
+                st.markdown(f"### 🚦 Qualifying closes in {fmt_left(left)}")
+                st.caption(f"Lock in today's mission before **{stt['deadline']:%I:%M %p}** for +{c['qualify_fuel']} fuel. "
+                           f"Miss it and the safety car picks for you (−{c['qualify_penalty']}).")
+            else:
+                st.markdown("### 🚦 Qualifying missed")
+                st.caption("The safety car is out. You can still lock in your own mission.")
+            render_qualify_form(state)
+            if stt["pit_stops_left"]:
+                if st.checkbox("I'm sick / genuinely need a rest day", key="pit_chk") and \
+                        st.button(f"🛌 Take a pit stop ({stt['pit_stops_left']} left this week)"):
+                    daily.pit_stop(state, n_)
+                    save_state(state)
+                    flash("🛌 Pit stop. Rest properly — the grid forms again tomorrow.", "info")
+                    st.rerun()
+            return
+        m, done = stt["mission"], stt["mission_done"]
+        st.markdown(f"### 🏁 Today's mission · {len(done)}/{len(m)}")
+        st.progress(len(done) / len(m) if m else 0.0)
+        bits = [f"📅 day streak **{stt['day_streak']}**" + (" (+1 when you finish one today)" if not stt["done_today"] else " ✅")]
+        if stt["start_at"]:
+            bits.append(f"you said you'd start at **{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}**")
+        st.caption(" · ".join(bits))
+        for t in m:
+            if t["status"] in ("done", "redeemed"):
+                st.markdown(f"✅ ~~{t['title']}~~")
+            elif t["status"] == "open":
+                dl = parse_dt(t["deadline"])
+                with st.expander(f"📸 {t['title']} · {fmt_left(dl - n_)} left"):
+                    render_proof_form(state, t, "open", scope="today_")
+            else:
+                st.markdown(f"💀 {t['title']}")
+        if m and len(done) == len(m):
+            st.success("Mission complete. Anything else today is pure bonus. 🏆")
+        elif not stt["done_today"] and n_.hour >= 18:
+            st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
+                       "Do the smallest one now.")
+        with st.expander("➕ Add to today's mission"):
+            render_qualify_form(state)
+
+
 # ─────────────────────────── app ───────────────────────────
 st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="centered")
 
@@ -1128,6 +1272,7 @@ if st.session_state.pop("_fresh_load", False) and notion_cfg():
         sync_msgs = [("warning", f"Couldn't sync tasks with Notion: {e}")]
 
 crash_msgs = process_overdue(state)
+crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 rust_msg = process_rust(state)
 if crash_msgs or rust_msg or st.session_state.pop("_needs_save", False):
     save_state(state)
@@ -1155,6 +1300,8 @@ if st.session_state.pop("celebrate", False):
 snd = st.session_state.pop("sound", None)
 if snd and state["settings"].get("sounds", True):
     st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
+
+render_today(state)
 
 lvl = level_of(state["xp"])
 c1, c2, c3, c4 = st.columns(4)
@@ -1429,7 +1576,8 @@ with tab_garage:
     car = state["car"]
     st.markdown(car_svg(car), unsafe_allow_html=True)
     st.markdown(f"### #{car['number']} {car['name']}")
-    st.caption(f"Performance rating **{car_rating(state):.0f}** (max 160)")
+    model = CAR_BY_ID.get(car.get("model"), CARS[0])
+    st.caption(f"**{model['name']}** · performance rating **{car_rating(state):.0f}** — {model['blurb']}")
 
     st.progress(car["condition"] / 100, text=f"Condition {car['condition']}%")
     missing = 100 - car["condition"]
@@ -1444,6 +1592,32 @@ with tab_garage:
                 st.rerun()
         else:
             st.caption("Can't afford repairs. Go finish something.")
+
+    with st.expander("🏢 Showroom — the Honda ladder", expanded=False):
+        lvl_now = level_of(state["xp"])
+        owned = car.setdefault("owned", ["civic_si"])
+        for m in CARS:
+            c1, c2 = st.columns([3, 2])
+            tag = "🟢 driving" if m["id"] == car.get("model") else "✅ owned" if m["id"] in owned else \
+                  ("🔒 level " + str(m["level"]) if lvl_now < m["level"] else f"{m['cost']:,} 🪙")
+            c1.markdown(f"**{m['name']}** · base {m['base']}  \n<small>{m['blurb']}</small>", unsafe_allow_html=True)
+            if m["id"] == car.get("model"):
+                c2.caption(tag)
+            elif m["id"] in owned:
+                if c2.button("Drive it", key=f"drive_{m['id']}"):
+                    car["model"] = m["id"]
+                    save_state(state)
+                    st.rerun()
+            elif lvl_now < m["level"]:
+                c2.caption(tag)
+            elif c2.button(f"Buy · {m['cost']:,} 🪙", key=f"buy_{m['id']}", disabled=state["coins"] < m["cost"]):
+                bank(state, -m["cost"], f"🏢 Bought {m['name']}")
+                owned.append(m["id"])
+                car["model"] = m["id"]
+                save_state(state)
+                flash(f"🔑 **{m['name']}** is yours. Every coin of it came from finished work.", celebrate=True,
+                      sound="jackpot")
+                st.rerun()
 
     st.subheader("Upgrades")
     for key, p in PARTS.items():
@@ -1519,6 +1693,11 @@ with tab_set:
         strict = st.toggle("Strict proof — a file is always required", value=s["strict_proof"])
         ext_h = st.number_input("Extension length (hours)", 1, 72, value=int(s["extension_hours"]))
         max_ext = st.number_input("Max extensions per task", 0, 5, value=int(s["max_extensions"]))
+        st.subheader("Daily qualifying")
+        dc = daily.cfg(state)
+        q_by = st.number_input("Mission must be locked in by (hour, 24h)", 6, 16, value=int(dc["qualify_by"]))
+        wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        rest = st.multiselect("Standing rest days (never penalized)", wd, default=[wd[i] for i in dc["rest_days"]])
         st.subheader("AI race steward (Claude)")
         ai = st.toggle("Have Claude verify proof", value=s["ai_steward"])
         model = st.text_input("Model", value=s["model"])
@@ -1530,7 +1709,8 @@ with tab_set:
                               value=s["notion_done_prop"])
         if st.form_submit_button("Save settings", type="primary"):
             s.update({"player_name": pname.strip() or "Driver", "sounds": sounds, "grace_minutes": int(grace), "strict_proof": strict, "extension_hours": int(ext_h),
-                      "max_extensions": int(max_ext), "ai_steward": ai, "model": model.strip(),
+                      "max_extensions": int(max_ext), "qualify_by": int(q_by), "rest_days": [wd.index(x) for x in rest],
+                      "ai_steward": ai, "model": model.strip(),
                       "notion_db": db.strip(), "notion_date_prop": dprop.strip(),
                       "notion_done_prop": fprop.strip()})
             save_state(state)

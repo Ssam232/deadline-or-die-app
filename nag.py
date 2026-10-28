@@ -20,6 +20,7 @@ import sys
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import daily
 from notify import push
 from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, pull_rows, save_json, update_dashboard
 
@@ -122,6 +123,62 @@ def message(stage: int, t: dict, mins: float, ctx: dict, repeat: bool) -> tuple[
             5, ["skull"])
 
 
+def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]:
+    """Hunt empty days: qualifying countdown, missed qualifying, lights-out at the promised start, zero-day ladder."""
+    if not save or "tasks" not in save:
+        return []
+    stt, c = daily.status(save, now), daily.cfg(save)
+    if stt["rest"]:
+        return []
+    dm = mem.setdefault("day", {})
+    if dm.get("date") != now.date().isoformat():
+        dm.clear()
+        dm["date"] = now.date().isoformat()
+    out = []
+    if not stt["qualified"]:
+        left = (stt["deadline"] - now).total_seconds() / 60
+        if 0 < left <= 30 and not dm.get("q30"):
+            dm["q30"] = dm["q60"] = True
+            out.append((f"🚦 {int(left)} MIN TO QUALIFY",
+                        f"No mission locked in. At {stt['deadline']:%I:%M %p} you lose {c['qualify_penalty']} coins "
+                        "and the safety car picks your task for you. Takes 30 seconds — do it now.", 5, ["vertical_traffic_light"]))
+        elif 30 < left <= 60 and not dm.get("q60"):
+            dm["q60"] = True
+            out.append(("🚦 1 hour to qualify",
+                        f"What are you finishing today? Lock in 1–3 things before {stt['deadline']:%I:%M %p} "
+                        f"for +{c['qualify_fuel']} fuel.", 4, ["vertical_traffic_light"]))
+        elif left <= 0 and not dm.get("qmiss") and not quiet:
+            dm["qmiss"] = dm["q30"] = dm["q60"] = True
+            out.append(("🚨 Missed qualifying — safety car out",
+                        f"−{c['qualify_penalty']} coins, rivals faster. Your task now: 30 min of focused work, proof by "
+                        f"{int(c['safety_car_hour'])}:00. Open the app to see it.", 5, ["rotating_light"]))
+    elif stt["start_at"] and not dm.get("lights") and not stt["done_today"]:
+        h, m = (int(x) for x in stt["start_at"].split(":"))
+        start = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if start <= now < start + timedelta(hours=3):
+            dm["lights"] = True
+            out.append(("🚦 LIGHTS OUT",
+                        f"You said you'd start at {start:%I:%M %p}. It's {now:%I:%M %p}. "
+                        "Open the first mission task and work 10 minutes. Go.", 5, ["checkered_flag"]))
+    if not stt["done_today"] and not quiet:
+        hour = now.hour + now.minute / 60
+        ladder = [("z18", 18, 4, "⚠️ Zero finishes today",
+                   f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins and your "
+                   f"{stt['day_streak']}-day streak dies. Smallest task, now."),
+                  ("z20", 20, 5, "🔴 ZERO-DAY WARNING",
+                   f"Still nothing. 4 hours left. Tomorrow you'll wish you'd done one thing tonight."),
+                  ("z2130", 21.5, 5, "☠️ LAST CALL",
+                   f"2.5 hours to midnight. One proof-backed finish saves the day streak "
+                   f"({stt['day_streak']}) and {c['zero_day_penalty']} coins. Tomorrow Tom is already celebrating.")]
+        due = [x for x in ladder if hour >= x[1] and not dm.get(x[0])]
+        if due:
+            for x in due:
+                dm[x[0]] = True
+            key, _, prio, title, body = due[-1]
+            out.append((title, body, prio, ["warning"]))
+    return out
+
+
 def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(TZ)
     ids = ensure_workspace(n, parent)
@@ -155,6 +212,9 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         send(*message(stg, t, mins, ctx, repeat))
         mem["tasks"][t["key"]] = {"stage": stg, "last": now.isoformat()}
 
+    for msg in daily_nags(save, mem, now, quiet):
+        send(*msg)
+
     open_keys = {t["key"] for t in tasks}
     mem["tasks"] = {k: v for k, v in mem["tasks"].items() if k in open_keys}
 
@@ -168,17 +228,16 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             else "Nothing due in the next 48h. Get ahead: early finishes pay +25%.")
         body += (f"\n\n🪙 {save.get('coins', 0)} · 🔥 streak {ctx['streak']} · "
                  f"🔧 car {save.get('car', {}).get('condition', 100)}%")
+        if save.get("tasks") is not None:
+            stt = daily.status(save, now)
+            if stt["rest"]:
+                body += "\n\n🛌 Pit stop day. Rest."
+            elif not stt["qualified"]:
+                body += f"\n\n🚦 Qualifying closes {stt['deadline']:%I:%M %p} — lock in today's mission."
+            body += f"\n📅 Day streak: {stt['day_streak']}"
         if now.weekday() in DANGER_DAYS:
             body += "\n\n⚠️ Danger day. No one's watching you today — that's exactly why it counts. +20% on everything."
         send(f"🏁 Morning, {ctx['name']}", body, 3, ["checkered_flag"])
-
-    if not quiet and now.hour >= EVENING_HOUR and mem.get("evening") != today:
-        mem["evening"] = today
-        done_today = any((t.get("completed_at") or "")[:10] == today for t in save.get("tasks", []))
-        if tasks and not done_today:
-            send("🌙 Nothing finished today",
-                 f"{len(tasks)} open. One small one before bed keeps the streak alive and the rust off. "
-                 f"Tomorrow Tom is already smiling.", 4, ["crescent_moon"])
 
     last_done = save.get("last_done_date")
     if last_done and not quiet and mem.get("rust") != today:

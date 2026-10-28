@@ -193,6 +193,24 @@ def dashboard_content(save: dict, tz, app_url: str | None = None, now: datetime 
            seg(f"🧑‍✈️ Lv {lvl}", bold=True), seg("    "),
            seg(f"🔧 {car}%", bold=True, color="red" if car < 40 else "default"), seg(" car    "),
            seg(f"🌡️ {heat}", bold=True, color="red" if heat else "default"), seg(" rival heat\n")]
+    today_color = None
+    if save.get("tasks") is not None:
+        import daily
+        stt = daily.status(save, now)
+        if stt["rest"]:
+            out.append(seg("🛌 Pit stop day — rest\n", color="blue"))
+        elif not stt["qualified"] and not stt["missed"]:
+            out.append(seg(f"🚦 NOT QUALIFIED — lock in today's mission by {stt['deadline']:%I:%M %p}\n",
+                           bold=True, color="orange"))
+            today_color = "orange_background"
+        elif not stt["qualified"]:
+            out.append(seg("🚨 Missed qualifying — the safety car is out\n", bold=True, color="red"))
+            today_color = "red_background"
+        else:
+            m, d = stt["mission"], stt["mission_done"]
+            out.append(seg(f"🏁 Today's mission {len(d)}/{len(m)}", bold=True,
+                           color="green" if m and len(d) == len(m) else "default"))
+            out.append(seg(f"    📅 {stt['day_streak']}-day streak\n"))
     if flags:
         out.append(seg("⬛ BLACK FLAG — " + ", ".join(flags) + "\n", bold=True, color="red"))
     else:
@@ -215,7 +233,7 @@ def dashboard_content(save: dict, tz, app_url: str | None = None, now: datetime 
     if app_url:
         out.append(seg("\n"))
         out.append(seg("Open Deadline or Die →", bold=True, link=app_url))
-    color = "red_background" if flags else ("orange_background" if open_tasks and
+    color = "red_background" if flags else today_color if today_color else ("orange_background" if open_tasks and
                                             (datetime.fromisoformat(open_tasks[0]["deadline"]) - now)
                                             .total_seconds() < 12 * 3600 else "gray_background")
     return {"rich_text": out[:100], "color": color, "icon": {"type": "emoji", "emoji": "🏎️"}}
