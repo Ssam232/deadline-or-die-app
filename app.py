@@ -29,7 +29,11 @@ import pandas as pd
 import requests
 import streamlit as st
 
+import board as B
+import carart
 import contracts as K
+import events as EV
+import garage as G
 import daily
 import lounge as L
 import valuation as V
@@ -60,7 +64,8 @@ PARTS = {
     "tires": {"label": "Tires", "icon": "🛞", "base": 50, "weight": 5, "desc": "Corner grip"},
     "aero": {"label": "Aero", "icon": "🌀", "base": 45, "weight": 4, "desc": "High-speed stability"},
     "brakes": {"label": "Brakes", "icon": "🛑", "base": 40, "weight": 4, "desc": "Late braking"},
-    "turbo": {"label": "Turbo", "icon": "💨", "base": 80, "weight": 5, "desc": "Overtaking punch"},
+    "turbo": {"label": "Forced induction", "icon": "💨", "base": 80, "weight": 5, "desc": "Overtaking punch"},
+    "weight": {"label": "Weight reduction", "icon": "🪶", "base": 45, "weight": 4, "desc": "Power-to-weight"},
 }
 MAX_PART_LEVEL = 5
 
@@ -239,6 +244,22 @@ def _workspace(token: str, parent: str) -> dict:
     return ensure_workspace(Notion(token), parent)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _board_map(token: str, db: str) -> dict:
+    return B.detect(Notion(token), db)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _board_today(token: str, db: str, day_iso: str) -> list[dict]:
+    m = _board_map(token, db)
+    return B.pull_day(Notion(token), m, date.fromisoformat(day_iso))
+
+
+def board_cfg(state: dict) -> tuple[str, str] | None:
+    db, token = state["settings"].get("board_db"), get_secret("NOTION_TOKEN")
+    return (token, db) if db and token else None
+
+
 def notion_ctx() -> tuple[Notion, dict] | None:
     cfg = notion_cfg()
     return (Notion(cfg[0]), _workspace(*cfg)) if cfg else None
@@ -298,6 +319,12 @@ def save_state(state: dict) -> None:
     try:
         n, ids = notion_ctx()
         errs = _push_tasks(n, ids, state)
+        bc = board_cfg(state)
+        if bc:
+            try:
+                errs += B.sync_out(n, _board_map(*bc), state["tasks"], now())
+            except Exception as e:  # board problems never block saving
+                errs.append(f"board: {e}")
         save_json(n, ids["save_page"], state)
         st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
         if ids.get("dashboard"):
@@ -437,7 +464,9 @@ def bank(state: dict, delta: int, reason: str) -> None:
 
 def car_rating(state: dict) -> float:
     car = state["car"]
-    raw = CAR_BY_ID.get(car.get("model"), CARS[0])["base"] + sum(car["parts"][k] * PARTS[k]["weight"] for k in PARTS)
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    eff = G.effective(car["parts"], mid)
+    raw = CAR_BY_ID[mid]["base"] + sum(eff[k] * PARTS[k]["weight"] for k in PARTS)
     return raw * (0.55 + 0.45 * car["condition"] / 100)
 
 
@@ -659,8 +688,10 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
                      and (x.get("completed_at") or "")[:10] == at.date().isoformat())
     guard, guard_why = V.payout(base, t, parse_dt(t["created"]), at, paid_today, t.get("focus_min", 0))
     t["_guard"] = guard
-    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard))
-    parts = [f"base {base}"] + guard_why
+    dbl = 2 if EV.is_double(at) else 1
+    t["_guard"] = guard * dbl
+    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl))
+    parts = [f"base {base}"] + guard_why + (["×2 ⚡ event"] if dbl == 2 else [])
     if early:
         parts.append(f"+{int(early * 100)}% early")
     if danger:
@@ -837,46 +868,9 @@ BODIES = {
 
 
 def car_svg(car: dict) -> str:
-    c, p, cond = car["color"], car["parts"], car["condition"]
-    model = CAR_BY_ID.get(car.get("model"), CARS[0])
-    body, glass = BODIES[model["body"]]
-    num = html.escape(str(car["number"]))
-    extras = []
-    if model["body"] in ("hatch", "gt3"):  # factory wing
-        wy = 30 if model["body"] == "hatch" else 48
-        extras.append(f'<rect x="4" y="{wy}" width="44" height="6" rx="2" fill="#3a3d46" stroke="#888" stroke-width=".8"/>'
-                      f'<rect x="18" y="{wy + 6}" width="4" height="16" fill="#3a3d46"/>'
-                      f'<rect x="34" y="{wy + 6}" width="4" height="16" fill="#3a3d46"/>')
-    if model["body"] == "gt3":
-        extras.append('<path d="M290 84 L318 84 L318 88 L286 88 Z" fill="#111"/>'
-                      '<path d="M60 70 L300 74" stroke="#fff" stroke-width="3" opacity=".8"/>')
-    elif p["aero"] >= 2:
-        extras.append('<rect x="6" y="32" width="38" height="6" rx="2" fill="#1d1d1d"/>'
-                      '<rect x="22" y="38" width="4" height="18" fill="#1d1d1d"/>')
-    if p["engine"] >= 3:
-        extras.append('<path d="M60 58 L300 66 L300 72 L60 64 Z" fill="#ffffff" opacity=".85"/>')
-    if p["turbo"] >= 1:
-        size = 8 + p["turbo"] * 3
-        extras.append(f'<path d="M18 76 l-{size} -5 l{size} -4 z" fill="#ff9f1c"/>')
-    if cond < 60:
-        extras.append('<path d="M200 60 l18 8 M230 58 l10 14 M110 66 l14 6" stroke="#222" stroke-width="2"/>')
-    if cond < 30:
-        extras.append('<circle cx="280" cy="40" r="9" fill="#777" opacity=".5"/>'
-                      '<circle cx="292" cy="26" r="12" fill="#777" opacity=".35"/>')
-    wheel = ('<circle cx="{x}" cy="84" r="18" fill="#111"/><circle cx="{x}" cy="84" r="10" fill="#c9c9c9"/>'
-             '<circle cx="{x}" cy="84" r="3" fill="#333"/>')
-    return f"""
-<svg viewBox="0 0 320 112" width="100%" style="max-width:420px" xmlns="http://www.w3.org/2000/svg">
-  <ellipse cx="160" cy="102" rx="140" ry="7" fill="#000" opacity=".18"/>
-  <path d="{body}" fill="{c}" stroke="#111" stroke-width="2"/>
-  <path d="{glass}" fill="#1b2430" opacity=".9"/>
-  {''.join(extras)}
-  <circle cx="150" cy="70" r="12" fill="#fff" stroke="#111" stroke-width="1.5"/>
-  <text x="150" y="75" font-size="13" font-family="Arial, sans-serif" font-weight="700"
-        text-anchor="middle" fill="#111">{num}</text>
-  <rect x="295" y="62" width="10" height="5" rx="2" fill="#ffe66d"/>
-  {wheel.format(x=74)}{wheel.format(x=252)}
-</svg>"""
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    return carart.car_svg(CAR_BY_ID[mid]["body"], car["color"], car["number"], G.effective(car["parts"], mid),
+                          car["condition"])
 
 
 # ─────────────────────────── UI pieces ───────────────────────────
@@ -946,7 +940,8 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     if mode == "open":
         reward, why = compute_reward(state, t, at)
         bank(state, reward, f"🏁 Done: {t['title']}")
-        xp_gain = max(1, round(t["xp"] * min(1.0, t.pop("_guard", 1.0))))
+        g_ = t.pop("_guard", 1.0)
+        xp_gain = max(1, round(t["xp"] * (min(1.0, g_) if g_ < 1.5 else 2)))
         state["xp"] += xp_gain
         state["streak"] += 1
         state["best_streak"] = max(state["best_streak"], state["streak"])
@@ -961,6 +956,12 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
             msg += f"\n\n🎯 One lap closer to **{g}** ({sum(x['status'] == 'done' for x in mine)}/{len(mine)})."
         crate = open_crate(state, t)
         msg += f"\n\n{crate}"
+        claims = state.setdefault("event_claims", [])
+        for e in EV.active(at):
+            if e["type"] == "bounty" and t.get("category") == "deep" and e["id"] not in claims:
+                claims.append(e["id"])
+                bank(state, EV.BOUNTY, "🎯 Bounty")
+                msg += f"\n\n🎯 **BOUNTY CLAIMED: +{EV.BOUNTY}.** Tomorrow Tom pays up."
         if state["rival_heat"]:
             state["rival_heat"] -= 1
             msg += f"\n\n❄️ You took speed back from the rivals (heat {state['rival_heat']})."
@@ -1202,6 +1203,18 @@ def render_qualify_form(state: dict) -> None:
             labels = {t["id"]: f"{t['title']} — {parse_dt(t['deadline']):%a %I:%M %p}" for t in open_t}
             picked = st.multiselect("Already on the board", list(labels), format_func=labels.get,
                                     default=[t["id"] for t in open_t if parse_dt(t["deadline"]).date() <= today])
+        bc = board_cfg(state)
+        board_pick, board_items = [], []
+        if bc:
+            try:
+                known = {t.get("board_page") for t in state["tasks"]}
+                board_items = [b for b in _board_today(*bc, today.isoformat()) if b["id"] not in known]
+            except Exception as e:
+                st.caption(f"(Couldn't read your board: {e})")
+            if board_items:
+                blabels = {b["id"]: b["title"] + (f" · {b['when']}" if b["when"] else "") for b in board_items}
+                board_pick = st.multiselect("📅 From your DECK 12 board today", list(blabels), format_func=blabels.get,
+                                            help="Pick the ones that actually need doing — they'll tick off on your board too.")
         st.caption("Add what you'll finish **today** — small and specific beats big and vague. "
                    "Value = category × honest minutes (guide in ✅ Tasks).")
         new = [st.text_input(f"Mission {i + 1}", key=f"q_new_{i}", label_visibility="collapsed",
@@ -1220,10 +1233,24 @@ def render_qualify_form(state: dict) -> None:
             dl = datetime.combine(today, due_t, TZ)
             if titles and dl <= now() + timedelta(minutes=5):
                 st.error("'Done by' has to be later today.")
-            elif not titles and not picked:
+            elif not titles and not picked and not board_pick:
                 st.error("Pick at least one thing. One small thing counts.")
             else:
                 ids = list(picked)
+                for bid in board_pick:
+                    b = next(x for x in board_items if x["id"] == bid)
+                    try:
+                        bt = datetime.strptime(b["when"].upper().replace(".", ""), "%I:%M %p").time()
+                        bdue = min(datetime.combine(today, bt, TZ) + timedelta(hours=2),
+                                   datetime.combine(today, dtime(23, 59), TZ))
+                    except ValueError:
+                        bdue = datetime.combine(today, dtime(21, 0), TZ)
+                    if bdue <= now() + timedelta(minutes=5):
+                        bdue = datetime.combine(today, dtime(23, 59), TZ)
+                    t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
+                    t.update(board_page=b["id"], board_state="open")
+                    state["tasks"].append(t)
+                    ids.append(t["id"])
                 for title in titles:
                     t = make_task(title, "", dl, None, "", category=None if cat == "auto" else cat, minutes=mins)
                     state["tasks"].append(t)
@@ -1501,6 +1528,26 @@ for kind, m in st.session_state.pop("flash", []):
     getattr(st, kind)(m)
 if st.session_state.pop("celebrate", False):
     st.balloons()
+for e in EV.active(now()):
+    left = fmt_left(e["end"] - now())
+    claims = state.setdefault("event_claims", [])
+    with st.container(border=True):
+        st.markdown(f"#### 🎉 LIVE · {e['title']} · {left} left")
+        st.caption(e["banner"].replace("**", ""))
+        if e["type"] in ("supply", "pitcrew") and e["id"] not in claims:
+            if st.button("🎁 Claim" if e["type"] == "supply" else "🔧 Repair me", key=f"ev_{e['id']}", type="primary"):
+                claims.append(e["id"])
+                if e["type"] == "supply":
+                    out = open_crate(state, {"reward": 45})
+                else:
+                    state["car"]["condition"] = min(100, state["car"]["condition"] + 30)
+                    out = "🔧 Pit crew fixed you up: +30% condition."
+                save_state(state)
+                flash(out, celebrate=True, sound="jackpot")
+                st.rerun()
+        elif e["id"] in claims:
+            st.caption("✅ Claimed")
+
 snd = st.session_state.pop("sound", None)
 if snd and state["settings"].get("sounds", True):
     st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
@@ -1789,6 +1836,7 @@ with tab_garage:
     st.markdown(f"### #{car['number']} {car['name']}")
     model = CAR_BY_ID.get(car.get("model"), CARS[0])
     st.caption(f"**{model['name']}** · performance rating **{car_rating(state):.0f}** — {model['blurb']}")
+    st.caption(f"📚 {G.CHASSIS[model['id']][1]}")
 
     st.progress(car["condition"] / 100, text=f"Condition {car['condition']}%")
     missing = 100 - car["condition"]
@@ -1811,7 +1859,8 @@ with tab_garage:
             c1, c2 = st.columns([3, 2])
             tag = "🟢 driving" if m["id"] == car.get("model") else "✅ owned" if m["id"] in owned else \
                   ("🔒 level " + str(m["level"]) if lvl_now < m["level"] else f"{m['cost']:,} 🪙")
-            c1.markdown(f"**{m['name']}** · base {m['base']}  \n<small>{m['blurb']}</small>", unsafe_allow_html=True)
+            c1.markdown(f"**{m['name']}** · base {m['base']} · tunes to L{G.cap(m['id'])}  \n"
+                        f"<small>{m['blurb']}</small>", unsafe_allow_html=True)
             if m["id"] == car.get("model"):
                 c2.caption(tag)
             elif m["id"] in owned:
@@ -1831,20 +1880,37 @@ with tab_garage:
                 st.rerun()
 
     st.subheader("Upgrades")
+    cap_now = G.cap(model["id"])
+    st.caption(f"This chassis can be tuned to **L{cap_now}**. Parts you buy stay yours — move up the Honda ladder "
+               "to unlock the rest. Each upgrade comes with a 💡 lesson.")
     for key, p in PARTS.items():
-        lv = car["parts"][key]
-        c1, c2 = st.columns([3, 2])
-        c1.progress(lv / MAX_PART_LEVEL, text=f"{p['icon']} {p['label']} · L{lv}/{MAX_PART_LEVEL} — {p['desc']}")
-        if lv >= MAX_PART_LEVEL:
-            c2.caption("Maxed ✅")
-        else:
-            cost = part_cost(key, lv)
-            if c2.button(f"Upgrade ({cost} 🪙)", key=f"up_{key}", disabled=state["coins"] < cost):
-                car["parts"][key] += 1
-                bank(state, -cost, f"⚙️ {p['label']} → L{lv + 1}")
-                save_state(state)
-                flash(f"{p['icon']} {p['label']} upgraded to L{lv + 1}.")
-                st.rerun()
+        lv = car["parts"].setdefault(key, 0)
+        with st.container(border=True):
+            c1, c2 = st.columns([3, 2])
+            c1.markdown(f"**{p['icon']} {p['label']}** · L{lv}/{MAX_PART_LEVEL}  \n"
+                        f"<small>Installed: {G.installed(key, lv)}"
+                        f"{f' (running at L{cap_now} on this chassis)' if lv > cap_now else ''}</small>",
+                        unsafe_allow_html=True)
+            nxt = G.next_upgrade(key, lv)
+            if not nxt:
+                c2.caption("Maxed ✅")
+            elif lv >= cap_now:
+                c2.caption(f"🔒 Chassis limit L{cap_now}")
+            else:
+                cost = part_cost(key, lv)
+                if c2.button(f"Install · {cost} 🪙", key=f"up_{key}", disabled=state["coins"] < cost):
+                    car["parts"][key] += 1
+                    bank(state, -cost, f"⚙️ {nxt[0]}")
+                    save_state(state)
+                    flash(f"{p['icon']} **{nxt[0]}** installed.\n\n💡 {nxt[1]}", sound="win")
+                    st.rerun()
+            if nxt:
+                st.caption(f"Next: **{nxt[0]}** — 💡 {nxt[1]}")
+            if lv:
+                with st.expander("📚 What's installed"):
+                    for i in range(lv):
+                        n_, why = G.UPGRADES[key][i]
+                        st.markdown(f"**L{i + 1} {n_}** — {why}")
 
     with st.expander("🎨 Livery"):
         with st.form("livery"):
@@ -1951,6 +2017,52 @@ with tab_set:
             st.success("Sent — check your phone.") if ok else st.error("ntfy didn't accept it. Check the topic name.")
     else:
         st.caption("📳 Phone buzzes off — set NTFY_TOPIC (see README).")
+
+    st.subheader("🗓️ Your DECK 12 board")
+    st.caption("Link your existing board (e.g. Assignments): today's cards become one-tap mission suggestions, and "
+               "Deadline or Die tasks due this week show up on it as 🏁 cards that tick off when you finish.")
+    if not notion_cfg():
+        st.caption("Needs the Notion connection first.")
+    else:
+        cur = s.get("board_db")
+        if cur:
+            try:
+                st.success("Linked: " + B.describe(_board_map(get_secret("NOTION_TOKEN"), cur)))
+            except Exception as e:
+                st.error(f"Can't read the linked board: {e}. Is it inside DECK 12 (shared with the integration)?")
+        if st.button("🔎 Find my boards"):
+            try:
+                n_, ids_ = notion_ctx()
+                st.session_state["board_list"] = B.list_databases(n_, {ids_["tasks_db"].replace("-", "")})
+            except Exception as e:
+                st.error(str(e))
+        dbs = st.session_state.get("board_list")
+        if dbs is not None:
+            if not dbs:
+                st.info("No other databases are visible. If your board is a linked view, share its source database "
+                        "with the Deadline or Die connection.")
+            else:
+                pick = st.selectbox("Which one is your board?", [d["id"] for d in dbs],
+                                    format_func=lambda i: next(d["title"] for d in dbs if d["id"] == i))
+                c1, c2 = st.columns(2)
+                if c1.button("Test it"):
+                    try:
+                        m = B.detect(Notion(get_secret("NOTION_TOKEN")), pick)
+                        st.info(B.describe(m))
+                        items = B.pull_day(Notion(get_secret("NOTION_TOKEN")), m, now().date())
+                        st.caption("Today on it: " + (", ".join(i["title"] for i in items) or "nothing"))
+                    except Exception as e:
+                        st.error(str(e))
+                if c2.button("Link it", type="primary"):
+                    s["board_db"] = pick
+                    save_state(state)
+                    st.session_state.pop("board_list", None)
+                    flash("🗓️ Board linked. Today's cards now show up when you set your mission.")
+                    st.rerun()
+        if cur and st.button("Unlink board"):
+            s["board_db"] = ""
+            save_state(state)
+            st.rerun()
 
     st.subheader("Keys")
     st.caption("Best: put them in `.streamlit/secrets.toml` (or the Streamlit Cloud secrets box). "

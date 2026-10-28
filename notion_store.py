@@ -219,6 +219,12 @@ def dashboard_content(save: dict, tz, app_url: str | None = None, now: datetime 
             out.append(seg(f"🏁 Today's mission {len(d)}/{len(m)}", bold=True,
                            color="green" if m and len(d) == len(m) else "default"))
             out.append(seg(f"    📅 {stt['day_streak']}-day streak\n"))
+    try:
+        import events as EV
+        for e in EV.active(now):
+            out.append(seg(f"🎉 LIVE: {e['title']} — until {e['end']:%I:%M %p}\n", bold=True, color="purple"))
+    except Exception:
+        pass
     if flags:
         out.append(seg("⬛ BLACK FLAG — " + ", ".join(flags) + "\n", bold=True, color="red"))
     else:

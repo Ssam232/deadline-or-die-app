@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import daily
+import events as EV
 from notify import push
 from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, pull_rows, save_json, update_dashboard
 
@@ -214,6 +215,13 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
 
     for msg in daily_nags(save, mem, now, quiet):
         send(*msg)
+
+    sent_ev = mem.setdefault("events", [])
+    for e in EV.active(now):  # random live events — the reason to open the app right now
+        if e["id"] not in sent_ev and not quiet:
+            sent_ev.append(e["id"])
+            send(f"🎉 {e['title']}", f"{e['push']}\nEnds {e['end']:%I:%M %p}.", 4, ["tada"])
+    del sent_ev[:-30]
 
     open_keys = {t["key"] for t in tasks}
     mem["tasks"] = {k: v for k, v in mem["tasks"].items() if k in open_keys}

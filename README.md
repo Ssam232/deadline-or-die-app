@@ -86,8 +86,14 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 - Contracts: 3 rotating weekly challenges, big payouts.
 - Lounge: blackjack + snake eyes. Opens only after a finish today, max bet 50, 15 hands/day, closes at +200 or −300. House edge ~6% (blackjack) / ~17% (dice).
 
+## 🎉 Live events
+0–2 random events a day (10 AM–8 PM), pushed to your phone: ⚡ double coins & XP (3h) · 🎁 supply drop (free crate, 2h) · 🎯 bounty (+75 for a deep-work finish, 4h) · 🔧 pit crew (free +30% repair).
+
+## 🗓️ Your DECK 12 board
+Settings → 🔎 Find my boards → Link it. Today's cards become one-tap mission suggestions; Deadline or Die tasks due within 7 days appear on your board as 🏁 cards and turn ✅ when finished. Columns are auto-detected (title, date or weekday select, time text, done checkbox/status).
+
 ## 🏢 The Honda ladder
-Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Parts upgrades carry over between cars.
+Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Six upgrade paths (engine, wheels & tires, aero, brakes, forced induction, weight), each with real part names and a 💡 lesson — and each visible on the car. Every chassis has a tuning limit (Civic Si L3 … NSX L5); parts you buy carry over.
 
 ## The rules
 | Mechanic | What it does |
