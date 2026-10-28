@@ -169,8 +169,8 @@ def _make_dashboard(n: Notion, parent: str) -> str:
 def _dress_db(n: Notion, db_id: str) -> None:
     try:  # icon + any columns added in later versions (idempotent)
         n.req("PATCH", f"/databases/{db_id}", json={"icon": {"type": "emoji", "emoji": "🏁"}, "properties": EXTRA_PROPS})
-    except NotionError:
-        pass
+    except NotionError as e:
+        print(f"couldn't add columns to the tasks table: {e}")
 
 
 def _fmt_left(td) -> str:

@@ -319,7 +319,16 @@ def load_state() -> dict:
     return state
 
 
-def _push_tasks(n: Notion, ids: dict, state: dict) -> list[str]:
+def _push_tasks(n: Notion, ids: dict, state: dict, _retry: bool = True) -> list[str]:
+    errors = _push_tasks_once(n, ids, state)
+    if _retry and any("is not a property that exists" in e for e in errors):
+        from notion_store import _dress_db  # a long-running server can predate newer columns: add them, retry once
+        _dress_db(n, ids["tasks_db"])
+        errors = _push_tasks_once(n, ids, state)
+    return errors
+
+
+def _push_tasks_once(n: Notion, ids: dict, state: dict) -> list[str]:
     errors = []
     for t in state["tasks"]:
         goal = goal_title(state, t.get("goal_id"))
