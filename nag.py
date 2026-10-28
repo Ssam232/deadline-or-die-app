@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import daily
+import dailies as DL
 import events as EV
 import insights as I
 import locks as LK
@@ -163,6 +164,13 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
             out.append(("🚦 LIGHTS OUT",
                         f"You said you'd start at {start:%I:%M %p}. It's {now:%I:%M %p}. "
                         "Open the first mission task and work 10 minutes. Go.", 5, ["checkered_flag"]))
+    stake, lines = DL.at_stake(save, now.date())
+    hour_f = now.hour + now.minute / 60
+    for key, at_h, prio, title in (("h2230", 22.5, 5, "🔁 LAST CALL on dailies"), ("h20", 20, 4, "🔁 Dailies still open")):
+        if stake and hour_f >= at_h and not dm.get(key):
+            dm["h20"] = dm[key] = True
+            out.append((title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio, ["repeat"]))
+            break
     if not stt["done_today"] and not quiet:
         hour = now.hour + now.minute / 60
         ladder = [("z18", 18, 4, "⚠️ Zero finishes today",

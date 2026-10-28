@@ -36,6 +36,7 @@ import events as EV
 import garage as G
 import insights as I
 import daily
+import dailies as DL
 import locks as LK
 import pomo as PM
 import prep as P
@@ -1090,6 +1091,12 @@ def points_guide() -> None:
 
 
 def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
+    fk = st.session_state.setdefault(f"_{key}_n", 0)
+    c1, c2 = st.columns(2)
+    d = c1.date_input("Due date", value=now().date() + timedelta(days=1), min_value=now().date(), key=f"{key}_d{fk}")
+    with c2:
+        tm = time_wheel("Due time", dtime(23, 55), key=f"{key}_t{fk}")
+    start_dt = start_picker(f"{key}_s{fk}", default=None, label="I'll start in (optional)")
     with st.form(key, clear_on_submit=True):
         title = st.text_input("Task", placeholder="e.g. Draft the methods section")
         details = st.text_area("Details / what counts as done", height=70)
@@ -1099,9 +1106,6 @@ def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
             gid = None if pick == "(no goal)" else state["goals"][opts.index(pick) - 1]["id"]
         else:
             gid = goal_id
-        c1, c2 = st.columns(2)
-        d = c1.date_input("Due date", value=now().date() + timedelta(days=1), min_value=now().date())
-        tm = c2.time_input("Due time", value=dtime(23, 59))
         c3, c4 = st.columns(2)
         cat = c3.selectbox("Category", CAT_OPTS, format_func=cat_label, key=f"{key}_cat")
         mins = c4.select_slider("Honest time it'll take", V.MINUTES, value=60, format_func=min_label, key=f"{key}_min")
@@ -1116,7 +1120,10 @@ def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
                 st.error("Deadline has to be in the future.")
             else:
                 t = make_task(title, details, dl, None, cons, gid, category=None if cat == "auto" else cat, minutes=mins)
+                if start_dt:
+                    t.update(scheduled=start_dt.isoformat(), scheduled_time=True)
                 state["tasks"].append(t)
+                st.session_state[f"_{key}_n"] = fk + 1
                 save_state(state)
                 flash(f"Added **{t['title']}** · {V.CATEGORIES[t['category']]['label']} · {min_label(t['minutes'])} "
                       f"→ worth **+{t['reward']}** / −{t['penalty']} · due {dl:%a %b %d, %I:%M %p}.")
@@ -1389,9 +1396,129 @@ def render_event_planner(state: dict) -> None:
         st.rerun()
 
 
+
+# ─────────────────────────── time entry: chips + scroll wheel ───────────────────────────
+_WHEEL_DIR = Path(__file__).parent / "components" / "timewheel"
+START_CHIPS = {"Now": 0, "30m": 30, "1h": 60, "2h": 120, "3h": 180, "🎡": None}
+
+
+def time_wheel(label: str, value: dtime, key: str, step: int = 5) -> dtime:
+    """iPhone-style scroll wheel (hour · minute · AM/PM). Falls back to a plain time box if components can't load."""
+    try:
+        import streamlit.components.v1 as components
+        wheel = components.declare_component("timewheel", path=str(_WHEEL_DIR))
+        v = wheel(label=label, value=value.strftime("%H:%M"), step=step, key=key, default=value.strftime("%H:%M"))
+        h, m = (int(x) for x in str(v).split(":"))
+        return dtime(h, m)
+    except Exception:  # noqa: BLE001
+        return st.time_input(label, value=value, key=f"{key}_fb")
+
+
+def _round_up(d: datetime, step: int = 5) -> datetime:
+    d = d.replace(second=0, microsecond=0)
+    return d + timedelta(minutes=(-d.minute) % step)
+
+
+def start_picker(key: str, default: str | None = "30m", label: str = "I'll start in") -> datetime | None:
+    """'I'll start in: Now · 30m · 1h · 2h · 3h · 🎡 (pick on the wheel)'. Returns the start datetime (None = not set)."""
+    opts = list(START_CHIPS)
+    pick = st.pills(label, opts, default=default, key=f"{key}_chip", selection_mode="single",
+                    help="🎡 = pick an exact time on the wheel")
+    if pick is None:
+        return None
+    if START_CHIPS[pick] is None:
+        t = time_wheel("", _round_up(now() + timedelta(minutes=30), 15).time(), key=f"{key}_wheel")
+        start = datetime.combine(now().date(), t, TZ)
+        if start < now() - timedelta(minutes=5):
+            start += timedelta(days=1)
+    else:
+        start = _round_up(now() + timedelta(minutes=START_CHIPS[pick]))
+    day = "" if start.date() == now().date() else f" {start:%a}"
+    st.caption(f"▶️ starts **{start:%I:%M %p}{day}**".replace("**0", "**"))
+    return start
+
+
+def render_dailies(state: dict) -> None:
+    today = now().date()
+    rows = DL.today_status(state, today)
+    with st.container(border=True):
+        if rows:
+            done = sum(r["done"] for r in rows)
+            stake, _ = DL.at_stake(state, today)
+            st.markdown(f"#### 🔁 Dailies · {done}/{len(rows)}"
+                        + (f" <small style='color:#e63946'>· −{stake} 🪙 at midnight if unfinished</small>"
+                           if stake else " <small>· all done ✅</small>"), unsafe_allow_html=True)
+            for r in rows:
+                h = r["h"]
+                c1, c2, c3 = st.columns([5, 1, 2], vertical_alignment="center")
+                dots = "●" * min(r["count"], h["target"]) + "○" * max(0, h["target"] - r["count"])
+                c1.markdown(f"**{h['name']}** &nbsp;<span style='letter-spacing:2px;color:{'#199e70' if r['done'] else '#9aa0ad'}'>"
+                            f"{dots}</span> <small>{r['count']}/{h['target']}"
+                            + (f" · 🔥{h['streak']}" if h.get("streak") else "") + "</small>", unsafe_allow_html=True)
+                if c2.button("↩", key=f"dl_undo_{h['id']}", help="Undo one", disabled=r["count"] == 0):
+                    DL.tap(state, h["id"], today, -1)
+                    save_state(state)
+                    st.rerun()
+                if r["done"] and not r["claimed"]:
+                    if c3.button(f"🏆 Claim +{h['reward']}", key=f"dl_claim_{h['id']}", type="primary",
+                                 use_container_width=True):
+                        DL.claim(state, h["id"], today, bank)
+                        save_state(state)
+                        flash(f"🔁 **{h['name']}** done for today — +{h['reward']} 🪙 · streak {h['streak']} 🔥",
+                              sound="win")
+                        st.rerun()
+                elif r["claimed"]:
+                    c3.markdown("✅ claimed")
+                elif c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True):
+                    n_ = DL.tap(state, h["id"], today)
+                    save_state(state)
+                    if n_ >= h["target"]:
+                        flash(f"🔁 **{h['name']}** {n_}/{h['target']} — claim it!", sound="win")
+                    st.rerun()
+        else:
+            st.markdown("#### 🔁 Dailies")
+            st.caption("Small things that must happen every day — water, prayers, brushing. Low reward, big penalty.")
+        with st.expander("➕ Add / manage dailies"):
+            names = [p[0] for p in DL.PRESETS] + ["✏️ Custom…"]
+            c1, c2 = st.columns([3, 1])
+            pick = c1.selectbox("Daily", names, key="dl_pick")
+            name = st.text_input("Name", key="dl_name", placeholder="e.g. 🌙 Journal") if pick == names[-1] else pick
+            target = c2.number_input("Times / day", 1, 20, dict(DL.PRESETS).get(pick, 1), key=f"dl_target_{pick}")
+            c3, c4 = st.columns(2)
+            reward = c3.slider("Reward when done (🪙)", 1, 10, DL.DEFAULT_REWARD, key="dl_reward")
+            penalty = c4.slider("Penalty if missed (🪙)", 10, 100, DL.DEFAULT_PENALTY, 5, key="dl_penalty")
+            days = st.multiselect("Days", list(range(7)), default=list(range(7)), format_func=lambda i: DL.WEEKDAYS[i],
+                                  key="dl_days")
+            if st.button("➕ Add daily", type="primary", disabled=not (name or "").strip()):
+                h = DL.add(state, name, target, reward, penalty, days, today)
+                save_state(state)
+                flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{h['reward']} when done, −{h['penalty']} if missed. "
+                      "Starts counting today.")
+                st.rerun()
+            live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
+            if live:
+                st.caption("Removing a daily takes effect tomorrow — today still counts.")
+                for h in live:
+                    a, b = st.columns([5, 2], vertical_alignment="center")
+                    a.markdown(f"{h['name']} ×{h['target']} · +{h['reward']} / −{h['penalty']} · "
+                               f"{'every day' if len(h['days']) == 7 else ', '.join(DL.WEEKDAYS[i] for i in h['days'])}"
+                               + (" · *ends tonight*" if h.get("end") == today.isoformat() else ""))
+                    if not h.get("end") and b.button("Remove", key=f"dl_rm_{h['id']}", use_container_width=True):
+                        DL.remove(state, h["id"], today)
+                        save_state(state)
+                        st.rerun()
+
+
 def render_qualify_form(state: dict) -> None:
     today = now().date()
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
+    fk = st.session_state.setdefault("_qf_n", 0)  # form instance (bumped after a lock-in to reset the pickers)
+    c1, c2 = st.columns(2)
+    with c1:
+        start_dt = start_picker(f"q_start{fk}", default="30m")
+    with c2:
+        due_t = time_wheel("Done by", dtime(21, 0), key=f"q_due{fk}")
+    start_t = (start_dt or now()).time()
     with st.form("qualify_form", clear_on_submit=True):
         picked = []
         if open_t:
@@ -1433,10 +1560,6 @@ def render_qualify_form(state: dict) -> None:
                              placeholder=["e.g. Write 300 words of the methods section",
                                           "e.g. Email supervisor about the OVx timeline",
                                           "optional third one"][i]) for i in range(3)]
-        c1, c2 = st.columns(2)
-        due_t = c1.time_input("Done by", value=dtime(21, 0))
-        start_t = c2.time_input("I'll START at", value=_next_half_hour(),
-                                help="Your phone will hold you to this.")
         c3, c4 = st.columns(2)
         cat = c3.selectbox("Category of new ones", CAT_OPTS, format_func=cat_label, key="q_cat")
         mins = c4.select_slider("Honest time each", V.MINUTES, value=30, format_func=min_label, key="q_min")
@@ -1493,6 +1616,7 @@ def render_qualify_form(state: dict) -> None:
                     state["tasks"].append(t)
                     ids.append(t["id"])
                 msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
+                st.session_state["_qf_n"] = fk + 1
                 cursor = max(datetime.combine(today, start_t, TZ), now().replace(second=0, microsecond=0))
                 for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
                     t = next(x for x in state["tasks"] if x["id"] == tid)
@@ -1582,9 +1706,12 @@ def render_quick_add(state: dict, key: str = "qa") -> None:
             text = c1.text_input("⚡ Quick add", label_visibility="collapsed",
                                  placeholder="⚡ Quick add — e.g. email walter re surgery dates 15m by 3pm")
             go = c2.form_submit_button("Add", type="primary", use_container_width=True)
+        qn = st.session_state.setdefault(f"_{key}_n", 0)
+        start_dt = start_picker(f"{key}_s{qn}", default=None, label="I'll start in (optional)")
         if go and text.strip():
             p = Q.parse(text, now())
-            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"], at=p["at"])
+            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"], at=p["at"] or start_dt)
+            st.session_state[f"_{key}_n"] = qn + 1
             flash(f"⚡ Added **{t['title']}** · {V.CATEGORIES[t['category']]['label']} · {min_label(t['minutes'])} → "
                   f"**+{t['reward']}** · due {p['due']:%a %I:%M %p}" + (" · added to today's mission" if t.get("mission_day") else ""))
             st.rerun()
@@ -1593,7 +1720,9 @@ def render_quick_add(state: dict, key: str = "qa") -> None:
         cols = st.columns(3)
         for i, (label, mins, cat) in enumerate(Q.TEMPLATES):
             if cols[i % 3].button(f"{label} · {min_label(mins)}", key=f"{key}_tpl{i}", use_container_width=True):
-                t = _add_quick(state, label.split(" ", 1)[1], mins, datetime.combine(now().date(), dtime(23, 59), TZ), cat)
+                t = _add_quick(state, label.split(" ", 1)[1], mins, datetime.combine(now().date(), dtime(23, 59), TZ), cat,
+                               at=start_dt)
+                st.session_state[f"_{key}_n"] = qn + 1
                 flash(f"⚡ Added **{t['title']}** → +{t['reward']}" + (" · in today's mission" if t.get("mission_day") else ""))
                 st.rerun()
 
@@ -1894,6 +2023,7 @@ if st.session_state.pop("_fresh_load", False) and notion_cfg():
 
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
+crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
 rust_msg = process_rust(state)
 if crash_msgs or rust_msg or st.session_state.pop("_needs_save", False):
     save_state(state)
@@ -1959,6 +2089,7 @@ if snd and state["settings"].get("sounds", True):
     st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
 
 render_today(state)
+render_dailies(state)
 
 render_quick_add(state, "qa_top")
 render_timer(state)
@@ -2275,6 +2406,9 @@ with tab_stats:
                 delta=f"{full['failed']} missed" if full["failed"] else None, delta_color="inverse")
     k[2].metric("Focus hours", f"{full['focus_min'] / 60:.1f}", help="Timer-logged work minutes (breaks excluded).")
     k[3].metric("Active days", f"{full['active_days']}/28")
+    hr_ = DL.hit_rate(state, now().date())
+    if hr_ is not None:
+        st.caption(f"🔁 Dailies hit rate (28 days): **{hr_:.0%}**")
 
     if not full["done"] and not full["focus_min"]:
         st.info("Nothing logged yet. Finish a task or run a focus session and this page starts filling in.")

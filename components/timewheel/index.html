@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --row: 34px; --bg: #1a1c24; --line: #2f3340; --ink: #f0efec; --muted: #6f7380; --accent: #e63946; }
+  html, body { margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", system-ui, sans-serif; }
+  .lab { color: var(--ink); font-size: 14px; margin: 0 0 6px 2px; }
+  .wrap { position: relative; display: flex; gap: 2px; background: var(--bg); border-radius: 10px; padding: 0 6px;
+          height: calc(var(--row) * 3); overflow: hidden; user-select: none; -webkit-user-select: none; }
+  .band { position: absolute; left: 6px; right: 6px; top: var(--row); height: var(--row); border-radius: 8px;
+          background: rgba(230, 57, 70, .14); border: 1px solid rgba(230, 57, 70, .45); pointer-events: none; }
+  .fade { position: absolute; left: 0; right: 0; height: var(--row); pointer-events: none; z-index: 2; }
+  .fade.t { top: 0; background: linear-gradient(var(--bg), rgba(26, 28, 36, .2)); }
+  .fade.b { bottom: 0; background: linear-gradient(rgba(26, 28, 36, .2), var(--bg)); }
+  .col { flex: 1; overflow-y: scroll; scroll-snap-type: y mandatory; scrollbar-width: none; -ms-overflow-style: none;
+         overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .col::-webkit-scrollbar { display: none; }
+  .col .pad { height: var(--row); }
+  .item { height: var(--row); line-height: var(--row); text-align: center; scroll-snap-align: center; color: var(--muted);
+          font-size: 19px; font-variant-numeric: tabular-nums; cursor: pointer; transition: color .12s, transform .12s; }
+  .item.on { color: var(--ink); font-weight: 700; transform: scale(1.08); }
+  .sep { width: 10px; text-align: center; line-height: calc(var(--row) * 3); color: var(--ink); font-weight: 700; z-index: 1; }
+</style>
+</head>
+<body>
+<div class="lab" id="lab"></div>
+<div class="wrap" id="wrap">
+  <div class="band"></div><div class="fade t"></div><div class="fade b"></div>
+  <div class="col" id="h"></div><div class="sep">:</div><div class="col" id="m"></div><div class="col" id="ap"></div>
+</div>
+<script>
+const ROW = 34;
+const send = (type, extra) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, extra), "*");
+let step = 5, cols = {}, lastSent = null, booted = false;
+
+function build(id, values) {
+  const el = document.getElementById(id);
+  el.innerHTML = '<div class="pad"></div>' + values.map((v, i) => `<div class="item" data-i="${i}">${v}</div>`).join("")
+    + '<div class="pad"></div>';
+  el.querySelectorAll(".item").forEach(it => it.addEventListener("click", () => {
+    el.scrollTo({top: +it.dataset.i * ROW, behavior: "smooth"});
+  }));
+  let t = null;
+  el.addEventListener("scroll", () => {
+    mark(el);
+    clearTimeout(t);
+    t = setTimeout(emit, 140);
+  }, {passive: true});
+  cols[id] = {el, values};
+}
+function idx(el) { return Math.max(0, Math.round(el.scrollTop / ROW)); }
+function mark(el) {
+  const i = idx(el);
+  el.querySelectorAll(".item").forEach(it => it.classList.toggle("on", +it.dataset.i === i));
+}
+function current() {
+  let h = +cols.h.values[Math.min(idx(cols.h.el), 11)];
+  const m = +cols.m.values[Math.min(idx(cols.m.el), cols.m.values.length - 1)];
+  const pm = idx(cols.ap.el) >= 1;
+  if (h === 12) h = 0;
+  if (pm) h += 12;
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+}
+function emit() {
+  const v = current();
+  if (v !== lastSent) { lastSent = v; send("streamlit:setComponentValue", {value: v, dataType: "json"}); }
+}
+function setTo(v) {
+  let [h, m] = v.split(":").map(Number);
+  m = Math.round(m / step) * step % 60;
+  const pm = h >= 12, h12 = (h % 12) || 12;
+  cols.h.el.scrollTop = (h12 - 1) * ROW;
+  cols.m.el.scrollTop = (m / step) * ROW;
+  cols.ap.el.scrollTop = (pm ? 1 : 0) * ROW;
+  ["h", "m", "ap"].forEach(k => mark(cols[k].el));
+  lastSent = current();
+}
+window.addEventListener("message", ev => {
+  const d = ev.data || {};
+  if (d.type !== "streamlit:render") return;
+  const a = d.args || {};
+  if (!booted) {
+    step = a.step || 5;
+    document.getElementById("lab").textContent = a.label || "";
+    if (!a.label) document.getElementById("lab").style.display = "none";
+    build("h", Array.from({length: 12}, (_, i) => String(i + 1)));
+    build("m", Array.from({length: 60 / step}, (_, i) => String(i * step).padStart(2, "0")));
+    build("ap", ["AM", "PM"]);
+    booted = true;
+    requestAnimationFrame(() => { setTo(a.value || "09:00"); send("streamlit:setFrameHeight", {height: document.body.scrollHeight + 4}); });
+  } else if (a.force && a.value && a.value !== lastSent) {
+    setTo(a.value);  // a chip (e.g. "in 1h") moved the time: follow it
+  }
+});
+send("streamlit:componentReady", {apiVersion: 1});
+</script>
+</body>
+</html>

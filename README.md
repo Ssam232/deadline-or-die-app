@@ -82,6 +82,12 @@ Quiet hours are 11 PM–7 AM (`QUIET_HOURS` in the workflow). Only final warning
 - **Templates:** one tap for inbox, 300 words, a paper, data analysis, gym, an errand.
 - **🎲 Just tell me what to do:** picks your best next task (mission → soonest due → quick wins) and starts the focus timer on it.
 
+## 🎡 Picking times
+Every time field is a scroll wheel (hour · minute · AM/PM, like an iPhone alarm). Start times are one tap: **I'll start in Now · 30m · 1h · 2h · 3h**, or 🎡 to pick an exact time. The start time is what lands your task on the output board (Fortuna).
+
+## 🔁 Dailies (low gain, high penalty)
+Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5, 🦷 brushing ×2, or your own. Tap **+1** each time (↩ undoes). Hit the count → **🏆 Claim** a small reward (+3 by default) and grow its 🔥 streak. Miss it → a **big penalty at midnight** (−30 by default, you set both). Rules: removing a daily only takes effect tomorrow (today still counts), pit-stop days skip them, and after a long absence at most 3 days are charged. Your phone nags at 8 PM and 10:30 PM if any are still open.
+
 ## 💰 What tasks are worth
 Value = **honest minutes × category**: 🧠 Deep work ×1.5 · 📨 Academic admin ×1.0 · 💪 Health ×0.8 · 🧺 Life admin ×0.5 · 🪑 Showing up ×0.3.
 Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 claimed hours/day pays 25% · 90+ min tasks need a real file · ⏱️ timer-verified work pays +15%.
