@@ -24,6 +24,13 @@ NAG_PAGE_TITLE = "📣 Deadline or Die — Nagger"
 STATUS = {"open": "Open", "done": "Done", "failed": "Failed", "redeemed": "Redeemed"}
 STATUS_COLORS = {"Open": "blue", "Done": "green", "Failed": "red", "Redeemed": "yellow"}
 SIZES = {"Quick": "gray", "Medium": "blue", "Big": "orange", "Boss": "red"}
+CATEGORY_NAMES = {"deep": "🧠 Deep work", "admin": "📨 Academic admin", "health": "💪 Health & training",
+                  "life": "🧺 Life admin", "show": "🪑 Showing up"}
+CATEGORY_COLORS = {"deep": "purple", "admin": "blue", "health": "green", "life": "brown", "show": "gray"}
+EXTRA_PROPS = {
+    "Category": {"select": {"options": [{"name": v, "color": CATEGORY_COLORS[k]} for k, v in CATEGORY_NAMES.items()]}},
+    "Minutes": {"number": {}},
+}
 CHUNK, BLOCK_ITEMS = 2000, 100
 
 
@@ -115,6 +122,7 @@ def _tasks_db_schema(parent: str) -> dict:
             "Proof file": {"files": {}},
             "Steward": {"rich_text": {}},
             "App ID": {"rich_text": {}},
+            **EXTRA_PROPS,
         },
     }
 
@@ -159,8 +167,8 @@ def _make_dashboard(n: Notion, parent: str) -> str:
 
 
 def _dress_db(n: Notion, db_id: str) -> None:
-    try:
-        n.req("PATCH", f"/databases/{db_id}", json={"icon": {"type": "emoji", "emoji": "🏁"}})
+    try:  # icon + any columns added in later versions (idempotent)
+        n.req("PATCH", f"/databases/{db_id}", json={"icon": {"type": "emoji", "emoji": "🏁"}, "properties": EXTRA_PROPS})
     except NotionError:
         pass
 
@@ -271,7 +279,7 @@ def ensure_workspace(n: Notion, parent_page: str) -> dict:
         ids["dashboard"] = _make_dashboard(n, parent)
     if "tasks_db" not in ids:
         ids["tasks_db"] = n.req("POST", "/databases", json=_tasks_db_schema(parent))["id"]
-        _dress_db(n, ids["tasks_db"])
+    _dress_db(n, ids["tasks_db"])
     if "save_page" not in ids:
         ids["save_page"] = _make_page(n, parent, SAVE_PAGE_TITLE, "💾",
                                       "Game save. Don't edit by hand — the app overwrites it.")
@@ -319,6 +327,8 @@ def task_props(t: dict, goal: str = "") -> dict:
         "Reward": {"number": t["reward"]},
         "Penalty": {"number": t["penalty"]},
         "App ID": {"rich_text": rt(t["id"])},
+        "Category": {"select": {"name": CATEGORY_NAMES.get(t.get("category"), CATEGORY_NAMES["admin"])}},
+        "Minutes": {"number": t.get("minutes")},
         "Proof": {"rich_text": rt(t.get("proof_note"))},
         "Steward": {"rich_text": rt((t.get("verdict") or {}).get("comment"))},
     }
@@ -362,9 +372,12 @@ def parse_row(page: dict) -> dict:
         "size": sel("Size"),
         "consequence": txt("Consequence").strip(),
         "app_id": txt("App ID").strip(),
+        "category": {v: k for k, v in CATEGORY_NAMES.items()}.get(sel("Category")),
+        "minutes": num("Minutes"),
         "penalty": num("Penalty"),
         "reward": num("Reward"),
         "archived": page.get("archived", False),
+        "created": page.get("created_time"),
     }
 
 

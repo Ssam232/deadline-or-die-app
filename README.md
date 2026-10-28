@@ -77,6 +77,15 @@ Quiet hours are 11 PM–7 AM (`QUIET_HOURS` in the workflow). Only final warning
 | Pit stop | 1 per week for sick/rest days, plus any standing rest weekdays you set. |
 | Comeback rule | Back after a long gap? At most 3 zero days are charged; the rest are forgiven. |
 
+## 💰 What tasks are worth
+Value = **honest minutes × category**: 🧠 Deep work ×1.5 · 📨 Academic admin ×1.0 · 💪 Health ×0.8 · 🧺 Life admin ×0.5 · 🪑 Showing up ×0.3.
+Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 claimed hours/day pays 25% · 90+ min tasks need a real file · ⏱️ timer-verified work pays +15%.
+
+## ⏱️ Focus timer · 📜 Weekly contracts · 🎰 Paddock Lounge
+- Timer: pick a task, 25/50/90 min, log it. Counts toward contracts and the +15% verified bonus.
+- Contracts: 3 rotating weekly challenges, big payouts.
+- Lounge: blackjack + snake eyes. Opens only after a finish today, max bet 50, 15 hands/day, closes at +200 or −300. House edge ~6% (blackjack) / ~17% (dice).
+
 ## 🏢 The Honda ladder
 Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Parts upgrades carry over between cars.
 

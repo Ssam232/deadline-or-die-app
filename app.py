@@ -29,7 +29,10 @@ import pandas as pd
 import requests
 import streamlit as st
 
+import contracts as K
 import daily
+import lounge as L
+import valuation as V
 from notify import push
 from notion_store import (Notion, NotionError, STATUS, archive_page, due_to_dt, ensure_workspace, load_json,
                           pull_rows, save_json, task_props, update_dashboard, upload_proof, upsert_task)
@@ -329,8 +332,11 @@ def sync_from_notion(state: dict) -> tuple[list[tuple[str, str]], bool]:
                                         "give it a future one to bring it into the game."))
                 continue
             size = r["size"] if r["size"] in DIFFICULTY else "Medium"
-            t = make_task(r["title"] or "(untitled)", "", dl, size, r["consequence"], source="notion-sync")
+            t = make_task(r["title"] or "(untitled)", "", dl, size, r["consequence"], source="notion-sync",
+                          category=r.get("category"), minutes=r.get("minutes"))
             t["sync_page"] = r["page_id"]
+            if r.get("created"):  # the clock starts when you wrote it down in Notion, not when the app saw it
+                t["created"] = parse_dt(r["created"]).astimezone(TZ).isoformat()
             state["tasks"].append(t)
             changed = True
             msgs.append(("info", f"📥 Pulled **{t['title']}** in from Notion — due {dl:%a %b %d, %I:%M %p}, "
@@ -480,9 +486,12 @@ def flash(msg: str, kind: str = "success", celebrate: bool = False, sound: str |
         st.session_state["sound"] = sound
 
 
-def make_task(title, details, deadline: datetime, difficulty, consequence="", goal_id=None,
-              source="manual", notion=None) -> dict:
-    d = DIFFICULTY[difficulty]
+def make_task(title, details, deadline: datetime, difficulty=None, consequence="", goal_id=None,
+              source="manual", notion=None, category=None, minutes=None) -> dict:
+    minutes = int(minutes or V.minutes_for_size(difficulty))
+    category = category if category in V.CATEGORIES else V.guess_category(title)
+    d = V.value(category, minutes)
+    difficulty = V.size_label(minutes)
     t = {
         "id": uuid.uuid4().hex[:10],
         "title": title.strip(),
@@ -499,6 +508,9 @@ def make_task(title, details, deadline: datetime, difficulty, consequence="", go
         "extensions": 0,
         "rejections": 0,
         "source": source,
+        "category": category,
+        "minutes": minutes,
+        "focus_min": 0,
     }
     if notion:
         t.update(notion)
@@ -643,8 +655,12 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
     danger = 0.20 if at.weekday() in DANGER_DAYS else 0.0
     streak_mult = 1 + 0.1 * min(state["streak"], 10)
     ext_cut = 1 - 0.15 * t.get("extensions", 0)
-    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut))
-    parts = [f"base {base}"]
+    paid_today = sum(x.get("minutes") or 60 for x in state["tasks"] if x.get("status") == "done"
+                     and (x.get("completed_at") or "")[:10] == at.date().isoformat())
+    guard, guard_why = V.payout(base, t, parse_dt(t["created"]), at, paid_today, t.get("focus_min", 0))
+    t["_guard"] = guard
+    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard))
+    parts = [f"base {base}"] + guard_why
     if early:
         parts.append(f"+{int(early * 100)}% early")
     if danger:
@@ -883,7 +899,9 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     errors, data, h = [], None, None
     if len(note.strip()) < 15:
         errors.append("Write at least a real sentence about what you did.")
-    if s["strict_proof"] and not up:
+    if not up and (t.get("minutes") or 0) >= V.FILE_REQUIRED_FROM:
+        errors.append(f"Tasks of {V.FILE_REQUIRED_FROM}+ min need a real file as proof (screenshot, doc, photo).")
+    elif s["strict_proof"] and not up:
         errors.append("Strict mode: attach a file (turn off in Settings if you must).")
     if not up and not link.strip():
         errors.append("Attach a file or a link.")
@@ -928,14 +946,15 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     if mode == "open":
         reward, why = compute_reward(state, t, at)
         bank(state, reward, f"🏁 Done: {t['title']}")
-        state["xp"] += t["xp"]
+        xp_gain = max(1, round(t["xp"] * min(1.0, t.pop("_guard", 1.0))))
+        state["xp"] += xp_gain
         state["streak"] += 1
         state["best_streak"] = max(state["best_streak"], state["streak"])
         t["status"], t["earned"] = "done", reward
         name = state["settings"].get("player_name") or "driver"
         g = goal_title(state, t.get("goal_id"))
         msg = (f"### 🏁 CHECKERED FLAG\n**{t['title']}**\n\n"
-               f"**+{reward} coins** ({why}) · +{t['xp']} XP · streak **{state['streak']}** 🔥\n\n"
+               f"**+{reward} coins** ({why}) · +{xp_gain} XP · streak **{state['streak']}** 🔥\n\n"
                f"*{random.choice(HYPE).format(name=name)}*")
         if g:
             mine = [x for x in state["tasks"] if x.get("goal_id") == t.get("goal_id")]
@@ -983,6 +1002,22 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     st.rerun()
 
 
+CAT_OPTS = ["auto"] + list(V.CATEGORIES)
+
+
+def cat_label(k: str) -> str:
+    return "✨ Auto (guess from title)" if k == "auto" else V.CATEGORIES[k]["label"]
+
+
+def min_label(m: int) -> str:
+    return f"{m} min" if m < 60 else f"{m / 60:g} h"
+
+
+def points_guide() -> None:
+    with st.expander("💰 What's it worth? (points guide)"):
+        st.markdown(V.guide_markdown())
+
+
 def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
     with st.form(key, clear_on_submit=True):
         title = st.text_input("Task", placeholder="e.g. Draft the methods section")
@@ -996,8 +1031,9 @@ def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
         c1, c2 = st.columns(2)
         d = c1.date_input("Due date", value=now().date() + timedelta(days=1), min_value=now().date())
         tm = c2.time_input("Due time", value=dtime(23, 59))
-        diff = st.radio("Size", list(DIFFICULTY), horizontal=True, index=1,
-                        format_func=lambda x: f"{x} (+{DIFFICULTY[x]['reward']}/−{DIFFICULTY[x]['penalty']})")
+        c3, c4 = st.columns(2)
+        cat = c3.selectbox("Category", CAT_OPTS, format_func=cat_label, key=f"{key}_cat")
+        mins = c4.select_slider("Honest time it'll take", V.MINUTES, value=60, format_func=min_label, key=f"{key}_min")
         preset = st.selectbox("Real-world consequence if I miss it", CONSEQUENCE_PRESETS, index=1)
         custom = st.text_input("…or write your own", placeholder="Overrides the preset if filled in")
         cons = custom.strip() or ("" if preset == CONSEQUENCE_PRESETS[0] else preset)
@@ -1008,9 +1044,11 @@ def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
             elif dl <= now() + timedelta(minutes=5):
                 st.error("Deadline has to be in the future.")
             else:
-                state["tasks"].append(make_task(title, details, dl, diff, cons, gid))
+                t = make_task(title, details, dl, None, cons, gid, category=None if cat == "auto" else cat, minutes=mins)
+                state["tasks"].append(t)
                 save_state(state)
-                flash(f"Added **{title.strip()}** — due {dl:%a %b %d, %I:%M %p}.")
+                flash(f"Added **{t['title']}** · {V.CATEGORIES[t['category']]['label']} · {min_label(t['minutes'])} "
+                      f"→ worth **+{t['reward']}** / −{t['penalty']} · due {dl:%a %b %d, %I:%M %p}.")
                 st.rerun()
 
 
@@ -1147,7 +1185,7 @@ def simulate_race(state: dict, track: dict) -> None:
 
 def make_safety_car(due: datetime) -> dict:
     return make_task(daily.SAFETY_CAR_TITLE, "Proof: a screenshot of a 30-min timer + one line on what you did.",
-                     due, "Medium", "No gaming tonight")
+                     due, None, "No gaming tonight", category="deep", minutes=30)
 
 
 def _next_half_hour() -> dtime:
@@ -1164,7 +1202,8 @@ def render_qualify_form(state: dict) -> None:
             labels = {t["id"]: f"{t['title']} — {parse_dt(t['deadline']):%a %I:%M %p}" for t in open_t}
             picked = st.multiselect("Already on the board", list(labels), format_func=labels.get,
                                     default=[t["id"] for t in open_t if parse_dt(t["deadline"]).date() <= today])
-        st.caption("Add what you'll finish **today** — small and specific beats big and vague.")
+        st.caption("Add what you'll finish **today** — small and specific beats big and vague. "
+                   "Value = category × honest minutes (guide in ✅ Tasks).")
         new = [st.text_input(f"Mission {i + 1}", key=f"q_new_{i}", label_visibility="collapsed",
                              placeholder=["e.g. Write 300 words of the methods section",
                                           "e.g. Email supervisor about the OVx timeline",
@@ -1173,7 +1212,9 @@ def render_qualify_form(state: dict) -> None:
         due_t = c1.time_input("Done by", value=dtime(21, 0))
         start_t = c2.time_input("I'll START at", value=_next_half_hour(),
                                 help="Your phone will hold you to this.")
-        size = st.radio("Size of new ones", list(DIFFICULTY), index=0, horizontal=True)
+        c3, c4 = st.columns(2)
+        cat = c3.selectbox("Category of new ones", CAT_OPTS, format_func=cat_label, key="q_cat")
+        mins = c4.select_slider("Honest time each", V.MINUTES, value=30, format_func=min_label, key="q_min")
         if st.form_submit_button("🚦 Lock it in", type="primary", use_container_width=True):
             titles = [x.strip() for x in new if x.strip()]
             dl = datetime.combine(today, due_t, TZ)
@@ -1184,7 +1225,7 @@ def render_qualify_form(state: dict) -> None:
             else:
                 ids = list(picked)
                 for title in titles:
-                    t = make_task(title, "", dl, size, "")
+                    t = make_task(title, "", dl, None, "", category=None if cat == "auto" else cat, minutes=mins)
                     state["tasks"].append(t)
                     ids.append(t["id"])
                 msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
@@ -1245,6 +1286,169 @@ def render_today(state: dict) -> None:
             render_qualify_form(state)
 
 
+def focus_today(state: dict) -> int:
+    today = now().date().isoformat()
+    return int(sum(x["min"] for x in state.get("focus_log", []) if x["date"] == today))
+
+
+def render_timer(state: dict) -> None:
+    tm = state.get("timer")
+    open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
+                    key=lambda t: (t.get("mission_day") != now().date().isoformat(), t["deadline"]))
+    with st.container(border=True):
+        if not tm:
+            st.markdown("#### ⏱️ Focus timer")
+            if not open_t:
+                st.caption("Add a task first — the timer is a receipt for real work.")
+                return
+            labels = {t["id"]: t["title"] for t in open_t}
+            c1, c2 = st.columns([3, 1])
+            tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
+                               label_visibility="collapsed")
+            planned = c2.selectbox("Minutes", [25, 50, 90], key="timer_len", label_visibility="collapsed")
+            if st.button("▶️ Start focus", type="primary", use_container_width=True):
+                state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned}
+                save_state(state)
+                st.rerun()
+            st.caption(f"Timer-verified tasks pay **+{int(V.TIMER_BONUS * 100)}%**. Today: "
+                       f"**{focus_today(state)} min** focused.")
+            return
+        t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
+        start = parse_dt(tm["start"])
+        end_ms = int((start + timedelta(minutes=tm["planned"])).timestamp() * 1000)
+        st.markdown(f"#### ⏱️ Focusing: {t['title'] if t else '—'}")
+        _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
+        _embed(f"""
+<div id="t" style="font:700 46px ui-monospace,Menlo,monospace;color:#e63946;text-align:center;"></div>
+<div id="s" style="font:14px system-ui;color:#aaa;text-align:center;"></div>
+<script>
+const end={end_ms};
+function f(){{const r=end-Date.now();const a=Math.floor(Math.abs(r)/1000);
+document.getElementById('t').textContent=(r<0?'+':'')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');
+document.getElementById('s').textContent=r<0?'🏁 Session done — log it.':'Phone face-down. One thing only.';}}
+f();setInterval(f,500);
+</script>""", height=90)  # our own static markup only — no user content goes in here
+        c1, c2 = st.columns(2)
+        if c1.button("⏹️ Stop & log", type="primary", use_container_width=True):
+            mins = min((now() - start).total_seconds() / 60, tm["planned"] + 15)
+            state.pop("timer", None)
+            if mins >= 1 and t:
+                full = mins >= tm["planned"]
+                t["focus_min"] = round(t.get("focus_min", 0) + mins, 1)
+                state.setdefault("focus_log", []).append({"date": now().date().isoformat(), "task": t["id"],
+                                                          "min": round(mins, 1), "full": full})
+                del state["focus_log"][:-500]
+                state["xp"] += int(mins // 5)
+                save_state(state)
+                flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
+                      + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min.", sound="win" if full else None)
+            else:
+                save_state(state)
+            st.rerun()
+        if c2.button("✖️ Cancel", use_container_width=True):
+            state.pop("timer", None)
+            save_state(state)
+            st.rerun()
+
+
+def render_contracts(state: dict) -> None:
+    n_ = now()
+    st.subheader("📜 This week's contracts")
+    claimed = state.setdefault("contracts_claimed", [])
+    for c in K.this_week(n_):
+        p, key = K.progress(state, c, n_), K.claim_key(c, n_)
+        with st.container(border=True):
+            unit = " min" if c.get("unit") == "min" else ""
+            st.markdown(f"**{c['title']}** · +{c['reward']} 🪙")
+            st.progress(min(1.0, p / c["goal"]), text=f"{min(p, c['goal'])}{unit} / {c['goal']}{unit}")
+            if key in claimed:
+                st.caption("✅ Claimed")
+            elif p >= c["goal"] and st.button(f"Claim +{c['reward']} 🪙", key=f"claim_{c['id']}", type="primary"):
+                claimed.append(key)
+                bank(state, c["reward"], f"📜 Contract: {c['title']}")
+                save_state(state)
+                flash(f"📜 Contract complete: **{c['title']}** · +{c['reward']} coins!", celebrate=True, sound="jackpot")
+                st.rerun()
+    st.caption("New contracts every Monday.")
+
+
+def _cards(cs: list[str], hide_second: bool = False) -> str:
+    return " ".join("🂠" if hide_second and i == 1 else f"`{c}`" for i, c in enumerate(cs))
+
+
+def render_lounge(state: dict) -> None:
+    today = now().date().isoformat()
+    finished = len(daily.finished_on(state, now().date()))
+    reason = L.closed_reason(state, today, finished, black_flag_reasons(state))
+    rec = L.day_record(state, today)
+    st.caption(f"Today: {rec['hands']}/{L.MAX_HANDS} hands · net {rec['net']:+d} 🪙 · max bet {L.MAX_BET} · "
+               "the house has an edge — this is where coins go to have fun, not to multiply.")
+    g = st.session_state.get("bj")
+    if reason and not (g and not g["over"]):
+        st.info(f"🚪 {reason}")
+        return
+
+    def settle(payout: int, bet: int, label: str) -> None:
+        rec["hands"] += 1
+        rec["net"] += payout - bet
+        if payout:
+            bank(state, payout, f"🎰 {label}")
+        save_state(state)
+
+    tab_bj, tab_dice = st.tabs(["🃏 Blackjack", "🎲 Snake eyes"])
+    with tab_bj:
+        if not g or g["over"]:
+            if g:
+                st.markdown(f"Dealer {_cards(g['dealer'])} ({L.hand_value(g['dealer'])}) · "
+                            f"You {_cards(g['player'])} ({L.hand_value(g['player'])})")
+                (st.success if g["payout"] > g["bet"] else st.info if g["payout"] == g["bet"] else st.error)(
+                    f"{g['result']} — {'+' if g['payout'] - g['bet'] >= 0 else ''}{g['payout'] - g['bet']} 🪙")
+            bet = st.slider("Bet", 5, min(L.MAX_BET, max(5, state["coins"])), 10, step=5, key="bj_bet")
+            if st.button("Deal", type="primary", disabled=state["coins"] < bet):
+                bank(state, -bet, "🎰 Blackjack bet")
+                g = L.deal(bet)
+                st.session_state["bj"] = g
+                if g["over"]:
+                    settle(g["payout"], bet, "Blackjack")
+                else:
+                    save_state(state)
+                st.rerun()
+        else:
+            st.markdown(f"Dealer {_cards(g['dealer'], hide_second=True)}")
+            st.markdown(f"You {_cards(g['player'])} (**{L.hand_value(g['player'])}**) · bet {g['bet']}")
+            c1, c2 = st.columns(2)
+            if c1.button("Hit", use_container_width=True):
+                L.hit(g)
+                if g["over"]:
+                    settle(g["payout"], g["bet"], "Blackjack")
+                st.rerun()
+            if c2.button("Stand", type="primary", use_container_width=True):
+                L.stand(g)
+                settle(g["payout"], g["bet"], "Blackjack")
+                st.rerun()
+    with tab_dice:
+        last = st.session_state.get("dice_last")
+        if last:
+            d1, d2 = last["dice"]
+            st.markdown(f"<div style='font-size:64px;text-align:center'>{L.DICE[d1 - 1]} {L.DICE[d2 - 1]}</div>",
+                        unsafe_allow_html=True)
+            (st.success if last["payout"] else st.error)(
+                f"{L.SNAKE_BETS[last['choice']][0]}: rolled {d1 + d2} — "
+                + (f"+{last['payout'] - last['bet']} 🪙" if last["payout"] else f"−{last['bet']} 🪙"))
+        choice = st.radio("Bet on", list(L.SNAKE_BETS), horizontal=True, key="dice_choice",
+                          format_func=lambda k: f"{L.SNAKE_BETS[k][0]} ({L.SNAKE_BETS[k][1]}×)")
+        bet = st.slider("Bet", 5, min(L.MAX_BET, max(5, state["coins"])), 10, step=5, key="dice_bet")
+        if st.button("🎲 Roll", type="primary", disabled=bool(reason) or state["coins"] < bet):
+            bank(state, -bet, "🎰 Snake eyes bet")
+            dice = L.roll()
+            pay = L.snake_payout(choice, dice, bet)
+            settle(pay, bet, "Snake eyes")
+            st.session_state["dice_last"] = {"dice": dice, "choice": choice, "bet": bet, "payout": pay}
+            if dice == (1, 1) and choice == "snake":
+                flash("🐍🐍 SNAKE EYES! 30×!", celebrate=True, sound="jackpot")
+            st.rerun()
+
+
 # ─────────────────────────── app ───────────────────────────
 st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="centered")
 
@@ -1303,16 +1507,20 @@ if snd and state["settings"].get("sounds", True):
 
 render_today(state)
 
+render_timer(state)
+
 lvl = level_of(state["xp"])
+ds = state.get("day_streak", 0)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🪙 Coins", state["coins"])
-c2.metric("🧑‍✈️ Level", lvl, f"{state['xp'] - xp_for_level(lvl)}/{xp_for_level(lvl + 1) - xp_for_level(lvl)} XP",
-          delta_color="off")
-c3.metric("🔥 Streak", state["streak"], f"best {state['best_streak']}", delta_color="off")
+c2.metric("📅 Day streak", f"{ds} 🔥" if ds else "0", f"best {state.get('best_day_streak', 0)}", delta_color="off")
+c3.metric("⏱️ Focus today", f"{focus_today(state)}m")
 c4.metric("🔧 Car", f"{state['car']['condition']}%")
+st.caption(f"🧑‍✈️ Level {lvl} · {state['xp'] - xp_for_level(lvl)}/{xp_for_level(lvl + 1) - xp_for_level(lvl)} XP · "
+           f"task streak {state['streak']} (best {state['best_streak']})")
 
-tab_pit, tab_tasks, tab_goals, tab_garage, tab_race, tab_set = st.tabs(
-    ["🏁 Pit Wall", "✅ Tasks", "🎯 Goals", "🔧 Garage", "🏎️ Race", "⚙️ Settings"])
+tab_pit, tab_tasks, tab_goals, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
+    ["🏁 Pit Wall", "✅ Tasks", "🎯 Goals", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"])
 
 open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
 
@@ -1351,6 +1559,8 @@ with tab_pit:
                     flash("Penalty served. Back on track.")
                     st.rerun()
 
+    render_contracts(state)
+
     st.subheader("⏱️ Next up")
     if not open_tasks:
         st.info("No open tasks. Add one in ✅ Tasks — or break a goal down in 🎯 Goals.")
@@ -1387,6 +1597,7 @@ with tab_pit:
 
 # ── Tasks ──
 with tab_tasks:
+    points_guide()
     with st.expander("➕ New task", expanded=not open_tasks):
         task_form(state, "new_task_form")
     with st.expander("📥 Import from Notion"):
@@ -1680,6 +1891,10 @@ with tab_race:
                     pos = r["pos"] if r["pos"] == "DNF" else f"P{r['pos']}"
                     st.markdown(f"**{pos}** {r['track']} · +{r['payout']} 🪙 "
                                 f"<small>· {parse_dt(r['ts']):%b %d}</small>", unsafe_allow_html=True)
+
+# ── Lounge ──
+with tab_lounge:
+    render_lounge(state)
 
 # ── Settings ──
 with tab_set:
