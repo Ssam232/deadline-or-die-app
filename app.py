@@ -2042,8 +2042,10 @@ CSS = """<style>
 .block-container{max-width:880px;padding-top:2.4rem}
 [data-testid="stBaseButton-primary"] *,[data-testid="stBaseButton-primaryFormSubmit"] *{color:#14171d!important;font-weight:700}
 .st-key-live_card{border-left:4px solid var(--y)!important}
-[data-baseweb="tag"]{background:rgba(245,197,24,.14)!important;border:1px solid rgba(245,197,24,.45)!important}
-[data-baseweb="tag"] span,[data-baseweb="tag"] svg{color:#f5c518!important;fill:#f5c518!important}
+[data-testid="stMultiSelectTagsContainer"] [data-tag],[data-baseweb="tag"]{background:#2a2f3a!important;
+  border:1px solid #3a404d!important}
+[data-testid="stMultiSelectTagsContainer"] [data-tag] *,[data-baseweb="tag"] *{color:#ece8df!important}
+[data-testid="stMultiSelectTagsContainer"] [data-tag] svg{fill:#8b909c!important;color:#8b909c!important}
 [data-baseweb="tab-list"]{gap:4px;border-bottom:1px solid var(--line)}
 [data-baseweb="tab"] p{font-family:"Saira Semi Condensed",sans-serif;font-weight:600;font-size:1rem}
 [data-testid="stMetricValue"]{font-family:"Saira Semi Condensed",sans-serif;font-variant-numeric:tabular-nums}
@@ -2867,7 +2869,10 @@ with tab_set:
             if topic and st.button("Send a test buzz"):
                 ok = push(topic, "🏁 Deadline or Die", f"Test buzz, {PLAYER}. This is what a checkered flag feels like.",
                           priority=4, tags=["checkered_flag"], click=get_secret("APP_URL"))
-                st.success("Sent. Check your phone.") if ok else st.error("ntfy didn't accept it. Check the topic name.")
+                if ok:
+                    st.toast("📳 Buzz sent — check your phone.")
+                else:
+                    st.toast("ntfy didn't accept it. Check the topic name.", icon="⚠️")
             st.caption("No push on iPhone? Remove and re-add the topic in the ntfy app, and check Settings → "
                        "Notifications → ntfy (banners on, delivery Immediate, not filtered by a Focus).")
         if _pw:
