@@ -1,7 +1,7 @@
 name: Nag
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 min (GitHub may run it a few minutes late)
+    - cron: "*/10 * * * *"   # every 10 min (prayer windows need it; GitHub may run a few minutes late)
   workflow_dispatch: {}      # "Run workflow" button for a manual test
 concurrency:
   group: nag

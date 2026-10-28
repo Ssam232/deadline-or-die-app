@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import daily
 import dailies as DL
+import prayers as PR
 import events as EV
 import insights as I
 import locks as LK
@@ -278,6 +279,10 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
 
     for msg in daily_nags(save, mem, now, quiet):
         send(*msg)
+
+    if save and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):
+        for msg in PR.nags(save, mem, now, DL.count):  # prayer windows break quiet hours on purpose
+            send(*msg)
 
     day_mem = mem.setdefault("day", {})
     if save and not quiet and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):

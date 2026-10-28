@@ -40,6 +40,7 @@ import daily
 import dailies as DL
 import locks as LK
 import pomo as PM
+import prayers as PR
 import prep as P
 import quickparse as Q
 import raceviz as RV
@@ -1614,6 +1615,24 @@ def start_picker(key: str, default: str | None = "30m", label: str = "Start") ->
     return _round_up(now() + timedelta(minutes=START_CHIPS[pick]))
 
 
+def _prayer_line(state: dict, count: int) -> str:
+    """'Asr now · ends 6:17 PM' (red if it isn't logged) or 'next: Maghrib 6:17 PM'."""
+    try:
+        ps = PR.status(count, now(), **PR.settings_of(state))
+    except Exception:  # noqa: BLE001
+        return ""
+    hm = lambda d: d.strftime("%I:%M %p").lstrip("0")  # noqa: E731
+    cur, nxt = ps["current"], ps["next"]
+    if cur and not ps["current_logged"]:
+        mins = int((cur["end"] - now()).total_seconds() // 60)
+        col = "#ff6a5c" if mins <= 45 else "#f5c518"
+        return (f"<div style='font-size:.85rem;color:{col}'>🕌 {cur['name']} now · ends {hm(cur['end'])} "
+                f"({mins} min)</div>")
+    if nxt:
+        return f"<div style='font-size:.85rem;color:#8b909c'>next: {nxt['name']} {hm(nxt['start'])}</div>"
+    return "<div style='font-size:.85rem;color:#8b909c'>all of today's prayer windows are done</div>"
+
+
 def render_dailies(state: dict) -> None:
     today = now().date()
     rows = DL.today_status(state, today)
@@ -1637,7 +1656,9 @@ def render_dailies(state: dict) -> None:
                 dots = "●" * min(r["count"], h["target"]) + "○" * max(0, h["target"] - r["count"])
                 c1.markdown(f"**{h['name']}** &nbsp;<span style='letter-spacing:2px;color:{'#199e70' if r['done'] else '#9aa0ad'}'>"
                             f"{dots}</span> <small>{r['count']}/{h['target']}"
-                            + (f" · 🔥{h['streak']}" if h.get("streak") else "") + "</small>", unsafe_allow_html=True)
+                            + (f" · 🔥{h['streak']}" if h.get("streak") else "") + "</small>"
+                            + (_prayer_line(state, r["count"]) if PR.is_prayer_daily(h) else ""),
+                            unsafe_allow_html=True)
                 if c2.button("↩", key=f"dl_undo_{h['id']}", help="Undo one", disabled=r["count"] == 0):
                     DL.tap(state, h["id"], today, -1)
                     save_state(state)
@@ -1675,6 +1696,22 @@ def render_dailies(state: dict) -> None:
                 flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{DL.reward(h)} when done, −{DL.penalty(h)} if missed. "
                       "Starts counting today.")
                 st.rerun()
+            if any(PR.is_prayer_daily(h) for h in DL.habits(state)) or "Pray" in (name or ""):
+                ps_ = PR.settings_of(state)
+                c5, c6 = st.columns(2)
+                meth = c5.selectbox("Prayer times method", list(PR.METHODS), key="pr_method",
+                                    index=list(PR.METHODS).index(ps_["method"]) if ps_["method"] in PR.METHODS else 0)
+                asr_ = c6.selectbox("Asr", list(PR.ASR), key="pr_asr",
+                                    index=list(PR.ASR).index(ps_["asr_school"]) if ps_["asr_school"] in PR.ASR else 0,
+                                    help="Standard (Shafi/Maliki/Hanbali) or Hanafi (later Asr).")
+                if (meth, asr_) != (ps_["method"], ps_["asr_school"]):
+                    state["settings"].update(prayer_method=meth, prayer_asr=asr_)
+                    save_state(state)
+                    st.rerun()
+                tt = PR.times_for(today, TZ, **PR.settings_of(state))
+                st.caption("🕌 Today in Calgary: " + " · ".join(f"{k} {v:%I:%M}".replace(" 0", " ")
+                                                                for k, v in tt.items()) +
+                           ". Your phone nags as each window closes until you tap +1.")
             live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
             if live:
                 st.caption("Removing a daily takes effect tomorrow — today still counts.")
