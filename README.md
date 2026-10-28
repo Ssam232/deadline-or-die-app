@@ -94,6 +94,7 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 
 ## ⏱️ Focus timer · 📜 Weekly contracts · 🎰 Paddock Lounge
 - Timer: pick a task, 25/50/60/90/120 min of work, log it. Counts toward contracts and the +15% verified bonus.
+- Running timer: a progress ring (theme colour = work, teal = break, red = overtime) with the countdown inside. **⏸️ Pause** costs 2, 4, 6… coins per pause, paused time doesn't count, and a pause over 20 min ends the session (logging what you did). **☕ Skip break** jumps to the next work block.
 - 🍅 Breaks: pick **25/5 pomodoro**, **50/10**, or a custom *break at N min* interval (remembered). The clock turns blue on breaks and beeps at each switch; only work minutes are logged, so breaks never pad the receipt.
 - Contracts: 3 rotating weekly challenges, big payouts.
 - Lounge: blackjack + snake eyes. Opens after you finish a task worth 1h+ or run a single 1h focus block that day — and all day on weekends; max bet 50, 15 hands/day, closes at +200 or −300. House edge ~6% (blackjack) / ~17% (dice).

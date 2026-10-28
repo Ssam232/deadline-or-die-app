@@ -2013,89 +2013,178 @@ def render_timer(state: dict) -> None:
         t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
         start = parse_dt(tm["start"])
         work, brk = tm.get("work"), tm.get("brk")
-        end_ms = int((start + timedelta(minutes=PM.wall_minutes(tm["planned"], work, brk))).timestamp() * 1000)
-        start_ms = int(start.timestamp() * 1000)
-        st.markdown(f"#### ⏱️ Focusing: {t['title'] if t else '—'}")
-        if work and brk:
-            st.caption(f"🍅 {tm['planned']} min of work · {PM.label(work, brk)}. Breaks don't count toward the log.")
-        ACC = accent(state)[0]
-        _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
-        _embed(f"""
+        now_ts = now().timestamp()
+        if tm.get("paused_at") and PM.paused_for(tm, now_ts) > PM.PAUSE_LIMIT_MIN:
+            mins = min(PM.work_done(PM.effective_elapsed(tm, now_ts), work, brk), tm["planned"] + 15)
+            state.pop("timer", None)
+            if mins >= 1 and t:
+                _log_session(state, t, start, mins, tm)
+            else:
+                save_state(state)
+            flash(f"⏸️ Paused for over {PM.PAUSE_LIMIT_MIN} min, so the session ended.", "warning")
+            st.rerun()
+        title = (t["title"] if t else "—")
+        st.markdown(f"#### ⏱️ {html.escape(title[:42] + ('…' if len(title) > 42 else ''))}")
+        _timer_ring(state, tm)
+        _timer_controls(state)
+
+
+@st.fragment(run_every=10)
+def _timer_controls(state: dict) -> None:
+    """Pause / skip break / stop. Refreshes itself so 'Skip break' shows up when a break starts."""
+    tm = state.get("timer")
+    if not tm:
+        return
+    t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
+    start = parse_dt(tm["start"])
+    work, brk = tm.get("work"), tm.get("brk")
+    now_ts = now().timestamp()
+    eff = PM.effective_elapsed(tm, now_ts)
+    ph, left = PM.phase(eff, work, brk, tm["planned"])
+    paused = bool(tm.get("paused_at"))
+    c1, c2 = st.columns(2)
+    if paused:
+        if c1.button("▶️ Resume", use_container_width=True, key="tm_resume", type="primary"):
+            tm["paused_total"] = tm.get("paused_total", 0.0) + (now_ts - parse_dt(tm["paused_at"]).timestamp())
+            tm["paused_at"] = None
+            save_state(state)
+            st.rerun()
+    elif c1.button(f"⏸️ Pause · −{PM.pause_cost(tm)} 🪙", use_container_width=True, key="tm_pause",
+                   help=f"Each pause costs a little more (2, 4, 6…). Paused time doesn't count, and a pause over "
+                        f"{PM.PAUSE_LIMIT_MIN} min ends the session."):
+        cost = PM.pause_cost(tm)
+        tm["pauses"] = tm.get("pauses", 0) + 1
+        tm["paused_at"] = now().isoformat()
+        bank(state, -cost, f"⏸️ Pause #{tm['pauses']} during focus")
+        save_state(state)
+        st.rerun()
+    in_break = ph == "break" and not paused
+    if c2.button("☕ Skip break", use_container_width=True, key="tm_skip", disabled=not in_break,
+                 help="Jump straight to the next work block." if in_break else "Shows up during a break."):
+        tm["skipped"] = tm.get("skipped", 0.0) + left * 60
+        save_state(state)
+        st.rerun()
+    c3, c4 = st.columns([3, 1])
+    if c3.button("⏹️ Stop & log", type="secondary" if paused else "primary", use_container_width=True, key="tm_stop"):
+        mins = min(PM.work_done(eff, work, brk), tm["planned"] + 15)
+        state.pop("timer", None)
+        if mins >= 1 and t:
+            _log_session(state, t, start, mins, tm)
+        else:
+            save_state(state)
+        st.rerun()
+    if c4.button("✖", use_container_width=True, key="tm_cancel", help="Cancel without logging"):
+        state.pop("timer", None)
+        save_state(state)
+        st.rerun()
+
+
+def _timer_ring(state: dict, tm: dict) -> None:
+    """Progress ring + countdown. Pure client-side clock; only our own numbers go into the markup."""
+    work, brk, T = tm.get("work") or 0, tm.get("brk") or 0, tm["planned"]
+    start_ms = int(parse_dt(tm["start"]).timestamp() * 1000)
+    pt = int(tm.get("paused_total", 0.0) * 1000)
+    sk = int(tm.get("skipped", 0.0) * 1000)
+    pa = int(parse_dt(tm["paused_at"]).timestamp() * 1000) if tm.get("paused_at") else 0
+    wall = PM.wall_minutes(T, work or None, brk or None)
+    acc = accent(state)[0]
+    limit = PM.PAUSE_LIMIT_MIN
+    _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
+    _embed(f"""
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@700&display=swap" rel="stylesheet">
-<div id="t" style="font:700 52px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums;color:{ACC};text-align:center;letter-spacing:.02em"></div>
-<div id="s" style="font:14px system-ui;color:#8b909c;text-align:center;"></div>
+<style>
+body{{margin:0;font-family:system-ui,sans-serif;color:#ece8df}}
+.w{{display:flex;flex-direction:column;align-items:center}}
+.ring{{position:relative;width:148px;height:148px}}
+.c{{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}}
+#t{{font:700 34px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums;line-height:1}}
+#p{{font-size:12px;color:#8b909c;margin-top:4px}}
+#s{{font-size:12.5px;color:#8b909c;margin-top:6px;text-align:center}}
+#arc{{transition:stroke-dashoffset .9s linear,stroke .3s}}
+@media (prefers-reduced-motion:reduce){{#arc{{transition:none}}}}
+</style>
+<div class="w"><div class="ring">
+<svg width="148" height="148" viewBox="0 0 148 148">
+ <circle cx="74" cy="74" r="64" fill="none" stroke="#262b36" stroke-width="9"/>
+ <circle id="arc" cx="74" cy="74" r="64" fill="none" stroke="{acc}" stroke-width="9" stroke-linecap="round"
+   transform="rotate(-90 74 74)" stroke-dasharray="402.1" stroke-dashoffset="402.1"/>
+</svg><div class="c"><div id="t"></div><div id="p"></div></div></div><div id="s"></div></div>
 <script>
-const st0={start_ms},end={end_ms},W={work or 0},B={brk or 0},T={tm["planned"]};
+const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},C=402.1,LIM={limit};
 let last=null,ac=null;
 function beep(n){{try{{ac=ac||new (window.AudioContext||window.webkitAudioContext)();
  for(let i=0;i<n;i++){{const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=n>1?660:880;
  o.connect(g);g.connect(ac.destination);g.gain.value=.15;o.start(ac.currentTime+i*.25);o.stop(ac.currentTime+i*.25+.18);}}}}catch(e){{}}}}
 function mmss(ms){{const a=Math.floor(Math.abs(ms)/1000);return String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');}}
-function f(){{const now=Date.now(),r=end-now,el=(now-st0)/60000;let ph='work',left=r;
- if(r<=0)ph='done';else if(W&&B){{const c=W+B,rest=el%c,done=Math.floor(el/c)*W+Math.min(rest,W);
-   if(rest<W)left=Math.min(W-rest,T-done)*60000;else{{ph='break';left=(c-rest)*60000;}}}}
- const t=document.getElementById('t'),s=document.getElementById('s');
- if(ph==='done'){{t.textContent='+'+mmss(r);t.style.color='#ff6a5c';s.textContent='🏁 Session done — log it.';}}
- else if(ph==='break'){{t.textContent=mmss(left);t.style.color='#2ec4b6';s.textContent='☕ BREAK — stand up, water, no phone. Back at 00:00.';}}
- else{{t.textContent=mmss(left);t.style.color='{ACC}';s.textContent=(W&&B&&r>left+1000)?'Work — break in '+mmss(left)+'. Phone face-down.':'Phone face-down. One thing only.';}}
- if(last&&last!==ph)beep(ph==='work'?2:ph==='break'?1:3);last=ph;}}
+function eff(now){{return Math.max(0,(now-S-PT-(PA?now-PA:0)+SK)/60000);}}
+function wdone(e){{if(!W||!B)return e;const c=W+B;return Math.floor(e/c)*W+Math.min(e%c,W);}}
+function f(){{
+ const now=Date.now(),e=eff(now),wd=Math.min(wdone(e),T),arc=document.getElementById('arc');
+ const t=document.getElementById('t'),p=document.getElementById('p'),s=document.getElementById('s');
+ let ph='work',left=(T-e)*60000;
+ if(wd>=T)ph='done';
+ else if(W&&B){{const c=W+B,r=e%c;if(r<W)left=Math.min(W-r,T-wd)*60000;else{{ph='break';left=(c-r)*60000;}}}}
+ arc.style.strokeDashoffset=C*(1-Math.min(1,wd/T));
+ const blocks=W&&B?Math.ceil(T/W):1,blk=W&&B?Math.min(blocks,Math.floor(e/(W+B))+1):1;
+ if(PA){{t.textContent=mmss(left);t.style.color='#8b909c';arc.style.stroke='#5b6070';p.textContent='Paused';
+   s.textContent='Paused '+mmss(now-PA)+' · ends the session at '+LIM+':00';}}
+ else if(ph==='done'){{t.textContent='+'+mmss((e-WALL)*60000);t.style.color='#ff6a5c';arc.style.stroke='#ff6a5c';
+   p.textContent='Done';s.textContent='🏁 Session complete. Stop & log it.';}}
+ else if(ph==='break'){{t.textContent=mmss(left);t.style.color='#2ec4b6';arc.style.stroke='#2ec4b6';p.textContent='Break';
+   s.textContent='Stand up, water, no phone.';}}
+ else{{t.textContent=mmss(left);t.style.color='{acc}';arc.style.stroke='{acc}';
+   p.textContent=blocks>1?('Work · block '+blk+' of '+blocks):'Work';
+   s.textContent=Math.round(wd)+' of '+T+' min done · phone face-down';}}
+ const key=PA?'pause':ph;if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;}}
 f();setInterval(f,500);
-</script>""", height=90)  # our own static markup only — no user content goes in here
-        c1, c2 = st.columns(2)
-        if c1.button("⏹️ Stop & log", type="primary", use_container_width=True):
-            mins = min(PM.work_done((now() - start).total_seconds() / 60, work, brk), tm["planned"] + 15)
-            state.pop("timer", None)
-            if mins >= 1 and t:
-                full = mins >= tm["planned"]
-                t["focus_min"] = round(t.get("focus_min", 0) + mins, 1)
-                state.setdefault("focus_log", []).append({"date": start.date().isoformat(), "task": t["id"],
-                                                          "min": round(mins, 1), "full": full,
-                                                          "start": start.isoformat(), "cat": t.get("category")})
-                del state["focus_log"][:-500]
-                state["xp"] += int(mins // 5)
-                drop_msg, snd = "", ("win" if full else None)
-                today_log = [x for x in state["focus_log"] if x["date"] == now().date().isoformat()]
-                if full and mins >= 25 and sum(1 for x in today_log if x.get("drop")) < EV.DROPS_PER_DAY:
-                    kind = EV.roll_drop()
-                    state["focus_log"][-1]["drop"] = kind
-                    tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
-                    if kind == "xp":
-                        state["xp"] += 20
-                        drop_msg = "🎁 Session drop: **+20 XP**"
-                    elif kind == "coins":
-                        bank(state, 30, "🎁 Session drop")
-                        drop_msg = "🎁 Session drop: **+30 coins**"
-                    elif kind == "crate":
-                        drop_msg = "🎁 Session drop → " + open_crate(state, {"reward": 45})
-                    elif kind == "double_token":
-                        tok["double"] = tok.get("double", 0) + 1
-                        drop_msg = "🎁 Session drop: **⚡ 2× token** — your next finish pays double."
-                    else:
-                        tok["upgrade"] = tok.get("upgrade", 0) + 1
-                        drop_msg = "🎁 Session drop: **🔧 free-upgrade token** — install any part for free in the Garage."
-                    snd = "jackpot" if kind in ("double_token", "upgrade_token") else "win"
-                done_ch = state.setdefault("challenge_claims", [])
-                for ch in EV.focus_challenges(now().date(), TZ):
-                    if ch["id"] not in done_ch and ch["start"] <= start < ch["end"] and mins >= ch["minutes"]:
-                        done_ch.append(ch["id"])
-                        t["double"] = True
-                        state["xp"] += int(mins // 5)  # the session's own XP counts twice
-                        extra = ("\n\n" + open_crate(state, {"reward": 45})) if ch["kind"] == "double_crate" else ""
-                        drop_msg = (f"🏆 **FOCUS CHALLENGE WON** — this session counts ⚡ double: *{t['title']}* now "
-                                    f"pays **2× coins & XP** when you finish it, and you got +{int(mins // 5)} bonus XP."
-                                    + extra + ("\n\n" + drop_msg if drop_msg else ""))
-                        snd = "jackpot"
-                save_state(state)
-                flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
-                      + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),
-                      sound=snd, celebrate=bool(drop_msg))
-            else:
-                save_state(state)
-            st.rerun()
-        if c2.button("✖️ Cancel", use_container_width=True):
-            state.pop("timer", None)
-            save_state(state)
-            st.rerun()
+</script>""", height=184)  # our own static markup only — no user content goes in here
+
+
+def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -> None:
+    """Credit a finished/stopped focus session: focus minutes, XP, loot drop, focus challenge."""
+    full = mins >= tm["planned"]
+    t["focus_min"] = round(t.get("focus_min", 0) + mins, 1)
+    state.setdefault("focus_log", []).append({"date": start.date().isoformat(), "task": t["id"],
+                                              "min": round(mins, 1), "full": full,
+                                              "start": start.isoformat(), "cat": t.get("category")})
+    del state["focus_log"][:-500]
+    state["xp"] += int(mins // 5)
+    drop_msg, snd = "", ("win" if full else None)
+    today_log = [x for x in state["focus_log"] if x["date"] == now().date().isoformat()]
+    if full and mins >= 25 and sum(1 for x in today_log if x.get("drop")) < EV.DROPS_PER_DAY:
+        kind = EV.roll_drop()
+        state["focus_log"][-1]["drop"] = kind
+        tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
+        if kind == "xp":
+            state["xp"] += 20
+            drop_msg = "🎁 Session drop: **+20 XP**"
+        elif kind == "coins":
+            bank(state, 30, "🎁 Session drop")
+            drop_msg = "🎁 Session drop: **+30 coins**"
+        elif kind == "crate":
+            drop_msg = "🎁 Session drop → " + open_crate(state, {"reward": 45})
+        elif kind == "double_token":
+            tok["double"] = tok.get("double", 0) + 1
+            drop_msg = "🎁 Session drop: **⚡ 2× token** — your next finish pays double."
+        else:
+            tok["upgrade"] = tok.get("upgrade", 0) + 1
+            drop_msg = "🎁 Session drop: **🔧 free-upgrade token** — install any part for free in the Garage."
+        snd = "jackpot" if kind in ("double_token", "upgrade_token") else "win"
+    done_ch = state.setdefault("challenge_claims", [])
+    for ch in EV.focus_challenges(now().date(), TZ):
+        if ch["id"] not in done_ch and ch["start"] <= start < ch["end"] and mins >= ch["minutes"]:
+            done_ch.append(ch["id"])
+            t["double"] = True
+            state["xp"] += int(mins // 5)  # the session's own XP counts twice
+            extra = ("\n\n" + open_crate(state, {"reward": 45})) if ch["kind"] == "double_crate" else ""
+            drop_msg = (f"🏆 **FOCUS CHALLENGE WON** — this session counts ⚡ double: *{t['title']}* now "
+                        f"pays **2× coins & XP** when you finish it, and you got +{int(mins // 5)} bonus XP."
+                        + extra + ("\n\n" + drop_msg if drop_msg else ""))
+            snd = "jackpot"
+    save_state(state)
+    flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
+          + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),
+          sound=snd, celebrate=bool(drop_msg))
 
 
 def render_race_status(state: dict) -> None:

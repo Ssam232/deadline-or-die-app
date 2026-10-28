@@ -45,3 +45,27 @@ def phase(elapsed: float, work: int | None, brk: int | None, target: int) -> tup
 
 def label(work: int | None, brk: int | None) -> str:
     return f"break every {work} min ({brk} min)" if work and brk else "no breaks"
+
+
+# ── pause / skip ──
+PAUSE_COST = 2          # coins × pause number: 2, 4, 6, …
+PAUSE_LIMIT_MIN = 20    # a pause longer than this ends the session (and logs what you did)
+
+
+def effective_elapsed(tm: dict, now_ts: float) -> float:
+    """Session minutes that count as 'on the clock': wall time minus pauses, plus any skipped break time."""
+    from datetime import datetime
+    start = datetime.fromisoformat(tm["start"]).timestamp()
+    paused = tm.get("paused_total", 0.0)
+    if tm.get("paused_at"):
+        paused += now_ts - datetime.fromisoformat(tm["paused_at"]).timestamp()
+    return max(0.0, (now_ts - start - paused + tm.get("skipped", 0.0)) / 60)
+
+
+def paused_for(tm: dict, now_ts: float) -> float:
+    from datetime import datetime
+    return (now_ts - datetime.fromisoformat(tm["paused_at"]).timestamp()) / 60 if tm.get("paused_at") else 0.0
+
+
+def pause_cost(tm: dict) -> int:
+    return PAUSE_COST * (tm.get("pauses", 0) + 1)
