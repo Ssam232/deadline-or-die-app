@@ -3,7 +3,8 @@
 
   • Pull: today's cards on your board show up as one-tap suggestions when you set your mission.
   • Push: Deadline or Die tasks due in the next 7 days appear on your board as "🏁 …" cards,
-          and get ticked/renamed "✅ …" when you finish them with proof.
+          get ticked/renamed "✅ …" when you finish them with proof, and are tidied off the board
+          (Notion trash) once their day is over — your own recurring cards are never touched.
 
 The board's columns are auto-detected, so it works with whatever setup you already have:
   title · a Date column (if any) · a weekday Select/Status (Monday…Sunday) · a "Time" text · a done checkbox/status.
@@ -77,16 +78,28 @@ def describe(m: dict) -> str:
     return " · ".join(bits)
 
 
+def _weekday_filter(m: dict, d: date) -> dict | None:
+    opt = m["weekday_opts"].get(WEEKDAYS[d.weekday()]) if m["weekday"] else None
+    if not opt:
+        return None
+    key = "contains" if m["weekday_type"] == "multi_select" else "equals"
+    return {"property": m["weekday"], m["weekday_type"]: {key: opt}}
+
+
+def _undated_weekday_filter(m: dict, d: date) -> dict | None:
+    """Recurring cards: a weekday but no date (e.g. Group Meeting every Thursday)."""
+    wk = _weekday_filter(m, d)
+    if not wk:
+        return None
+    return {"and": [{"property": m["date"], "date": {"is_empty": True}}, wk]} if m["date"] else wk
+
+
 def _day_filter(m: dict, d: date) -> dict | None:
     if m["date"]:
-        return {"property": m["date"], "date": {"equals": d.isoformat()}}
-    if m["weekday"]:
-        opt = m["weekday_opts"].get(WEEKDAYS[d.weekday()])
-        if not opt:
-            return None
-        key = "contains" if m["weekday_type"] == "multi_select" else "equals"
-        return {"property": m["weekday"], m["weekday_type"]: {key: opt}}
-    return None
+        on = {"property": m["date"], "date": {"equals": d.isoformat()}}
+        rec = _undated_weekday_filter(m, d)
+        return {"or": [on, rec]} if rec else on
+    return _weekday_filter(m, d)
 
 
 def _item(p: dict, m: dict, d: date | None, skip_ids, tz=None) -> dict | None:
@@ -133,12 +146,15 @@ def pull_range(n: Notion, m: dict, start: date, days: int, skip_ids: set[str] = 
                        {"property": m["date"], "date": {"before": end.isoformat()}}]}
         out = [x for p in n.query(m["db"], {"filter": flt, "sorts": [{"property": m["date"], "direction": "ascending"}]})
                if (x := _item(p, m, None, skip_ids, tz)) and x["date"]]
-    elif m["weekday"]:  # weekday-only boards repeat every week: show each card on its next occurrence
-        seen = set()
+    if m["weekday"]:  # recurring weekday cards (no date): show each on its next occurrence
+        seen = {x["id"] for x in out}
         for i in range(min(days, 7)):
             d = start + timedelta(days=i)
-            for x in pull_day(n, m, d, skip_ids):
-                if x["id"] not in seen:
+            flt = _undated_weekday_filter(m, d)
+            for p in (n.query(m["db"], {"filter": flt}) if flt else []):
+                x = _item(p, m, d, skip_ids)
+                if x and x["id"] not in seen:
+                    x["date"], x["recurring"] = d.isoformat(), True
                     seen.add(x["id"])
                     out.append(x)
     return sorted(out, key=lambda x: (x["date"], x["when"] or "99"))
@@ -176,12 +192,18 @@ def sync_out(n: Notion, m: dict, tasks: list[dict], now: datetime) -> list[str]:
     horizon = now + timedelta(days=PUSH_WINDOW_DAYS)
     for t in tasks:
         try:
-            if t["status"] == "open" and not t.get("board_page") and now < datetime.fromisoformat(t["deadline"]) <= horizon:
+            dl = datetime.fromisoformat(t["deadline"])
+            if t["status"] == "open" and not t.get("board_page") and now < dl <= horizon:
                 t["board_page"] = push(n, m, t, now.tzinfo)
-                t["board_state"] = "open"
+                t["board_state"], t["board_pushed"] = "open", True
             elif t.get("board_page") and t["status"] != t.get("board_state"):
                 mark_finished(n, m, t["board_page"], t["title"], t["status"])
                 t["board_state"] = t["status"]
+            elif (t.get("board_pushed") and t["status"] != "open" and not t.get("board_archived")
+                  and dl.astimezone(now.tzinfo).date() < now.date()):
+                # our own 🏁 card, finished and its day is over: tidy it off a weekly board (Notion trash, 30 days)
+                n.req("PATCH", f"/pages/{t['board_page']}", json={"archived": True})
+                t["board_archived"] = True
         except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
             errs.append(f"{t['title']}: {e}")
     return errs

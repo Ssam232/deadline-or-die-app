@@ -1268,7 +1268,8 @@ EVENT_LOOKAHEAD = 60      # the event planner looks this far ahead
 def _board_label(b: dict, today: date) -> str:
     d = date.fromisoformat(b["date"]) if b.get("date") else today
     day = "Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else f"{d:%a %b %d}"
-    return f"{day} · {b['title']}" + (f" · {b['when']}" if b.get("when") else "")
+    return (f"{day} · {b['title']}" + (f" · {b['when']}" if b.get("when") else "")
+            + (" · 🔁 weekly" if b.get("recurring") else ""))
 
 
 def render_coming_up(state: dict) -> None:
@@ -1300,7 +1301,7 @@ def render_event_planner(state: dict) -> None:
         try:
             taken = {B.clean_id(g.get("event_page") or "") for g in state["goals"]}
             events = [b for b in _board_range(*bc, (today + timedelta(days=1)).isoformat(), EVENT_LOOKAHEAD)
-                      if B.clean_id(b["id"]) not in taken]
+                      if B.clean_id(b["id"]) not in taken and not b.get("recurring")]
         except Exception as e:
             st.caption(f"(Couldn't read your board: {e})")
     opts = {b["id"]: _board_label(b, today) for b in events}
@@ -1454,7 +1455,8 @@ def render_qualify_form(state: dict) -> None:
                     if bdue <= now() + timedelta(minutes=5):
                         bdue = datetime.combine(today, dtime(23, 59), TZ)
                     t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
-                    t.update(board_page=b["id"], board_state="open")
+                    if not b.get("recurring"):  # one-off card: ticks off on the board when you finish
+                        t.update(board_page=b["id"], board_state="open")
                     state["tasks"].append(t)
                     ids.append(t["id"])
                 for pk in paper_pick:
