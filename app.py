@@ -1543,10 +1543,15 @@ def render_dailies(state: dict) -> None:
             done = sum(r["done"] for r in rows)
             stake, _ = DL.at_stake(state, today)
             st.markdown(f"#### 🔁 Dailies · {done}/{len(rows)}")
-            st.markdown(f"<div style='color:#ff6a5c;font-size:.88rem;margin-top:-.6rem'>−{stake} 🪙 at midnight if "
-                        "these aren't done</div>" if stake else
-                        "<div style='color:#2ec4b6;font-size:.88rem;margin-top:-.6rem'>All done today ✅</div>",
-                        unsafe_allow_html=True)
+            if done == len(rows):
+                note = "<div style='color:#2ec4b6;font-size:.88rem;margin-top:-.6rem'>All done today ✅</div>"
+            elif stake:
+                note = (f"<div style='color:#ff6a5c;font-size:.88rem;margin-top:-.6rem'>−{stake} 🪙 at midnight if "
+                        "these aren't done</div>")
+            else:
+                note = ("<div style='color:#8b909c;font-size:.88rem;margin-top:-.6rem'>Day one is free: misses start "
+                        "costing tomorrow</div>")
+            st.markdown(note, unsafe_allow_html=True)
             for r in rows:
                 h = r["h"]
                 c1, c2, c3 = st.columns([5, 1, 2], vertical_alignment="center")
