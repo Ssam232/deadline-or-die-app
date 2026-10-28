@@ -19,6 +19,7 @@ import math
 import os
 import random
 import re
+import threading
 import time
 import uuid
 from datetime import date, datetime, time as dtime, timedelta
@@ -230,7 +231,7 @@ def _merge(defaults: dict, loaded: dict) -> dict:
     return out
 
 
-SESSION_TTL = 20  # seconds before re-reading the save from Notion (and pulling new Notion tasks)
+SESSION_TTL = 90  # seconds before re-reading the save from Notion (and pulling new Notion tasks)
 
 
 def _load_local() -> dict | None:
@@ -301,8 +302,10 @@ def load_state() -> dict:
     if not notion_cfg():
         return _load_local() or default_state()
     cached = st.session_state.get("_state")
-    if cached is not None and time.time() - st.session_state.get("_state_ts", 0) < SESSION_TTL:
+    if cached is not None and (time.time() - st.session_state.get("_state_ts", 0) < SESSION_TTL
+                               or _saver().pending()):
         return cached
+    _saver().flush(5)  # never read Notion while our own write is still landing
     try:
         n, ids = notion_ctx()
         data = load_json(n, ids["save_page"])
@@ -359,33 +362,125 @@ def broadcast_lock(state: dict) -> None:
         state["_lock_msg"] = msg
 
 
+# ── saving: instant on screen, synced to Notion in the background ──
+SYNC_FIELDS = ("sync_page", "_sig", "out_page", "out_state", "out_sig", "out_archived",
+               "board_page", "board_state", "board_pushed", "board_archived", "board_src")
+DASH_EVERY = 45  # seconds between dashboard refreshes
+
+
+def _notion_sync(n: Notion, ids: dict, state: dict, out_map: dict | None, app_url: str | None,
+                 dash: bool) -> list[str]:
+    """All the Notion round-trips for one save. Mutates `state` (adds page ids) — never touches Streamlit."""
+    errs = _push_tasks(n, ids, state)
+    try:  # board problems never block saving
+        errs += B.retract_pushed(n, state["tasks"])  # input board is read-only: undo old pushes
+        if out_map:
+            errs += B.sync_out(n, out_map, state["tasks"], now())
+    except Exception as e:
+        errs.append(f"board: {e}")
+    save_json(n, ids["save_page"], state)
+    if dash and ids.get("dashboard"):
+        try:
+            update_dashboard(n, ids["dashboard"], state, TZ, app_url)
+        except NotionError:
+            pass
+    return errs
+
+
+class _Saver:
+    """One background worker per server. Coalesces rapid saves into one Notion write of the latest state,
+    and remembers every Notion id it has created so a fast second click can never create a duplicate."""
+
+    def __init__(self):
+        self.lock, self.ev = threading.Lock(), threading.Event()
+        self.job, self.busy, self.errors = None, False, []
+        self.known: dict[str, dict] = {}   # task id -> sync fields (None = removed)
+        self.last_dash, self.last_ok = 0.0, 0.0
+        threading.Thread(target=self._run, daemon=True, name="dod-saver").start()
+
+    def submit(self, live: dict, snapshot: str, ctx: tuple) -> None:
+        with self.lock:
+            self.job = (live, snapshot, ctx)
+        self.ev.set()
+
+    def pending(self) -> bool:
+        return self.busy or self.job is not None
+
+    def flush(self, timeout: float = 20) -> None:
+        t0 = time.time()
+        while self.pending() and time.time() - t0 < timeout:
+            time.sleep(0.05)
+
+    def _apply_known(self, tasks: list[dict]) -> None:
+        for t in tasks:
+            for f, v in self.known.get(t["id"], {}).items():
+                if v is None:
+                    t.pop(f, None)
+                else:
+                    t[f] = v
+
+    def _run(self) -> None:
+        while True:
+            self.ev.wait()
+            time.sleep(0.3)  # let a burst of taps coalesce
+            with self.lock:
+                self.ev.clear()
+                job, self.job = self.job, None
+                if not job:
+                    continue
+                self.busy = True
+            live, snapshot, (token, ids, out_map, app_url) = job
+            try:
+                snap = json.loads(snapshot)
+                self._apply_known(snap["tasks"])
+                dash = time.time() - self.last_dash > DASH_EVERY
+                errs = _notion_sync(Notion(token), ids, snap, out_map, app_url, dash)
+                if dash:
+                    self.last_dash = time.time()
+                with self.lock:
+                    for t in snap["tasks"]:
+                        self.known[t["id"]] = {f: t.get(f) for f in SYNC_FIELDS}
+                    self._apply_known(live.get("tasks", []))  # hand the new ids back to the live game
+                    self.errors += errs
+                    self.last_ok = time.time()
+            except Exception as e:  # noqa: BLE001
+                with self.lock:
+                    self.errors.append(f"save: {e}")
+            finally:
+                with self.lock:
+                    self.busy = False
+                if self.job:
+                    self.ev.set()
+
+
+@st.cache_resource(show_spinner=False)
+def _saver() -> _Saver:
+    return _Saver()
+
+
 def save_state(state: dict) -> None:
     broadcast_lock(state)
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2, default=str))
-    os.replace(tmp, STATE_FILE)
+    snapshot = json.dumps(state, default=str)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(snapshot)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        pass
     if not notion_cfg():
         return
+    st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
     try:
         n, ids = notion_ctx()
-        errs = _push_tasks(n, ids, state)
-        bc, oc = board_cfg(state), out_cfg(state)
-        try:  # board problems never block saving
-            errs += B.retract_pushed(n, state["tasks"])  # input board is read-only: undo old pushes
-            if oc:
-                errs += B.sync_out(n, _board_map(*oc), state["tasks"], now())
-        except Exception as e:
-            errs.append(f"board: {e}")
-        save_json(n, ids["save_page"], state)
-        st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
-        if ids.get("dashboard"):
-            try:
-                update_dashboard(n, ids["dashboard"], state, TZ, get_secret("APP_URL"))
-            except NotionError:
-                pass
-        if errs:
-            flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
+        oc = out_cfg(state)
+        out_map = _board_map(*oc) if oc else None
+        if os.getenv("DOD_SYNC_SAVE"):  # tests: do it inline
+            errs = _notion_sync(n, ids, state, out_map, get_secret("APP_URL"), True)
+            if errs:
+                flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
+            return
+        _saver().submit(state, snapshot, (get_secret("NOTION_TOKEN"), ids, out_map, get_secret("APP_URL")))
     except Exception as e:
         flash(f"⚠️ Couldn't save to Notion ({e}). Your progress is kept on this server for now.", "error")
 
@@ -2213,6 +2308,9 @@ CSS = """<style>
 .dod-row:last-child{border-bottom:0}
 .dod-dot{width:8px;height:8px;border-radius:50%;flex:none}
 .dod-row .m{color:var(--muted);font-size:.9rem}
+/* don't grey the page out while Streamlit reruns — it makes every click feel slow */
+[data-stale="true"],.stale-element{opacity:1!important;transition:none!important}
+[data-testid="stStatusWidget"]{opacity:.55}
 /* motion: one entrance, feedback on change and on press, nothing that loops */
 @keyframes dodIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @keyframes dodPop{0%{transform:scale(1)}35%{transform:scale(1.12);text-shadow:0 0 18px var(--y)}100%{transform:scale(1)}}
@@ -2366,6 +2464,11 @@ render_cluster(state)
 
 for kind, m in sync_msgs:
     getattr(st, kind)(m)
+if notion_cfg():
+    with _saver().lock:
+        _bg_errs, _saver().errors = _saver().errors[:], []
+    if _bg_errs:
+        st.warning("⚠️ Some changes didn't sync to Notion: " + "; ".join(_bg_errs[:3]))
 for m in crash_msgs:
     st.error(m)
 if rust_msg:
