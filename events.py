@@ -64,20 +64,8 @@ DROP_TABLE = [  # (weight, kind)
 ]
 
 
-CHALLENGE_PRIZES = {  # by session length: what a challenge can pay out
-    25: [("coins", 25), ("crate", None)],
-    50: [("crate", None), ("double", 120)],
-    60: [("crate", None), ("double", 120)],
-    90: [("double", 180), ("upgrade_token", None)],
-}
-
-
-def prize_label(kind: str, val) -> str:
-    if kind == "coins":
-        return f"+{val} coins"
-    if kind == "double":
-        return f"⚡ double coins & XP for {val // 60}h"
-    return "🎁 a pit crate" if kind == "crate" else "🔧 a free-upgrade token"
+def prize_label(kind: str, val=None) -> str:
+    return "this session counts ⚡ double" + (" + 🎁 a pit crate" if kind == "double_crate" else "")
 
 
 def focus_challenges(d: date, tz) -> list[dict]:
@@ -88,12 +76,12 @@ def focus_challenges(d: date, tz) -> list[dict]:
     out = []
     for i, s in enumerate(starts):
         minutes = rng.choices([25, 50, 60, 90], weights=[3, 3, 3, 2])[0]
-        kind, val = rng.choice(CHALLENGE_PRIZES[minutes])
+        kind = "double_crate" if minutes >= 90 else "double"
         start = datetime.combine(d, dtime(s // 60, s % 60), tz)
         end = start + timedelta(hours=2)
         out.append({"id": f"{d.isoformat()}#c{i}", "start": start, "end": end, "minutes": minutes, "kind": kind,
-                    "val": val, "label": f"Start a {minutes}-min focus session between {start:%I:%M}–{end:%I:%M %p} "
-                                         f"→ {prize_label(kind, val)}"})
+                    "val": None, "label": f"Start a {minutes}-min focus session before {end:%I:%M %p} → "
+                                          f"{prize_label(kind)}"})
     return out
 
 

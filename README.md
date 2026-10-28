@@ -77,6 +77,11 @@ Quiet hours are 11 PM–7 AM (`QUIET_HOURS` in the workflow). Only final warning
 | Pit stop | 1 per week for sick/rest days, plus any standing rest weekdays you set. |
 | Comeback rule | Back after a long gap? At most 3 zero days are charged; the rest are forgiven. |
 
+## ⚡ Zero-friction entry
+- **Quick add** (top of the app): type it like a text — `email walter re surgery dates 15m by 3pm`, `write discussion 1.5h tomorrow`, `gym 60m tonight`. Time, deadline and category are worked out for you.
+- **Templates:** one tap for inbox, 300 words, a paper, data analysis, gym, an errand.
+- **🎲 Just tell me what to do:** picks your best next task (mission → soonest due → quick wins) and starts the focus timer on it.
+
 ## 💰 What tasks are worth
 Value = **honest minutes × category**: 🧠 Deep work ×1.5 · 📨 Academic admin ×1.0 · 💪 Health ×0.8 · 🧺 Life admin ×0.5 · 🪑 Showing up ×0.3.
 Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 claimed hours/day pays 25% · 90+ min tasks need a real file · ⏱️ timer-verified work pays +15%.
@@ -118,7 +123,7 @@ Settings → add `ZOTERO_USER_ID` + `ZOTERO_API_KEY` (zotero.org/settings/keys; 
 Log in once — the address bar gains `?k=…`. Add *that* page to your Home Screen, and put it in the `APP_URL` secret (Streamlit + GitHub) so notifications open logged in. Settings → 📱 Remember-me link shows it.
 
 ## ⏱️ Focus challenges & session loot
-**⏱️ Focus challenges:** 1–3 a day, e.g. *start a 60-min session between 3–5 PM → ⚡ double coins & XP for 2h* (or a crate, a free upgrade, coins). They're a surprise: no schedule anywhere — your phone pings the moment a window opens (seeded from your private topic, so even the code can't spoil it). Plus every full 25+ min session rolls a small random drop (3/day). As you level up, penalties grow (up to 2×) and your daily mission must total 30 → 60 minutes.
+**⏱️ Focus challenges:** 1–3 a day, e.g. *start a 60-min session in the next 2 hours → this session counts ⚡ double* — the task you focused on pays 2× coins & XP when you finish it (90-min challenges add a crate). They're a surprise: no schedule anywhere — your phone pings the moment a window opens (seeded from your private topic, so even the code can't spoil it). Plus every full 25+ min session rolls a small random drop (3/day). As you level up, penalties grow (up to 2×) and your daily mission must total 30 → 60 minutes.
 
 ## 🏢 The Honda ladder
 Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Six upgrade paths (engine, wheels & tires, aero, brakes, forced induction, weight), each with real part names and a 💡 lesson — and each visible on the car. Every chassis has a tuning limit (Civic Si L3 … NSX L5); parts you buy carry over.

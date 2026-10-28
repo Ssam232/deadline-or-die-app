@@ -36,6 +36,7 @@ import events as EV
 import garage as G
 import daily
 import locks as LK
+import quickparse as Q
 import raceviz as RV
 import lounge as L
 import valuation as V
@@ -716,7 +717,7 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
     guard, guard_why = V.payout(base, t, parse_dt(t["created"]), at, paid_today, t.get("focus_min", 0))
     t["_guard"] = guard
     boost = state.get("boost_until")
-    dbl = 2 if EV.is_double(at) or (boost and parse_dt(boost) > at) else 1
+    dbl = 2 if EV.is_double(at) or t.get("double") or (boost and parse_dt(boost) > at) else 1
     tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
     used_token = False
     if dbl == 1 and tok.get("double", 0) > 0:
@@ -1400,6 +1401,39 @@ def focus_today(state: dict) -> int:
     return int(sum(x["min"] for x in state.get("focus_log", []) if x["date"] == today))
 
 
+def _add_quick(state: dict, title: str, minutes: int, due: datetime, category: str) -> dict:
+    t = make_task(title, "", due, None, "", category=category, minutes=minutes)
+    stt = daily.status(state, now())
+    if due.date() == now().date() and stt["qualified"]:
+        t["mission_day"] = now().date().isoformat()
+    state["tasks"].append(t)
+    save_state(state)
+    return t
+
+
+def render_quick_add(state: dict, key: str = "qa") -> None:
+    with st.container(border=True):
+        with st.form(f"{key}_form", clear_on_submit=True, border=False):
+            c1, c2 = st.columns([5, 1])
+            text = c1.text_input("⚡ Quick add", label_visibility="collapsed",
+                                 placeholder="⚡ Quick add — e.g. email walter re surgery dates 15m by 3pm")
+            go = c2.form_submit_button("Add", type="primary", use_container_width=True)
+        if go and text.strip():
+            p = Q.parse(text, now())
+            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"])
+            flash(f"⚡ Added **{t['title']}** · {V.CATEGORIES[t['category']]['label']} · {min_label(t['minutes'])} → "
+                  f"**+{t['reward']}** · due {p['due']:%a %I:%M %p}" + (" · added to today's mission" if t.get("mission_day") else ""))
+            st.rerun()
+        st.caption("Type it like a text: time (15m, 1.5h) and when (by 3pm, tonight, tomorrow, fri, eod). "
+                   "Or tap one:")
+        cols = st.columns(3)
+        for i, (label, mins, cat) in enumerate(Q.TEMPLATES):
+            if cols[i % 3].button(f"{label} · {min_label(mins)}", key=f"{key}_tpl{i}", use_container_width=True):
+                t = _add_quick(state, label.split(" ", 1)[1], mins, datetime.combine(now().date(), dtime(23, 59), TZ), cat)
+                flash(f"⚡ Added **{t['title']}** → +{t['reward']}" + (" · in today's mission" if t.get("mission_day") else ""))
+                st.rerun()
+
+
 def render_timer(state: dict) -> None:
     tm = state.get("timer")
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
@@ -1410,6 +1444,15 @@ def render_timer(state: dict) -> None:
             if not open_t:
                 st.caption("Add a task first — the timer is a receipt for real work.")
                 return
+            if st.button("🎲 Just tell me what to do", use_container_width=True, key="pick_next"):
+                pick = Q.pick_next(state["tasks"], now())
+                if pick:
+                    plen = Q.session_length(pick)
+                    state["timer"] = {"task_id": pick["id"], "start": now().isoformat(), "planned": plen}
+                    save_state(state)
+                    flash(f"🎲 **Do this now: {pick['title']}** — {plen}-min focus timer started. Nothing else exists.",
+                          sound="win")
+                    st.rerun()
             labels = {t["id"]: t["title"] for t in open_t}
             c1, c2 = st.columns([3, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
@@ -1485,18 +1528,12 @@ f();setInterval(f,500);
                 for ch in EV.focus_challenges(now().date(), TZ):
                     if ch["id"] not in done_ch and ch["start"] <= start < ch["end"] and mins >= ch["minutes"]:
                         done_ch.append(ch["id"])
-                        if ch["kind"] == "coins":
-                            bank(state, ch["val"], "⏱️ Focus challenge")
-                        elif ch["kind"] == "crate":
-                            drop_msg += "\n\n" + open_crate(state, {"reward": 45})
-                        elif ch["kind"] == "double":
-                            state["boost_until"] = (now() + timedelta(minutes=ch["val"])).isoformat()
-                        else:
-                            tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
-                            tok["upgrade"] = tok.get("upgrade", 0) + 1
-                        drop_msg = (f"🏆 **FOCUS CHALLENGE WON** — {EV.prize_label(ch['kind'], ch['val'])}!"
-                                    + (" Everything you finish now pays double." if ch["kind"] == "double" else "")
-                                    + ("\n\n" + drop_msg if drop_msg else ""))
+                        t["double"] = True
+                        state["xp"] += int(mins // 5)  # the session's own XP counts twice
+                        extra = ("\n\n" + open_crate(state, {"reward": 45})) if ch["kind"] == "double_crate" else ""
+                        drop_msg = (f"🏆 **FOCUS CHALLENGE WON** — this session counts ⚡ double: *{t['title']}* now "
+                                    f"pays **2× coins & XP** when you finish it, and you got +{int(mins // 5)} bonus XP."
+                                    + extra + ("\n\n" + drop_msg if drop_msg else ""))
                         snd = "jackpot"
                 save_state(state)
                 flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
@@ -1708,6 +1745,7 @@ if snd and state["settings"].get("sounds", True):
 
 render_today(state)
 
+render_quick_add(state, "qa_top")
 render_timer(state)
 
 lvl = level_of(state["xp"])
