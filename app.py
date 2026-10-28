@@ -2144,9 +2144,13 @@ if st.session_state.pop("_fresh_load", False) and notion_cfg():
 
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
+_excused = daily.excuse_outages(state, bank)
 crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
 rust_msg = process_rust(state)
-if crash_msgs or rust_msg or st.session_state.pop("_needs_save", False):
+if _excused:
+    crash_msgs = [m for m in crash_msgs if "MISSED QUALIFYING" not in m]
+    st.session_state.setdefault("flash", []).extend(("info", m) for m in _excused)
+if crash_msgs or rust_msg or _excused or st.session_state.pop("_needs_save", False):
     save_state(state)
     if crash_msgs:
         st.session_state["sound"] = "fail"

@@ -162,6 +162,27 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
     return msgs
 
 
+OUTAGE_DAYS = {"2026-10-28"}  # days the APP was down at the qualifying deadline — the player isn't charged for those
+
+
+def excuse_outages(save: dict, bank) -> list[str]:
+    """Undo a missed-qualifying charge on a day the app itself was unreachable. One-shot per day."""
+    msgs = []
+    for iso in OUTAGE_DAYS:
+        e = save.get("days", {}).get(iso)
+        if not e or not e.get("q_missed") or e.get("excused"):
+            continue
+        e["excused"] = True
+        bank(save, cfg(save)["qualify_penalty"], "🛠️ Refund: app was down at qualifying")
+        save["rival_heat"] = max(0, save.get("rival_heat", 0) - 1)
+        sc = e.get("safety_car")
+        save["tasks"] = [t for t in save["tasks"] if not (t["id"] == sc and t["status"] == "open")]
+        msgs.append("🛠️ The app was down at the qualifying deadline. That's on the app, not you: the −"
+                    f"{cfg(save)['qualify_penalty']} is refunded, the safety car is gone, and locking in still pays "
+                    f"+{cfg(save)['qualify_fuel']}.")
+    return msgs
+
+
 def lock_in(save: dict, now: datetime, task_ids: list[str], start_at: str | None, bank) -> str:
     c, today = cfg(save), now.date()
     e = day(save, today)
@@ -170,7 +191,7 @@ def lock_in(save: dict, now: datetime, task_ids: list[str], start_at: str | None
     for t in save["tasks"]:
         if t["id"] in task_ids:
             t["mission_day"] = today.isoformat()
-    if first and not e.get("q_missed"):
+    if first and (not e.get("q_missed") or e.get("excused")):
         bank(save, c["qualify_fuel"], "⛽ Qualified on time")
         return f"🚦 **Qualified.** +{c['qualify_fuel']} fuel coins. Now go finish it."
     return "🚦 Mission locked in."
