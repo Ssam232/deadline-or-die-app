@@ -3,17 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;700&display=swap" rel="stylesheet">
 <style>
-  :root { --row: 34px; --bg: #1a1c24; --line: #2f3340; --ink: #f0efec; --muted: #6f7380; --accent: #e63946; }
-  html, body { margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", system-ui, sans-serif; }
-  .lab { color: var(--ink); font-size: 14px; margin: 0 0 6px 2px; }
+  :root { --row: 34px; --bg: #1e222b; --line: #2c313c; --ink: #ece8df; --muted: #6b7080; --accent: #f5c518; }
+  html, body { margin: 0; padding: 0; background: transparent; font-family: "Saira Semi Condensed", system-ui, sans-serif; }
+  .lab { color: var(--ink); font-family: system-ui, sans-serif; font-size: 14px; margin: 0 0 6px 2px; }
   .wrap { position: relative; display: flex; gap: 2px; background: var(--bg); border-radius: 10px; padding: 0 6px;
           height: calc(var(--row) * 3); overflow: hidden; user-select: none; -webkit-user-select: none; }
   .band { position: absolute; left: 6px; right: 6px; top: var(--row); height: var(--row); border-radius: 8px;
-          background: rgba(230, 57, 70, .14); border: 1px solid rgba(230, 57, 70, .45); pointer-events: none; }
+          background: rgba(245, 197, 24, .10); border: 1px solid rgba(245, 197, 24, .55); pointer-events: none; }
   .fade { position: absolute; left: 0; right: 0; height: var(--row); pointer-events: none; z-index: 2; }
-  .fade.t { top: 0; background: linear-gradient(var(--bg), rgba(26, 28, 36, .2)); }
-  .fade.b { bottom: 0; background: linear-gradient(rgba(26, 28, 36, .2), var(--bg)); }
+  .fade.t { top: 0; background: linear-gradient(var(--bg), rgba(30, 34, 43, .2)); }
+  .fade.b { bottom: 0; background: linear-gradient(rgba(30, 34, 43, .2), var(--bg)); }
   .col { flex: 1; overflow-y: scroll; scroll-snap-type: y mandatory; scrollbar-width: none; -ms-overflow-style: none;
          overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .col::-webkit-scrollbar { display: none; }

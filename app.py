@@ -1446,7 +1446,7 @@ def render_dailies(state: dict) -> None:
             done = sum(r["done"] for r in rows)
             stake, _ = DL.at_stake(state, today)
             st.markdown(f"#### 🔁 Dailies · {done}/{len(rows)}"
-                        + (f" <small style='color:#e63946'>· −{stake} 🪙 at midnight if unfinished</small>"
+                        + (f" <small style='color:#ff6a5c'>· −{stake} 🪙 at midnight if unfinished</small>"
                            if stake else " <small>· all done ✅</small>"), unsafe_allow_html=True)
             for r in rows:
                 h = r["h"]
@@ -1520,6 +1520,32 @@ def due_picker(key: str, default: str = "9 PM") -> dtime:
     return DUE_CHIPS[pick]
 
 
+def _q_rm(fk: int, n: int) -> None:
+    i = st.session_state.get(f"q_queue{fk}_{n}")
+    if i is not None and i < len(st.session_state.get("q_pending", [])):
+        st.session_state["q_pending"].pop(i)
+
+
+def pending_has(txt: str) -> bool:
+    return any(t == txt.strip() for t, _ in st.session_state.get("q_pending", []))
+
+
+TIME_CHIPS = {"15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
+
+
+def _q_add(fk: int, clear: bool = True) -> None:
+    """Enter in the task box: add it with the chosen time (a time typed in the text, like '45m', wins)."""
+    txt = (st.session_state.get(f"q_new{fk}") or "").strip()
+    if not txt:
+        return
+    p_ = Q.parse(txt, now())
+    chip = TIME_CHIPS.get(st.session_state.get(f"q_min{fk}") or "30m", 30)
+    typed = re.search(r"\d+(?:\.\d+)?\s*(h|hr|hrs|hour|hours|m|min|mins|minutes)\b", txt, re.I)
+    st.session_state.setdefault("q_pending", []).append((txt, p_["minutes"] if typed else chip))
+    if clear:  # only from the Enter callback; the lock-in path resets the whole form by bumping fk instead
+        st.session_state[f"q_new{fk}"] = ""
+
+
 def render_qualify_form(state: dict) -> None:
     today = now().date()
     fk = st.session_state.setdefault("_qf_n", 0)  # bumped after a lock-in to reset every field
@@ -1553,9 +1579,15 @@ def render_qualify_form(state: dict) -> None:
                                 key=f"q_pick{fk}", placeholder="Your tasks, DECK 12 cards, papers…",
                                 help="✅ your tasks · 📅 DECK 12 (read-only; upcoming cards = an hour on them today) · "
                                      "📄 Zotero papers (45 min)")
-    new_txt = st.text_area("Or add new — one per line" if opts else "What will you finish today? One per line",
-                           key=f"q_new{fk}", height=68,
-                           placeholder="write methods 45m\nemail walter 15m by 3pm")
+    pending = st.session_state.setdefault("q_pending", [])
+    c1, c2 = st.columns([1.45, 1], vertical_alignment="bottom")
+    c1.text_input("Add a task" if not opts else "Or add a task", key=f"q_new{fk}",
+                  placeholder="e.g. Write 300 words of methods — Enter to add", on_change=_q_add, args=(fk,))
+    c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}", label_visibility="hidden")
+    if pending:
+        chips = [f"{Q.parse(t_, now())['title']} · {min_label(m_)}  ✕" for t_, m_ in pending]
+        st.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
+                 key=f"q_queue{fk}_{len(pending)}", on_change=_q_rm, args=(fk, len(pending)))
     c1, c2 = st.columns([1.15, 1])
     with c1:
         start_dt = start_picker(f"q_start{fk}", default="30m")
@@ -1565,8 +1597,13 @@ def render_qualify_form(state: dict) -> None:
     if not st.button("🚦 Lock it in", type="primary", use_container_width=True, key=f"q_go{fk}"):
         return
     dl = datetime.combine(today, due_t, TZ)
-    lines = [ln.strip() for ln in new_txt.splitlines() if ln.strip()]
-    parsed = [Q.parse(ln, now()) for ln in lines]
+    if (st.session_state.get(f"q_new{fk}") or "").strip() and not pending_has(st.session_state[f"q_new{fk}"]):
+        _q_add(fk, clear=False)  # typed but didn't press Enter
+    parsed = []
+    for ttl, mins_ in pending:
+        p_ = Q.parse(ttl, now())
+        p_["minutes"] = mins_
+        parsed.append(p_)
     minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked if k.startswith("t:"))
                + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
                + sum(p_["minutes"] for p_ in parsed))
@@ -1624,6 +1661,7 @@ def render_qualify_form(state: dict) -> None:
         ids.append(t["id"])
     msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
     st.session_state["_qf_n"] = fk + 1
+    st.session_state["q_pending"] = []
     cursor = max(datetime.combine(today, start_t, TZ), now().replace(second=0, microsecond=0))
     for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
         t = next(x for x in state["tasks"] if x["id"] == tid)
@@ -1640,7 +1678,7 @@ def render_today(state: dict) -> None:
     n_ = now()
     stt = daily.status(state, n_)
     c = daily.cfg(state)
-    with st.container(border=True):
+    with st.container(border=True, key="live_card"):
         render_coming_up(state)
         if stt["rest"]:
             st.markdown("### 🛌 Pit stop day")
@@ -1820,8 +1858,9 @@ def render_timer(state: dict) -> None:
             st.caption(f"🍅 {tm['planned']} min of work · {PM.label(work, brk)}. Breaks don't count toward the log.")
         _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
         _embed(f"""
-<div id="t" style="font:700 46px ui-monospace,Menlo,monospace;color:#e63946;text-align:center;"></div>
-<div id="s" style="font:14px system-ui;color:#aaa;text-align:center;"></div>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@700&display=swap" rel="stylesheet">
+<div id="t" style="font:700 52px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums;color:#f5c518;text-align:center;letter-spacing:.02em"></div>
+<div id="s" style="font:14px system-ui;color:#8b909c;text-align:center;"></div>
 <script>
 const st0={start_ms},end={end_ms},W={work or 0},B={brk or 0},T={tm["planned"]};
 let last=null,ac=null;
@@ -1833,9 +1872,9 @@ function f(){{const now=Date.now(),r=end-now,el=(now-st0)/60000;let ph='work',le
  if(r<=0)ph='done';else if(W&&B){{const c=W+B,rest=el%c,done=Math.floor(el/c)*W+Math.min(rest,W);
    if(rest<W)left=Math.min(W-rest,T-done)*60000;else{{ph='break';left=(c-rest)*60000;}}}}
  const t=document.getElementById('t'),s=document.getElementById('s');
- if(ph==='done'){{t.textContent='+'+mmss(r);t.style.color='#e63946';s.textContent='🏁 Session done — log it.';}}
- else if(ph==='break'){{t.textContent=mmss(left);t.style.color='#4cc9f0';s.textContent='☕ BREAK — stand up, water, no phone. Back at 00:00.';}}
- else{{t.textContent=mmss(left);t.style.color='#e63946';s.textContent=(W&&B&&r>left+1000)?'Work — break in '+mmss(left)+'. Phone face-down.':'Phone face-down. One thing only.';}}
+ if(ph==='done'){{t.textContent='+'+mmss(r);t.style.color='#ff6a5c';s.textContent='🏁 Session done — log it.';}}
+ else if(ph==='break'){{t.textContent=mmss(left);t.style.color='#2ec4b6';s.textContent='☕ BREAK — stand up, water, no phone. Back at 00:00.';}}
+ else{{t.textContent=mmss(left);t.style.color='#f5c518';s.textContent=(W&&B&&r>left+1000)?'Work — break in '+mmss(left)+'. Phone face-down.':'Phone face-down. One thing only.';}}
  if(last&&last!==ph)beep(ph==='work'?2:ph==='break'?1:3);last=ph;}}
 f();setInterval(f,500);
 </script>""", height=90)  # our own static markup only — no user content goes in here
@@ -1994,8 +2033,79 @@ def render_lounge(state: dict) -> None:
             st.rerun()
 
 
+
+# ─────────────────────────── look & feel ───────────────────────────
+# Fonts + colours live in .streamlit/config.toml (Barlow / Saira Semi Condensed, asphalt + Phoenix Yellow).
+# This only adds what the theme can't: the instrument cluster, the live-card rail, dark text on yellow buttons.
+CSS = """<style>
+:root{--y:#f5c518;--r:#e10600;--t:#2ec4b6;--panel:#1b1f27;--line:#2c313c;--muted:#8b909c}
+.block-container{max-width:880px;padding-top:2.4rem}
+[data-testid="stBaseButton-primary"] *,[data-testid="stBaseButton-primaryFormSubmit"] *{color:#14171d!important;font-weight:700}
+.st-key-live_card{border-left:4px solid var(--y)!important}
+[data-baseweb="tab-list"]{gap:4px;border-bottom:1px solid var(--line)}
+[data-baseweb="tab"] p{font-family:"Saira Semi Condensed",sans-serif;font-weight:600;font-size:1rem}
+[data-testid="stMetricValue"]{font-family:"Saira Semi Condensed",sans-serif;font-variant-numeric:tabular-nums}
+.dod-hero h1{font-family:"Saira Semi Condensed",sans-serif;font-weight:800;font-style:italic;font-size:2.7rem;
+  line-height:1;margin:0;padding:0;letter-spacing:-.01em}
+.dod-hero p{color:var(--muted);margin:.45rem 0 1.1rem;font-size:.98rem}
+.dod-cluster{display:grid;grid-template-columns:repeat(4,1fr);background:#101319;border:1px solid var(--line);
+  border-radius:14px;overflow:hidden;margin:0 0 1.1rem}
+.dod-cell{padding:12px 16px 10px;border-left:1px solid var(--line)}
+.dod-cell:first-child{border-left:0}
+.dod-k{color:var(--muted);font-size:.82rem}
+.dod-v{font-family:"Saira Semi Condensed",sans-serif;font-weight:700;font-size:2.1rem;line-height:1.08;color:var(--y);
+  font-variant-numeric:tabular-nums}
+.dod-v.bad{color:var(--r)}
+.dod-s{font-size:.78rem;color:var(--muted)}
+.dod-xp{grid-column:1/-1;border-top:1px solid var(--line);padding:8px 16px;display:flex;align-items:center;gap:12px;
+  font-size:.84rem;color:var(--muted)}
+.dod-xp b{color:#ece8df;font-weight:600}
+.dod-bar{flex:1;height:4px;background:#262b36;border-radius:2px;overflow:hidden}
+.dod-bar i{display:block;height:100%;background:var(--y)}
+.dod-rows{margin:.2rem 0 .6rem}
+.dod-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line)}
+.dod-row:last-child{border-bottom:0}
+.dod-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dod-row .m{color:var(--muted);font-size:.9rem}
+@media (max-width:640px){
+  .dod-cluster{grid-template-columns:repeat(2,1fr)}
+  .dod-cell:nth-child(3){border-left:0}
+  .dod-cell:nth-child(n+3){border-top:1px solid var(--line)}
+  .dod-hero h1{font-size:2.2rem}
+}
+</style>"""
+
+
+def status_rows(rows: list[tuple]) -> None:
+    """[(state, title, detail)] with state True=connected, False=missing, None=off. Quiet list, not alert boxes."""
+    col = {True: "#2ec4b6", False: "#e10600", None: "#5b6070"}
+    st.markdown("<div class='dod-rows'>" + "".join(
+        f"<div class='dod-row'><span class='dod-dot' style='background:{col[ok]}'></span><div><b>{html.escape(t)}</b>"
+        + (f" <span class='m'>{html.escape(d)}</span>" if d else "") + "</div></div>" for ok, t, d in rows) + "</div>",
+        unsafe_allow_html=True)
+
+
+def render_cluster(state: dict) -> None:
+    lvl = level_of(state["xp"])
+    into, span = state["xp"] - xp_for_level(lvl), xp_for_level(lvl + 1) - xp_for_level(lvl)
+    ds, cond, coins = state.get("day_streak", 0), state["car"]["condition"], state["coins"]
+    cells = [
+        ("Coins", f"{coins:,}", "in debt — black flag" if coins < 0 else "", coins < 0),
+        ("Day streak", f"{ds}", f"best {state.get('best_day_streak', 0)}", False),
+        ("Focus today", f"{focus_today(state)}m", "", False),
+        ("Car", f"{cond}%", "repair in the Garage" if cond < 60 else "", cond < 40),
+    ]
+    st.markdown(
+        "<div class='dod-cluster'>" + "".join(
+            f"<div class='dod-cell'><div class='dod-k'>{k}</div><div class='dod-v{' bad' if bad else ''}'>{v}</div>"
+            f"<div class='dod-s'>{sub or '&nbsp;'}</div></div>" for k, v, sub, bad in cells)
+        + f"<div class='dod-xp'><b>Level {lvl}</b><div class='dod-bar'><i style='width:{100 * into / span:.0f}%'></i></div>"
+          f"{into}/{span} XP · task streak {state['streak']}</div></div>", unsafe_allow_html=True)
+
+
 # ─────────────────────────── app ───────────────────────────
 st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="centered")
+st.markdown(CSS, unsafe_allow_html=True)
 if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
     os.environ["NTFY_TOPIC"] = get_secret("NTFY_TOPIC")  # same secret seed as the nagger for surprise events
 
@@ -2037,12 +2147,12 @@ if crash_msgs or rust_msg or st.session_state.pop("_needs_save", False):
         st.session_state["sound"] = "fail"
 
 PLAYER = state["settings"].get("player_name") or "driver"
-st.title("🏁 Deadline or Die")
 hour = now().hour
 greet = "Late night" if hour < 5 else "Morning" if hour < 12 else "Afternoon" if hour < 18 else "Evening"
-st.caption(f"{greet}, {PLAYER}. Prove it or pay for it."
-           + (" It's a danger day — no one's watching you today. +20% on everything you finish."
-              if now().weekday() in DANGER_DAYS else ""))
+st.markdown(f"<div class='dod-hero'><h1>Deadline or Die</h1><p>{greet}, {html.escape(PLAYER)}. Prove it or pay for it."
+            + (" It's a danger day: no one's watching, so everything you finish pays +20%."
+               if now().weekday() in DANGER_DAYS else "") + "</p></div>", unsafe_allow_html=True)
+render_cluster(state)
 
 for kind, m in sync_msgs:
     getattr(st, kind)(m)
@@ -2101,14 +2211,6 @@ render_quick_add(state, "qa_top")
 render_timer(state)
 
 lvl = level_of(state["xp"])
-ds = state.get("day_streak", 0)
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("🪙 Coins", state["coins"])
-c2.metric("📅 Day streak", f"{ds} 🔥" if ds else "0", f"best {state.get('best_day_streak', 0)}", delta_color="off")
-c3.metric("⏱️ Focus today", f"{focus_today(state)}m")
-c4.metric("🔧 Car", f"{state['car']['condition']}%")
-st.caption(f"🧑‍✈️ Level {lvl} · {state['xp'] - xp_for_level(lvl)}/{xp_for_level(lvl + 1) - xp_for_level(lvl)} XP · "
-           f"task streak {state['streak']} (best {state['best_streak']})")
 
 tab_pit, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
     ["🏁 Pit Wall", "✅ Tasks", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"])
@@ -2636,181 +2738,220 @@ with tab_lounge:
 # ── Settings ──
 with tab_set:
     s = state["settings"]
-    with st.form("settings"):
-        st.subheader("You")
-        pname = st.text_input("Driver name", value=s.get("player_name", "Driver"))
-        sounds = st.toggle("Sound cues (win chime / fail buzzer)", value=s.get("sounds", True))
-        focus_lock = st.toggle("🔒 Block games while a focus session runs", value=s.get("focus_lock", True))
-        st.subheader("Rules")
-        grace = st.number_input("Grace period after deadline (minutes)", 0, 240, value=int(s["grace_minutes"]))
-        strict = st.toggle("Strict proof — a file is always required", value=s["strict_proof"])
-        ext_h = st.number_input("Extension length (hours)", 1, 72, value=int(s["extension_hours"]))
-        max_ext = st.number_input("Max extensions per task", 0, 5, value=int(s["max_extensions"]))
-        st.subheader("Daily qualifying")
-        dc = daily.cfg(state)
-        q_by = st.number_input("Mission must be locked in by (hour, 24h)", 6, 16, value=int(dc["qualify_by"]))
-        wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        rest = st.multiselect("Standing rest days (never penalized)", wd, default=[wd[i] for i in dc["rest_days"]])
-        st.subheader("AI race steward (Claude)")
-        ai = st.toggle("Have Claude verify proof", value=s["ai_steward"])
-        model = st.text_input("Model", value=s["model"])
-        st.subheader("Import from another Notion database (optional)")
-        st.caption("Your synced Deadline or Die table is automatic. This is for pulling from an existing task list.")
-        db = st.text_input("Database link or ID", value=s["notion_db"])
-        dprop = st.text_input("Due-date property name (blank = first date property)", value=s["notion_date_prop"])
-        fprop = st.text_input("Done property name (checkbox / status / select — optional)",
-                              value=s["notion_done_prop"])
-        if st.form_submit_button("Save settings", type="primary"):
-            s.update({"player_name": pname.strip() or "Driver", "sounds": sounds, "focus_lock": focus_lock, "grace_minutes": int(grace), "strict_proof": strict, "extension_hours": int(ext_h),
-                      "max_extensions": int(max_ext), "qualify_by": int(q_by), "rest_days": [wd.index(x) for x in rest],
-                      "ai_steward": ai, "model": model.strip(),
-                      "notion_db": db.strip(), "notion_date_prop": dprop.strip(),
-                      "notion_done_prop": fprop.strip()})
-            save_state(state)
-            flash("Settings saved.")
-            st.rerun()
+    sec = st.segmented_control("Section", ["Driver", "Rules", "Boards", "Phone & locks", "Integrations", "Backup"],
+                               default="Driver", key="set_sec", label_visibility="collapsed") or "Driver"
+    tok = get_secret("NOTION_TOKEN")
 
-    st.subheader("Connections")
-    if notion_cfg():
-        try:
-            _ids = notion_ctx()[1]
-            st.success("💾 Saving to Notion — your tasks table, save file and nagger memory live under your "
-                       "Deadline or Die page.")
-        except Exception as e:
-            st.error(f"Notion configured but not reachable: {e}")
-    else:
-        st.info("💾 Saving to this machine only. Add NOTION_TOKEN + NOTION_PARENT_PAGE to save to Notion "
-                "(required on Streamlit Cloud — its disk gets wiped).")
-    topic = get_secret("NTFY_TOPIC")
-    if topic:
-        if st.button("📳 Send a test buzz to my phone"):
-            ok = push(topic, "🏁 Deadline or Die", f"Test buzz, {PLAYER}. This is what a checkered flag feels like.",
-                      priority=4, tags=["checkered_flag"], click=get_secret("APP_URL"))
-            st.success("Sent — check your phone.") if ok else st.error("ntfy didn't accept it. Check the topic name.")
-    else:
-        st.caption("📳 Phone buzzes off — set NTFY_TOPIC (see README).")
-
-    st.subheader("🗓️ Your DECK 12 boards")
-    st.caption("**Input board** (e.g. Assignments): strictly read-only — today + upcoming cards become one-tap "
-               "suggestions and events you can prep for; nothing is ever written to it. **Output board** (e.g. Fortuna): write-only — every task lands on it at the time it's "
-               "set to happen (or when it was assigned) and ticks ✅ when done. Nothing is ever read back from the "
-               "output board, so anything else you put there stays out of the game.")
-    if not notion_cfg():
-        st.caption("Needs the Notion connection first.")
-    else:
-        for key_, label_ in (("board_db", "📥 Input"), ("out_db", "📤 Output (write-only)")):
-            cur = s.get(key_)
-            if cur:
-                try:
-                    st.success(f"{label_}: **{_board_map(get_secret('NOTION_TOKEN'), cur)['name']}** · "
-                               + B.describe(_board_map(get_secret("NOTION_TOKEN"), cur)))
-                except Exception as e:
-                    st.error(f"{label_}: can't read it ({e}). Is it inside DECK 12 (shared with the integration)?")
-                if st.button(f"Unlink {label_.split()[1].lower()} board", key=f"unlink_{key_}"):
-                    s[key_] = ""
+    if sec == "Driver":
+        with st.container(border=True):
+            st.markdown("#### Driver")
+            with st.form("set_driver", border=False):
+                pname = st.text_input("Name the app calls you", value=s.get("player_name", "Driver"))
+                sounds = st.toggle("Sound cues when you win or miss", value=s.get("sounds", True))
+                focus_lock = st.toggle("Block games while a focus session runs", value=s.get("focus_lock", True))
+                if st.form_submit_button("Save", type="primary"):
+                    s.update(player_name=pname.strip() or "Driver", sounds=sounds, focus_lock=focus_lock)
                     save_state(state)
+                    flash("Saved.")
                     st.rerun()
+
+    elif sec == "Rules":
+        dc = daily.cfg(state)
+        wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        with st.container(border=True):
+            st.markdown("#### Rules")
+            with st.form("set_rules", border=False):
+                c1, c2 = st.columns(2)
+                q_by = c1.slider("Lock in your mission by", 6, 16, int(dc["qualify_by"]),
+                                 format="%d:00", help="After this, the safety car picks your task (24h clock).")
+                grace = c2.slider("Grace after a deadline (min)", 0, 240, int(s["grace_minutes"]), 15)
+                c3, c4 = st.columns(2)
+                ext_h = c3.slider("Extension length (h)", 1, 72, int(s["extension_hours"]))
+                max_ext = c4.slider("Extensions per task", 0, 5, int(s["max_extensions"]))
+                rest = st.pills("Standing rest days (never penalized)", wd, selection_mode="multi",
+                                default=[wd[i] for i in dc["rest_days"]])
+                strict = st.toggle("Every proof needs a file", value=s["strict_proof"])
+                ai = st.toggle("Claude checks your proof", value=s["ai_steward"],
+                               help="Needs an Anthropic API key (Integrations).")
+                if st.form_submit_button("Save rules", type="primary"):
+                    s.update(grace_minutes=int(grace), strict_proof=strict, extension_hours=int(ext_h),
+                             max_extensions=int(max_ext), qualify_by=int(q_by), rest_days=[wd.index(x) for x in rest or []],
+                             ai_steward=ai)
+                    save_state(state)
+                    flash("Rules saved.")
+                    st.rerun()
+
+    elif sec == "Boards":
+        with st.container(border=True):
+            st.markdown("#### DECK 12 boards")
+            st.caption("Input is read-only: its cards become suggestions and events to prep for. Output is "
+                       "write-only: your tasks land on it at the time they're set to happen. Neither is ever "
+                       "touched the other way.")
+            if not notion_cfg():
+                status_rows([(False, "Notion isn't connected", "add NOTION_TOKEN and NOTION_PARENT_PAGE to secrets")])
             else:
-                st.caption(f"{label_}: not linked")
-        if s.get("board_db") and s.get("board_db") == s.get("out_db"):
-            st.warning("Input and output are the same board — pick a separate one for output.")
-        if st.button("🔎 Find my boards"):
-            try:
-                n_, ids_ = notion_ctx()
-                st.session_state["board_list"] = B.list_databases(n_, {ids_["tasks_db"].replace("-", "")})
-            except Exception as e:
-                st.error(str(e))
-        dbs = st.session_state.get("board_list")
-        if dbs is not None:
-            if not dbs:
-                st.info("No other databases are visible. If your board is a linked view, share its source database "
-                        "with the Deadline or Die connection.")
-            else:
-                pick = st.selectbox("Which board?", [d["id"] for d in dbs],
-                                    format_func=lambda i: next(d["title"] for d in dbs if d["id"] == i))
-                c1, c2, c3 = st.columns(3)
-                if c1.button("Test it"):
+                rows = []
+                for key_, label_ in (("board_db", "Input"), ("out_db", "Output")):
+                    cur = s.get(key_)
+                    if not cur:
+                        rows.append((None, f"{label_}: not linked", ""))
+                        continue
                     try:
-                        m = B.detect(Notion(get_secret("NOTION_TOKEN")), pick)
-                        st.info(B.describe(m))
-                        items = B.pull_day(Notion(get_secret("NOTION_TOKEN")), m, now().date())
-                        st.caption("Today on it: " + (", ".join(i["title"] for i in items) or "nothing"))
+                        m_ = _board_map(tok, cur)
+                        rows.append((True, f"{label_}: {m_['name']}",
+                                     "reads " + ", ".join(x for x in (m_["title"], m_["date"], m_["weekday"]) if x)
+                                     if key_ == "board_db" else
+                                     "writes " + ", ".join(x for x in (m_["title"], m_["date"], m_["weekday"], m_["time"]) if x)))
+                    except Exception as e:
+                        rows.append((False, f"{label_}: can't read it", str(e)[:90]))
+                status_rows(rows)
+                if s.get("board_db") and s.get("board_db") == s.get("out_db"):
+                    st.warning("Input and output are the same board. Pick a separate board for output.")
+                c1, c2, c3 = st.columns(3)
+                if c1.button("Find boards", use_container_width=True):
+                    try:
+                        n_, ids_ = notion_ctx()
+                        st.session_state["board_list"] = B.list_databases(n_, {ids_["tasks_db"].replace("-", "")})
                     except Exception as e:
                         st.error(str(e))
-                if c2.button("📥 Use as input"):
-                    s["board_db"] = pick
+                if s.get("board_db") and c2.button("Unlink input", use_container_width=True):
+                    s["board_db"] = ""
                     save_state(state)
-                    st.session_state.pop("board_list", None)
-                    flash("📥 Input board linked (read-only) — its cards show up as suggestions.")
                     st.rerun()
-                if c3.button("📤 Use as output", type="primary"):
-                    s["out_db"] = pick
+                if s.get("out_db") and c3.button("Unlink output", use_container_width=True):
+                    s["out_db"] = ""
                     save_state(state)
-                    st.session_state.pop("board_list", None)
-                    flash("📤 Output board linked — your tasks now land on it (write-only).")
+                    st.rerun()
+                dbs = st.session_state.get("board_list")
+                if dbs is not None:
+                    if not dbs:
+                        st.info("No other databases are visible. If your board is a linked view, share its source "
+                                "database with the Deadline or Die connection.")
+                    else:
+                        pick = st.selectbox("Board", [d["id"] for d in dbs],
+                                            format_func=lambda i: next(d["title"] for d in dbs if d["id"] == i))
+                        c1, c2, c3 = st.columns(3)
+                        if c1.button("Preview", use_container_width=True):
+                            try:
+                                m = B.detect(Notion(tok), pick)
+                                items = B.pull_day(Notion(tok), m, now().date())
+                                st.caption(B.describe(m) + " · today: " + (", ".join(i["title"] for i in items) or "nothing"))
+                            except Exception as e:
+                                st.error(str(e))
+                        if c2.button("Use as input", use_container_width=True):
+                            s["board_db"] = pick
+                            save_state(state)
+                            st.session_state.pop("board_list", None)
+                            flash("Input board linked. Its cards show up as suggestions.")
+                            st.rerun()
+                        if c3.button("Use as output", type="primary", use_container_width=True):
+                            s["out_db"] = pick
+                            save_state(state)
+                            st.session_state.pop("board_list", None)
+                            flash("Output board linked. Your tasks now land on it.")
+                            st.rerun()
+
+    elif sec == "Phone & locks":
+        topic = get_secret("NTFY_TOPIC")
+        lt = LK.topic(topic)
+        with st.container(border=True):
+            st.markdown("#### Phone & locks")
+            status_rows([
+                (bool(topic), "Phone nags" if topic else "Phone nags are off", "ntfy topic set" if topic else
+                 "set NTFY_TOPIC in secrets"),
+                (bool(lt), "Lock broadcast", f"{lt} · now {LK.message(LK.status(state, now()))}" if lt else
+                 "needs NTFY_TOPIC"),
+            ])
+            if topic and st.button("Send a test buzz"):
+                ok = push(topic, "🏁 Deadline or Die", f"Test buzz, {PLAYER}. This is what a checkered flag feels like.",
+                          priority=4, tags=["checkered_flag"], click=get_secret("APP_URL"))
+                st.success("Sent. Check your phone.") if ok else st.error("ntfy didn't accept it. Check the topic name.")
+            st.caption("No push on iPhone? Remove and re-add the topic in the ntfy app, and check Settings → "
+                       "Notifications → ntfy (banners on, delivery Immediate, not filtered by a Focus).")
+        if _pw:
+            with st.container(border=True):
+                st.markdown("#### Open without a password")
+                st.caption("Open this link once on your phone, then Share → Add to Home Screen. Put it in the "
+                           "APP_URL secret too, so notifications open logged in. Treat it like a password.")
+                st.code(f"{(get_secret('APP_URL') or '').split('?')[0]}?k={remember_key(_pw)}", language=None)
+
+    elif sec == "Integrations":
+        names = {"NOTION_TOKEN": "Notion", "NOTION_PARENT_PAGE": "Notion page", "NTFY_TOPIC": "Phone (ntfy)",
+                 "APP_URL": "App link", "ZOTERO_USER_ID": "Zotero user", "ZOTERO_API_KEY": "Zotero key",
+                 "ANTHROPIC_API_KEY": "Claude (proof checks, planning)"}
+        with st.container(border=True):
+            st.markdown("#### Connections")
+            if notion_cfg():
+                try:
+                    notion_ctx()
+                    nrow = (True, "Saving to Notion", "tasks, save file and nagger memory live under your page")
+                except Exception as e:
+                    nrow = (False, "Notion is set but unreachable", str(e)[:90])
+            else:
+                nrow = (False, "Saving on this server only", "add NOTION_TOKEN + NOTION_PARENT_PAGE")
+            status_rows([nrow] + [(bool(get_secret(k)), v, "set" if get_secret(k) else "not set")
+                                  for k, v in names.items() if k not in ("NOTION_TOKEN", "NOTION_PARENT_PAGE")])
+            st.caption("Keys belong in the Streamlit secrets box (and GitHub secrets for the phone nagger). "
+                       "Anything typed below lasts for this session only.")
+            with st.expander("Enter a key for this session"):
+                kname = st.selectbox("Key", [k for k in names if not get_secret(k) or st.session_state.get(f"secret_{k}")],
+                                     format_func=names.get) if any(not get_secret(k) for k in names) else None
+                if kname:
+                    val = st.text_input("Value", type="password" if "KEY" in kname or "TOKEN" in kname else "default",
+                                        key=f"in_{kname}")
+                    if val:
+                        st.session_state[f"secret_{kname}"] = val.strip()
+                else:
+                    st.caption("Everything is already set.")
+        with st.container(border=True):
+            st.markdown("#### Zotero")
+            if zotero_cfg(state):
+                zc_ = zotero_cfg(state)
+                c1, c2, c3 = st.columns([2, 1, 1], vertical_alignment="bottom")
+                new_coll = c1.text_input("Collection to pull papers from", value=zc_[2], key="zot_coll")
+                if c2.button("Test", use_container_width=True):
+                    try:
+                        ps = Z.to_read(*zc_[:2], new_coll)
+                        st.success(f"{len(ps)} unread in “{new_coll}”. First up: {Z.label(ps[0]) if ps else 'nothing'}")
+                    except Exception as e:
+                        st.error(str(e))
+                if c3.button("Save", use_container_width=True) and new_coll.strip():
+                    s["zotero_collection"] = new_coll.strip()
+                    save_state(state)
+                    st.rerun()
+            else:
+                st.caption("Add ZOTERO_USER_ID and ZOTERO_API_KEY to secrets. Both are on zotero.org/settings/keys; "
+                           "the user ID is at the top of that page.")
+        with st.expander("Claude model and Notion import"):
+            with st.form("set_adv", border=False):
+                model = st.text_input("Claude model", value=s["model"])
+                db = st.text_input("Import tasks from another Notion database (link or ID)", value=s["notion_db"])
+                c1, c2 = st.columns(2)
+                dprop = c1.text_input("Due-date property (blank = first date)", value=s["notion_date_prop"])
+                fprop = c2.text_input("Done property (optional)", value=s["notion_done_prop"])
+                if st.form_submit_button("Save", type="primary"):
+                    s.update(model=model.strip(), notion_db=db.strip(), notion_date_prop=dprop.strip(),
+                             notion_done_prop=fprop.strip())
+                    save_state(state)
+                    flash("Saved.")
                     st.rerun()
 
-    st.subheader("🔒 Lock enforcement")
-    lt = LK.topic(get_secret("NTFY_TOPIC"))
-    if lt:
-        st.caption(f"Lock state is broadcast to **{lt}** — the PC enforcer and the iPhone Shortcut read it "
-                   "(setup in the README). Current: " + LK.message(LK.status(state, now())))
-    else:
-        st.caption("Set NTFY_TOPIC to enable PC/phone locks.")
-    if _pw:
-        st.subheader("📱 Remember-me link")
-        st.caption("Open this link once on your phone, then Share → Add to Home Screen: no password from then on. "
-                   "Put it in the APP_URL secret (GitHub + Streamlit) so notifications open logged in too. "
-                   "Treat it like a password.")
-        st.code(f"{(get_secret('APP_URL') or '').split('?')[0]}?k={remember_key(_pw)}", language=None)
-
-    st.subheader("📄 Zotero reading list")
-    if zotero_cfg(state):
-        zc_ = zotero_cfg(state)
-        new_coll = st.text_input("Collection to pull papers from", value=zc_[2], key="zot_coll")
-        c1, c2 = st.columns(2)
-        if c1.button("Test Zotero"):
-            try:
-                ps = Z.to_read(*zc_[:2], new_coll)
-                st.success(f"{len(ps)} unread papers in “{new_coll}”. First up: {Z.label(ps[0]) if ps else '—'}")
-            except Exception as e:
-                st.error(str(e))
-        if c2.button("Save collection") and new_coll.strip():
-            s["zotero_collection"] = new_coll.strip()
-            save_state(state)
-            st.rerun()
-    else:
-        st.caption("Add ZOTERO_USER_ID and ZOTERO_API_KEY below (or in secrets). Get both at zotero.org/settings/keys — "
-                   "the user ID is shown at the top of that page.")
-
-    st.subheader("Keys")
-    st.caption("Best: put them in `.streamlit/secrets.toml` (or the Streamlit Cloud secrets box). "
-               "Anything typed here lasts for this session only.")
-    for name in ("ANTHROPIC_API_KEY", "NOTION_TOKEN", "NOTION_PARENT_PAGE", "NTFY_TOPIC", "APP_URL",
-                 "ZOTERO_USER_ID", "ZOTERO_API_KEY"):
-        if get_secret(name) and not st.session_state.get(f"secret_{name}"):
-            st.caption(f"{name}: ✅ set in secrets")
-            continue
-        val = st.text_input(name, type="password" if "KEY" in name or "TOKEN" in name else "default",
-                            key=f"in_{name}")
-        if val:
-            st.session_state[f"secret_{name}"] = val.strip()
-        st.caption(f"{name}: {'✅ set' if get_secret(name) else '❌ not set'}")
-
-    st.subheader("Backup")
-    st.download_button("⬇️ Download save file", json.dumps(state, indent=2, default=str),
-                       file_name=f"deadline-or-die-{now():%Y%m%d}.json", mime="application/json")
-    restore = st.file_uploader("Restore from a save file", type=["json"], key="restore")
-    if restore and st.button("Restore"):
-        try:
-            save_state(_merge(default_state(), json.loads(restore.getvalue())))
-            flash("Save restored.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Couldn't read that file: {e}")
-
-    with st.expander("☠️ Danger zone"):
-        if st.checkbox("I want to wipe everything") and st.button("Reset game"):
-            save_state(default_state())
-            flash("Fresh start.", "warning")
-            st.rerun()
+    else:  # Backup
+        with st.container(border=True):
+            st.markdown("#### Backup")
+            st.download_button("Download save file", json.dumps(state, indent=2, default=str),
+                               file_name=f"deadline-or-die-{now():%Y%m%d}.json", mime="application/json")
+            restore = st.file_uploader("Restore from a save file", type=["json"], key="restore")
+            if restore and st.button("Restore this save"):
+                try:
+                    save_state(_merge(default_state(), json.loads(restore.getvalue())))
+                    flash("Save restored.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Couldn't read that file: {e}")
+        with st.expander("Reset everything"):
+            st.caption("Wipes coins, cars, tasks and history. Download a backup first.")
+            if st.checkbox("I want to wipe everything") and st.button("Reset game"):
+                save_state(default_state())
+                flash("Fresh start.", "warning")
+                st.rerun()

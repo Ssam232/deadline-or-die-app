@@ -1,9 +1,23 @@
 [theme]
 base = "dark"
-primaryColor = "#e63946"
-backgroundColor = "#0d0f14"
-secondaryBackgroundColor = "#1a1d26"
-textColor = "#f1f1f1"
+primaryColor = "#f5c518"
+backgroundColor = "#14171d"
+secondaryBackgroundColor = "#1e222b"
+textColor = "#ece8df"
+linkColor = "#f5c518"
+borderColor = "#2c313c"
+showWidgetBorder = false
+baseRadius = "10px"
+buttonRadius = "9px"
+font = "Barlow:https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap"
+headingFont = "Saira Semi Condensed:https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700;800&display=swap"
+headingFontWeights = [800, 700, 700, 600, 600, 600]
+baseFontSize = 16
+metricValueFontWeight = 700
+redColor = "#e10600"
+greenColor = "#2ec4b6"
+yellowColor = "#f5c518"
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
 
 [server]
 maxUploadSize = 25
