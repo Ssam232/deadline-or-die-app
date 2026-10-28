@@ -118,7 +118,7 @@ Settings → add `ZOTERO_USER_ID` + `ZOTERO_API_KEY` (zotero.org/settings/keys; 
 Log in once — the address bar gains `?k=…`. Add *that* page to your Home Screen, and put it in the `APP_URL` secret (Streamlit + GitHub) so notifications open logged in. Settings → 📱 Remember-me link shows it.
 
 ## ⏱️ Focus challenges & session loot
-**⏱️ Focus challenges:** 1–3 a day, e.g. *start a 60-min session between 3–5 PM → ⚡ double coins & XP for 2h* (or a crate, a free upgrade, coins). Your phone pings when each window opens; the morning briefing lists them. Plus every full 25+ min session rolls a small random drop (3/day). As you level up, penalties grow (up to 2×) and your daily mission must total 30 → 60 minutes.
+**⏱️ Focus challenges:** 1–3 a day, e.g. *start a 60-min session between 3–5 PM → ⚡ double coins & XP for 2h* (or a crate, a free upgrade, coins). They're a surprise: no schedule anywhere — your phone pings the moment a window opens (seeded from your private topic, so even the code can't spoil it). Plus every full 25+ min session rolls a small random drop (3/day). As you level up, penalties grow (up to 2×) and your daily mission must total 30 → 60 minutes.
 
 ## 🏢 The Honda ladder
 Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Six upgrade paths (engine, wheels & tires, aero, brakes, forced induction, weight), each with real part names and a 💡 lesson — and each visible on the car. Every chassis has a tuning limit (Civic Si L3 … NSX L5); parts you buy carry over.

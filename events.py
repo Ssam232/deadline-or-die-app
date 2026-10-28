@@ -6,6 +6,7 @@ Seeded by date, so the app and the phone nagger agree on the schedule without sh
 """
 from __future__ import annotations
 
+import os
 import random
 from datetime import date, datetime, time as dtime, timedelta
 
@@ -26,8 +27,13 @@ TYPES = {
 BOUNTY = 75
 
 
+def _seed(kind: str, d: date) -> str:
+    """Salted with your private ntfy topic, so the public code can't be used to predict the schedule."""
+    return f"{kind}-{d.isoformat()}-{os.getenv('NTFY_TOPIC', '')}"
+
+
 def todays(d: date, tz) -> list[dict]:
-    rng = random.Random(f"events-{d.isoformat()}")
+    rng = random.Random(_seed("events", d))
     n = rng.choice([0, 1, 1, 1, 2, 2])
     keys = list(TYPES)
     out, used = [], set()
@@ -76,7 +82,7 @@ def prize_label(kind: str, val) -> str:
 
 def focus_challenges(d: date, tz) -> list[dict]:
     """1–3 timed challenges a day: start a session of N minutes inside the window, win the prize."""
-    rng = random.Random(f"challenges-{d.isoformat()}")
+    rng = random.Random(_seed("challenges", d))
     n = rng.choice([1, 2, 2, 3])
     starts = sorted(rng.sample(range(9 * 60, 19 * 60 + 1, 30), n))
     out = []

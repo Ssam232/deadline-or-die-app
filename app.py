@@ -1426,11 +1426,10 @@ def render_timer(state: dict) -> None:
                     st.markdown(f"✅ ~~{ch['label']}~~")
                 elif ch["start"] <= now() < ch["end"]:
                     st.markdown(f"🔥 **LIVE CHALLENGE:** {ch['label']} — {fmt_left(ch['end'] - now())} left to start")
-                elif now() < ch["start"]:
-                    st.caption(f"⏱️ Later: {ch['label']}")
             drops_left = EV.DROPS_PER_DAY - sum(1 for x in state.get("focus_log", [])
                                                  if x["date"] == now().date().isoformat() and x.get("drop"))
-            st.caption(f"Full 25+ min sessions also drop loot ({max(0, drops_left)} left today). "
+            st.caption("⏱️ Focus challenges pop up at random — your phone buzzes when one opens. "
+                       f"Full 25+ min sessions also drop loot ({max(0, drops_left)} left today). "
                        f"Timer-verified tasks pay **+{int(V.TIMER_BONUS * 100)}%**. Today: **{focus_today(state)} min**."
                        + (f" Tokens: ⚡×{tok.get('double', 0)} 🔧×{tok.get('upgrade', 0)}"
                           if tok.get("double") or tok.get("upgrade") else ""))
@@ -1612,6 +1611,8 @@ def render_lounge(state: dict) -> None:
 
 # ─────────────────────────── app ───────────────────────────
 st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="centered")
+if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
+    os.environ["NTFY_TOPIC"] = get_secret("NTFY_TOPIC")  # same secret seed as the nagger for surprise events
 
 # Password gate — set APP_PASSWORD in secrets so nobody else can see your tasks and proof.
 _pw = get_secret("APP_PASSWORD")

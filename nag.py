@@ -306,9 +306,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             elif not stt["qualified"]:
                 body += f"\n\n🚦 Qualifying closes {stt['deadline']:%I:%M %p} — lock in today's mission."
             body += f"\n📅 Day streak: {stt['day_streak']}"
-            chs = EV.focus_challenges(now.date(), TZ)
-            if chs:
-                body += "\n\n⏱️ Today's focus challenges:\n" + "\n".join(f"• {c['label']}" for c in chs)
+            body += "\n⏱️ Focus challenges can drop any time today. Keep your phone close."
         if now.weekday() in DANGER_DAYS:
             body += "\n\n⚠️ Danger day. No one's watching you today — that's exactly why it counts. +20% on everything."
         send(f"🏁 Morning, {ctx['name']}", body, 3, ["checkered_flag"])
