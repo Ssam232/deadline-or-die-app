@@ -1445,9 +1445,11 @@ def render_dailies(state: dict) -> None:
         if rows:
             done = sum(r["done"] for r in rows)
             stake, _ = DL.at_stake(state, today)
-            st.markdown(f"#### 🔁 Dailies · {done}/{len(rows)}"
-                        + (f" <small style='color:#ff6a5c'>· −{stake} 🪙 at midnight if unfinished</small>"
-                           if stake else " <small>· all done ✅</small>"), unsafe_allow_html=True)
+            st.markdown(f"#### 🔁 Dailies · {done}/{len(rows)}")
+            st.markdown(f"<div style='color:#ff6a5c;font-size:.88rem;margin-top:-.6rem'>−{stake} 🪙 at midnight if "
+                        "these aren't done</div>" if stake else
+                        "<div style='color:#2ec4b6;font-size:.88rem;margin-top:-.6rem'>All done today ✅</div>",
+                        unsafe_allow_html=True)
             for r in rows:
                 h = r["h"]
                 c1, c2, c3 = st.columns([5, 1, 2], vertical_alignment="center")
@@ -1674,6 +1676,57 @@ def render_qualify_form(state: dict) -> None:
     st.rerun()
 
 
+def render_task_row(state: dict, t: dict, scope: str = "") -> None:
+    """One open task: due chip + value; opens to finish (proof), extend or abandon."""
+    s = state["settings"]
+    dl = parse_dt(t["deadline"])
+    with st.expander(f"{chip(dl)} {t['title']} · {fmt_left(dl - now())} · +{t['reward']}"):
+        g = goal_title(state, t.get("goal_id"))
+        st.markdown(
+            f"**Due** {dl:%a %b %d, %I:%M %p} · **{t['difficulty']}** · +{t['reward']} 🪙 / −{t['penalty']} 🪙"
+            + (f"  \n🎯 {g}" if g else "")
+            + (f"  \n{t['details']}" if t.get("details") else "")
+            + (f"  \n🚨 If missed: *{t['consequence']}*" if t.get("consequence") else "")
+            + (f"  \n🚩 Rejected {t['rejections']}×" if t.get("rejections") else ""))
+        render_proof_form(state, t, "open", scope=scope)
+
+        st.divider()
+        ca, cb = st.columns(2)
+        ext_cost = math.ceil(t["penalty"] * 0.3)
+        if t["extensions"] < s["max_extensions"]:
+            if ca.button(f"⏳ +{s['extension_hours']}h ({ext_cost} 🪙)", key=f"{scope}ext_{t['id']}"):
+                if state["coins"] < ext_cost:
+                    st.error("Can't afford it. Guess you're doing it on time.")
+                else:
+                    bank(state, -ext_cost, f"⏳ Extension: {t['title']}")
+                    t["deadline"] = (dl + timedelta(hours=s["extension_hours"])).isoformat()
+                    t["extensions"] += 1
+                    save_state(state)
+                    flash(f"Extended to {parse_dt(t['deadline']):%a %b %d, %I:%M %p}. Reward cut 15%.", "warning")
+                    st.rerun()
+        else:
+            ca.caption("No extensions left.")
+        young = now() - parse_dt(t["created"]) < timedelta(minutes=FREE_DELETE_MIN)
+        label = "🗑️ Delete (free)" if young else f"🏳️ Abandon (−{t['penalty']} 🪙)"
+        if cb.checkbox("Confirm", key=f"{scope}conf_{t['id']}") and cb.button(label, key=f"{scope}ab_{t['id']}"):
+            if young:
+                state["tasks"].remove(t)
+                if t.get("sync_page") and notion_cfg():
+                    try:
+                        archive_page(notion_ctx()[0], t["sync_page"])
+                    except Exception:
+                        pass
+                save_state(state)
+                flash("Deleted.")
+            else:
+                t["abandoned"] = True
+                save_state(state)
+                flash(fail_task(state, t, "Abandoned"), "error", sound="fail")
+                save_state(state)
+            st.rerun()
+
+
+
 def render_today(state: dict) -> None:
     n_ = now()
     stt = daily.status(state, n_)
@@ -1754,8 +1807,8 @@ def _tpl_add(state: dict, key: str) -> None:
     flash(f"⚡ Added **{t['title']}** → +{t['reward']}" + (" · in today's mission" if t.get("mission_day") else ""))
 
 
-def render_quick_add(state: dict, key: str = "qa") -> None:
-    with st.container(border=True):
+def render_quick_add(state: dict, key: str = "qa", boxed: bool = True) -> None:
+    with (st.container(border=True) if boxed else st.container()):
         with st.form(f"{key}_form", clear_on_submit=True, border=False):
             c1, c2 = st.columns([5, 1])
             text = c1.text_input("⚡ Quick add", label_visibility="collapsed",
@@ -1777,15 +1830,16 @@ def _mark_started(t: dict) -> None:
         t.update(scheduled=now().replace(second=0, microsecond=0).isoformat(), scheduled_time=True)
 
 
-def _pomo_pick(state: dict) -> tuple[int | None, int | None]:
+def _pomo_pick(state: dict, where=None) -> tuple[int | None, int | None]:
     """Break-at picker. Remembers your choice."""
+    where = where or st
     cfg = state["settings"]
     keys = list(PM.PRESETS)
     cur = cfg.get("pomo", "off")
-    c1, c2, c3 = st.columns([2, 1, 1])
-    mode = c1.selectbox("Breaks", keys, index=keys.index(cur) if cur in keys else 0,
-                        format_func=lambda k: PM.PRESETS[k][0], key="pomo_mode")
+    mode = where.selectbox("Breaks", keys, index=keys.index(cur) if cur in keys else 0, label_visibility="collapsed",
+                           format_func=lambda k: "☕ " + PM.PRESETS[k][0], key="pomo_mode")
     if mode == "custom":
+        c2, c3 = st.columns(2)
         work = c2.number_input("Break at (min)", 10, 120, int(cfg.get("pomo_work", 45)), 5, key="pomo_w")
         brk = c3.number_input("Break (min)", 2, 30, int(cfg.get("pomo_brk", 10)), 1, key="pomo_b")
     else:
@@ -1807,8 +1861,16 @@ def render_timer(state: dict) -> None:
             if not open_t:
                 st.caption("Add a task first — the timer is a receipt for real work.")
                 return
-            work, brk = _pomo_pick(state)
-            if st.button("🎲 Just tell me what to do", use_container_width=True, key="pick_next"):
+            labels = {t["id"]: t["title"] for t in open_t}
+            c1, c2 = st.columns([1.6, 1])
+            tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
+                               label_visibility="collapsed")
+            planned = c2.selectbox("Minutes", [25, 50, 60, 90, 120], key="timer_len", label_visibility="collapsed",
+                                   format_func=lambda m: f"{m} min")
+            c3, c4 = st.columns([1.6, 1])
+            work, brk = _pomo_pick(state, c3)
+            if c4.button("🎲 Pick for me", use_container_width=True, key="pick_next",
+                         help="Picks your best next task and starts the timer"):
                 pick = Q.pick_next(state["tasks"], now(), deep_hour=I.in_peak(PROFILE, now().hour))
                 if pick:
                     plen = Q.session_length(pick)
@@ -1819,12 +1881,6 @@ def render_timer(state: dict) -> None:
                     flash(f"🎲 **Do this now: {pick['title']}** — {plen}-min focus timer started. Nothing else exists.",
                           sound="win")
                     st.rerun()
-            labels = {t["id"]: t["title"] for t in open_t}
-            c1, c2 = st.columns([1.6, 1])
-            tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
-                               label_visibility="collapsed")
-            planned = c2.selectbox("Minutes", [25, 50, 60, 90, 120], key="timer_len", label_visibility="collapsed",
-                                   format_func=lambda m: f"{m} min")
             wall = PM.wall_minutes(planned, work, brk)
             if st.button(f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
                          type="primary", use_container_width=True):
@@ -1842,9 +1898,8 @@ def render_timer(state: dict) -> None:
                     st.markdown(f"🔥 **LIVE CHALLENGE:** {ch['label']} — {fmt_left(ch['end'] - now())} left to start")
             drops_left = EV.DROPS_PER_DAY - sum(1 for x in state.get("focus_log", [])
                                                  if x["date"] == now().date().isoformat() and x.get("drop"))
-            st.caption("⏱️ Focus challenges pop up at random — your phone buzzes when one opens. "
-                       f"Full 25+ min sessions also drop loot ({max(0, drops_left)} left today). "
-                       f"Timer-verified tasks pay **+{int(V.TIMER_BONUS * 100)}%**. Today: **{focus_today(state)} min**."
+            st.caption(f"Today **{focus_today(state)} min** · timer-verified tasks pay +{int(V.TIMER_BONUS * 100)}% · "
+                       f"25+ min sessions drop loot ({max(0, drops_left)} left) · surprise challenges buzz your phone"
                        + (f" Tokens: ⚡×{tok.get('double', 0)} 🔧×{tok.get('upgrade', 0)}"
                           if tok.get("double") or tok.get("upgrade") else ""))
             return
@@ -1935,25 +1990,100 @@ f();setInterval(f,500);
             st.rerun()
 
 
+def render_race_status(state: dict) -> None:
+    """Right-rail status: flag, rivals, penalty box, contracts, ledger, rules — compact."""
+    reasons = black_flag_reasons(state)
+    left = max(0, PITY_AFTER - state["since_rare"])
+    with st.container(border=True):
+        flag = ("<span style='color:#ff6a5c'>⬛ <b>Black flag</b> — " + html.escape("; ".join(reasons)) + "</span>"
+                if reasons else "<span style='color:#2ec4b6'>🟢 <b>Green flag</b> — clear to race</span>")
+        st.markdown(f"{flag}<div class='dod-row' style='border:0;padding:8px 0 0'><div class='m'>"
+                    f"🔥 Rival heat <b style='color:#ece8df'>{state['rival_heat']}</b> &nbsp; "
+                    f"🛡️ Shields <b style='color:#ece8df'>{state['shields']}</b> &nbsp; "
+                    f"📦 Rare drop <b style='color:#ece8df'>{'NEXT' if not left else f'≤{left}'}</b></div></div>",
+                    unsafe_allow_html=True)
+        unserved = [p for p in state["penalty_box"] if not p["served"]]
+        for p in unserved:
+            st.markdown(f"🚨 **{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
+                        unsafe_allow_html=True)
+            if p.get("enforced"):
+                st.caption(f"🔒 Enforced on PC + phone. Lifts when you redeem *{p['task']}* or after {LK.LOCK_HOURS}h.")
+            elif st.checkbox("I actually served this", key=f"served_chk_{p['id']}") and \
+                    st.button("Release me", key=f"served_{p['id']}"):
+                p["served"], p["served_at"] = True, now().isoformat()
+                save_state(state)
+                flash("Penalty served. Back on track.")
+                st.rerun()
+    render_contracts(state)
+    with st.expander("📜 Ledger"):
+        if not state["ledger"]:
+            st.caption("Nothing yet.")
+        for e in state["ledger"][:15]:
+            st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
+                        f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
+    with st.expander("📖 Rules"):
+        st.markdown(f"""
+- **Every task** has a deadline, a reward and a penalty (set by its size).
+- **Finish it → submit proof** (file and/or link + a note). With an Anthropic key, an AI race steward checks it; otherwise it's on your honor. The same file can never be reused.
+- **Rewards:** +25% if done 24h+ early (+10% if 6h+), ×0.1 per streak (up to ×2), XP toward driver level.
+- **Miss it** (after a {state['settings']['grace_minutes']}-min grace): lose the penalty coins, −{MISS_DAMAGE}% car condition, streak resets, and your real-world consequence lands in the penalty box.
+- **Black flag** (no racing) while you're in debt, have unserved penalties, or your car is under 20%.
+- **Redemption:** finish a missed task within {REDEEM_WINDOW_H}h for half the penalty back.
+- **Extensions** cost 30% of the penalty and cut the reward 15% each (max {state['settings']['max_extensions']}).
+- **Abandoning** a task = taking the penalty (free only in the first {FREE_DELETE_MIN} min, for typos).
+- **Goals:** finish every task in a goal (3+) for a +{GOAL_BONUS[0]} coin bonus.
+- **Pit crates:** every approved proof opens one — coins, free part upgrades, streak shields, repairs, or a 3× jackpot. A rare drop is guaranteed after {PITY_AFTER} commons.
+- **Danger days** (Tue/Wed, no one's watching): +20% on anything finished.
+- **Rival heat:** every miss makes your rivals +3 faster in races. Every finish takes 1 back.
+- **Rust:** finish nothing for {IDLE_GRACE_DAYS}+ days and the car loses {RUST_PER_DAY}%/day sitting in the garage.
+""")
+
+
+def render_task_board(state: dict, open_tasks: list[dict]) -> None:
+    """Add + every open task in one place, right under the mission."""
+    today = now().date().isoformat()
+    stt = daily.status(state, now())
+    in_mission = {t["id"] for t in stt["mission"]} if stt["qualified"] else set()
+    rest = [t for t in open_tasks if t["id"] not in in_mission]
+    with st.container(border=True):
+        st.markdown(f"#### Tasks · {len(open_tasks)} open")
+        render_quick_add(state, "qa_top", boxed=False)
+        if rest and (parse_dt(rest[0]["deadline"]) - now()) < timedelta(hours=6):
+            st.warning(f"⏱️ **{rest[0]['title']}** dies in {fmt_left(parse_dt(rest[0]['deadline']) - now())} — "
+                       f"−{rest[0]['penalty']} and {MISS_DAMAGE}% of your car. Start for 10 minutes.")
+        if in_mission and rest:
+            st.caption("Also on your plate")
+        for t in rest:
+            render_task_row(state, t, "tb_")
+        if not open_tasks:
+            st.caption("Nothing open. Type one above, or tap a one-tap task.")
+        redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
+                      and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
+        for t in redeemable:
+            left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
+            with st.expander(f"🩹 {t['title']} · {fmt_left(left)} to redeem for half back"):
+                render_proof_form(state, t, "redeem", scope="tb_")
+
+
 def render_contracts(state: dict) -> None:
     n_ = now()
-    st.subheader("📜 This week's contracts")
     claimed = state.setdefault("contracts_claimed", [])
-    for c in K.this_week(n_):
-        p, key = K.progress(state, c, n_), K.claim_key(c, n_)
-        with st.container(border=True):
+    with st.container(border=True):
+        st.markdown("#### 📜 This week's contracts")
+        for c in K.this_week(n_):
+            p, key = K.progress(state, c, n_), K.claim_key(c, n_)
             unit = " min" if c.get("unit") == "min" else ""
-            st.markdown(f"**{c['title']}** · +{c['reward']} 🪙")
-            st.progress(min(1.0, p / c["goal"]), text=f"{min(p, c['goal'])}{unit} / {c['goal']}{unit}")
-            if key in claimed:
-                st.caption("✅ Claimed")
-            elif p >= c["goal"] and st.button(f"Claim +{c['reward']} 🪙", key=f"claim_{c['id']}", type="primary"):
+            st.progress(min(1.0, p / c["goal"]),
+                        text=f"{c['title']} · +{c['reward']} 🪙 · {min(p, c['goal'])}{unit}/{c['goal']}{unit}"
+                        + (" ✅" if key in claimed else ""))
+            if key not in claimed and p >= c["goal"] and st.button(f"Claim +{c['reward']} 🪙", key=f"claim_{c['id']}",
+                                                                   type="primary"):
                 claimed.append(key)
                 bank(state, c["reward"], f"📜 Contract: {c['title']}")
                 save_state(state)
                 flash(f"📜 Contract complete: **{c['title']}** · +{c['reward']} coins!", celebrate=True, sound="jackpot")
                 st.rerun()
-    st.caption("New contracts every Monday.")
+        st.caption("New contracts every Monday.")
 
 
 def _cards(cs: list[str], hide_second: bool = False) -> str:
@@ -2039,7 +2169,7 @@ def render_lounge(state: dict) -> None:
 # This only adds what the theme can't: the instrument cluster, the live-card rail, dark text on yellow buttons.
 CSS = """<style>
 :root{--y:#f5c518;--r:#e10600;--t:#2ec4b6;--panel:#1b1f27;--line:#2c313c;--muted:#8b909c}
-.block-container{max-width:1240px;padding-top:2.2rem}
+.block-container{max-width:1280px;padding-top:2.6rem}
 .st-key-rail [data-testid="stVerticalBlockBorderWrapper"],.st-key-rail>div{gap:.9rem}
 [data-testid="stBaseButton-primary"] *,[data-testid="stBaseButton-primaryFormSubmit"] *{color:#14171d!important;font-weight:700}
 .st-key-live_card{border-left:4px solid var(--y)!important}
@@ -2050,19 +2180,20 @@ CSS = """<style>
 [data-baseweb="tab-list"]{gap:4px;border-bottom:1px solid var(--line)}
 [data-baseweb="tab"] p{font-family:"Saira Semi Condensed",sans-serif;font-weight:600;font-size:1rem}
 [data-testid="stMetricValue"]{font-family:"Saira Semi Condensed",sans-serif;font-variant-numeric:tabular-nums}
-.dod-hero h1{font-family:"Saira Semi Condensed",sans-serif;font-weight:800;font-style:italic;font-size:2.7rem;
+.dod-hero h1{font-family:"Saira Semi Condensed",sans-serif;font-weight:800;font-style:italic;font-size:2.2rem;
   line-height:1;margin:0;padding:0;letter-spacing:-.01em}
-.dod-hero p{color:var(--muted);margin:.45rem 0 1.1rem;font-size:.98rem}
+.dod-hero{display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;margin-bottom:.7rem}
+.dod-hero p{color:var(--muted);margin:0;font-size:.95rem}
 .dod-cluster{display:grid;grid-template-columns:repeat(4,1fr);background:#101319;border:1px solid var(--line);
   border-radius:14px;overflow:hidden;margin:0 0 1.1rem}
-.dod-cell{padding:12px 16px 10px;border-left:1px solid var(--line)}
+.dod-cell{padding:8px 16px 6px;border-left:1px solid var(--line)}
 .dod-cell:first-child{border-left:0}
 .dod-k{color:var(--muted);font-size:.82rem}
-.dod-v{font-family:"Saira Semi Condensed",sans-serif;font-weight:700;font-size:2.1rem;line-height:1.08;color:var(--y);
+.dod-v{font-family:"Saira Semi Condensed",sans-serif;font-weight:700;font-size:1.75rem;line-height:1.05;color:var(--y);
   font-variant-numeric:tabular-nums}
 .dod-v.bad{color:var(--r)}
 .dod-s{font-size:.78rem;color:var(--muted)}
-.dod-xp{grid-column:1/-1;border-top:1px solid var(--line);padding:8px 16px;display:flex;align-items:center;gap:12px;
+.dod-xp{grid-column:1/-1;border-top:1px solid var(--line);padding:6px 16px;display:flex;align-items:center;gap:12px;
   font-size:.84rem;color:var(--muted)}
 .dod-xp b{color:#ece8df;font-weight:600}
 .dod-bar{flex:1;height:4px;background:#262b36;border-radius:2px;overflow:hidden}
@@ -2213,100 +2344,25 @@ snd = st.session_state.pop("sound", None)
 if snd and state["settings"].get("sounds", True):
     st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
 
-# ── cockpit: what to do now on the left, the tools you reach for on the right (stacks on a phone) ──
-c_main, c_rail = st.columns([1.55, 1], gap="large")
-with c_main:
-    render_today(state)
-with c_rail:
-    render_timer(state)
-    render_dailies(state)
-    render_quick_add(state, "qa_top")
 
 lvl = level_of(state["xp"])
 
-tab_pit, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
-    ["🏁 Pit Wall", "✅ Tasks", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"])
-
 open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
+tab_today, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
+    ["🏁 Today", "✅ Tasks", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"])
+
+# ── Today: the cockpit. Do-now on the left, instruments on the right; stacks on a phone. ──
+with tab_today:
+    c_main, c_rail = st.columns([1.55, 1], gap="large")
+    with c_main:
+        render_today(state)
+        render_task_board(state, open_tasks)
+    with c_rail:
+        render_timer(state)
+        render_dailies(state)
+        render_race_status(state)
 
 # ── Pit Wall ──
-with tab_pit:
-  pit_l, pit_r = st.columns([1.55, 1], gap="large")
-  with pit_l:
-    reasons = black_flag_reasons(state)
-    if reasons:
-        st.error("⬛ **BLACK FLAG** — racing locked: " + "; ".join(reasons) + ".")
-    else:
-        st.success("🟢 **Green flag** — you're clear to race.")
-
-    h1, h2, h3 = st.columns(3)
-    h1.metric("🔥 Rival heat", state["rival_heat"], "your misses fuel them", delta_color="off")
-    h2.metric("🛡️ Shields", state["shields"])
-    left = max(0, PITY_AFTER - state["since_rare"])
-    h3.metric("📦 Rare drop", f"≤{left} away" if left else "NEXT", delta_color="off")
-    if open_tasks:
-        nxt = open_tasks[0]
-        hrs = (parse_dt(nxt["deadline"]) - now()).total_seconds() / 3600
-        if hrs < 24:
-            st.warning(f"⏱️ **{nxt['title']}** dies in {fmt_left(parse_dt(nxt['deadline']) - now())}. "
-                       f"That's {nxt['penalty']} coins, {MISS_DAMAGE}% of your car and a {state['streak']}-streak "
-                       f"on the line. Start for 10 minutes. Just 10.")
-
-    unserved = [p for p in state["penalty_box"] if not p["served"]]
-    if unserved:
-        st.subheader("🚨 Penalty box")
-        for p in unserved:
-            with st.container(border=True):
-                st.markdown(f"**{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
-                            unsafe_allow_html=True)
-                if p.get("enforced"):
-                    st.caption(f"🔒 Enforced on your PC + phone. Lifts when you finish *{p['task']}* (🩹 redeem it) "
-                               f"or after {LK.LOCK_HOURS}h.")
-                elif st.checkbox("I actually served this", key=f"served_chk_{p['id']}") and \
-                        st.button("Release me", key=f"served_{p['id']}"):
-                    p["served"], p["served_at"] = True, now().isoformat()
-                    save_state(state)
-                    flash("Penalty served. Back on track.")
-                    st.rerun()
-
-    with st.expander("📜 Ledger"):
-        if not state["ledger"]:
-            st.caption("Nothing yet.")
-        for e in state["ledger"][:15]:
-            st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
-                        f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
-    _rules_expander = st.expander("📖 Rules")
-
-  with pit_r:
-    st.subheader("⏱️ Next up")
-    if not open_tasks:
-        st.info("No open tasks. Add one in ✅ Tasks — or break a goal down in 🎯 Goals.")
-    for t in open_tasks[:6]:
-        dl = parse_dt(t["deadline"])
-        g = goal_title(state, t.get("goal_id"))
-        st.markdown(f"{chip(dl)} **{t['title']}** — {fmt_left(dl - now())} left  \n"
-                    f"<small>{dl:%a %b %d, %I:%M %p} · +{t['reward']} / −{t['penalty']}"
-                    f"{' · 🎯 ' + html.escape(g) if g else ''}</small>", unsafe_allow_html=True)
-
-    render_contracts(state)
-
-  with _rules_expander:
-        st.markdown(f"""
-- **Every task** has a deadline, a reward and a penalty (set by its size).
-- **Finish it → submit proof** (file and/or link + a note). With an Anthropic key, an AI race steward checks it; otherwise it's on your honor. The same file can never be reused.
-- **Rewards:** +25% if done 24h+ early (+10% if 6h+), ×0.1 per streak (up to ×2), XP toward driver level.
-- **Miss it** (after a {state['settings']['grace_minutes']}-min grace): lose the penalty coins, −{MISS_DAMAGE}% car condition, streak resets, and your real-world consequence lands in the penalty box.
-- **Black flag** (no racing) while you're in debt, have unserved penalties, or your car is under 20%.
-- **Redemption:** finish a missed task within {REDEEM_WINDOW_H}h for half the penalty back.
-- **Extensions** cost 30% of the penalty and cut the reward 15% each (max {state['settings']['max_extensions']}).
-- **Abandoning** a task = taking the penalty (free only in the first {FREE_DELETE_MIN} min, for typos).
-- **Goals:** finish every task in a goal (3+) for a +{GOAL_BONUS[0]} coin bonus.
-- **Pit crates:** every approved proof opens one — coins, free part upgrades, streak shields, repairs, or a 3× jackpot. A rare drop is guaranteed after {PITY_AFTER} commons.
-- **Danger days** (Tue/Wed, no one's watching): +20% on anything finished.
-- **Rival heat:** every miss makes your rivals +3 faster in races. Every finish takes 1 back.
-- **Rust:** finish nothing for {IDLE_GRACE_DAYS}+ days and the car loses {RUST_PER_DAY}%/day sitting in the garage.
-""")
-
 # ── Tasks ──
 with tab_tasks:
     points_guide()
@@ -2316,53 +2372,8 @@ with tab_tasks:
         notion_import(state)
 
     st.subheader(f"Open ({len(open_tasks)})")
-    s = state["settings"]
     for t in open_tasks:
-        dl = parse_dt(t["deadline"])
-        with st.expander(f"{chip(dl)} {t['title']} · {fmt_left(dl - now())}"):
-            g = goal_title(state, t.get("goal_id"))
-            st.markdown(
-                f"**Due** {dl:%a %b %d, %I:%M %p} · **{t['difficulty']}** · +{t['reward']} 🪙 / −{t['penalty']} 🪙"
-                + (f"  \n🎯 {g}" if g else "")
-                + (f"  \n{t['details']}" if t.get("details") else "")
-                + (f"  \n🚨 If missed: *{t['consequence']}*" if t.get("consequence") else "")
-                + (f"  \n🚩 Rejected {t['rejections']}×" if t.get("rejections") else ""))
-            render_proof_form(state, t, "open")
-
-            st.divider()
-            ca, cb = st.columns(2)
-            ext_cost = math.ceil(t["penalty"] * 0.3)
-            if t["extensions"] < s["max_extensions"]:
-                if ca.button(f"⏳ +{s['extension_hours']}h ({ext_cost} 🪙)", key=f"ext_{t['id']}"):
-                    if state["coins"] < ext_cost:
-                        st.error("Can't afford it. Guess you're doing it on time.")
-                    else:
-                        bank(state, -ext_cost, f"⏳ Extension: {t['title']}")
-                        t["deadline"] = (dl + timedelta(hours=s["extension_hours"])).isoformat()
-                        t["extensions"] += 1
-                        save_state(state)
-                        flash(f"Extended to {parse_dt(t['deadline']):%a %b %d, %I:%M %p}. Reward cut 15%.", "warning")
-                        st.rerun()
-            else:
-                ca.caption("No extensions left.")
-            young = now() - parse_dt(t["created"]) < timedelta(minutes=FREE_DELETE_MIN)
-            label = "🗑️ Delete (free)" if young else f"🏳️ Abandon (−{t['penalty']} 🪙)"
-            if cb.checkbox("Confirm", key=f"conf_{t['id']}") and cb.button(label, key=f"ab_{t['id']}"):
-                if young:
-                    state["tasks"].remove(t)
-                    if t.get("sync_page") and notion_cfg():
-                        try:
-                            archive_page(notion_ctx()[0], t["sync_page"])
-                        except Exception:
-                            pass
-                    save_state(state)
-                    flash("Deleted.")
-                else:
-                    t["abandoned"] = True
-                    save_state(state)
-                    flash(fail_task(state, t, "Abandoned"), "error", sound="fail")
-                    save_state(state)
-                st.rerun()
+        render_task_row(state, t, "tt_")
 
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                   and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]

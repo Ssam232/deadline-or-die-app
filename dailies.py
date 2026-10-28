@@ -7,7 +7,10 @@ costs a lot. Tap +1 each time. Honour system — no proof — which is exactly w
 Values are set by the game, not by you, from how many times a day it has to happen:
   once a day = smallest reward, biggest penalty (it's one thing — no excuse);
   many times a day = a bit more reward, smaller penalty (harder to land every single one).
-  1×: +2 / −45 · 2×: +3 / −40 · 3×: +4 / −35 · 5×: +6 / −25 · 6×+: up to +10 / −20
+  1×: +5 / −45 · 2×: +5 / −40 · 3×: +6 / −35 · 5×: +5 / −25 · 8×: +6 / −20
+  Break-even sits at a ~90% hit rate (easing to ~76% for 8×-a-day): consistent = slowly richer, sloppy = poorer.
+  Every 7 days in a row on one daily: +15 bonus. Missed dailies cost at most 60 in one day (no death spirals).
+  The day you add a daily is free: it can pay you, but it can't charge you.
 
 Dailies never touch your Notion boards.
 
@@ -26,17 +29,30 @@ PRESETS = [  # (name, times per day)
 ]
 
 
-def reward(h_or_target) -> int:
-    n = h_or_target["target"] if isinstance(h_or_target, dict) else int(h_or_target)
-    return min(10, 1 + n)
+MAX_CHARGED_DAYS = 3
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+STREAK_BONUS_EVERY, STREAK_BONUS = 7, 15   # every 7 days in a row on one daily: +15
+DAILY_PENALTY_CAP = 60                      # most the dailies can cost you in one day, however many you miss
+
+
+def _n(h_or_target) -> int:
+    return h_or_target["target"] if isinstance(h_or_target, dict) else int(h_or_target)
 
 
 def penalty(h_or_target) -> int:
-    n = h_or_target["target"] if isinstance(h_or_target, dict) else int(h_or_target)
-    return max(20, 50 - 5 * n)
+    """Once a day = biggest hit; many times a day = smaller (harder to land every single one)."""
+    return max(20, 50 - 5 * _n(h_or_target))
 
-MAX_CHARGED_DAYS = 3
-WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+def breakeven(h_or_target) -> float:
+    """Hit rate at which a daily pays for itself: 90% for once-a-day, easing to 76% for 8×."""
+    return max(0.76, 0.90 - 0.02 * (_n(h_or_target) - 1))
+
+
+def reward(h_or_target) -> int:
+    """Small — but set so that hitting it ~90% of the time comes out ahead, not behind."""
+    be = breakeven(h_or_target)
+    return max(2, round(penalty(h_or_target) * (1 - be) / be))
 
 
 def habits(save: dict) -> list[dict]:
@@ -93,9 +109,13 @@ def claim(save: dict, hid: str, d: date, bank, why: str = "") -> int:
     del save["habit_claims"][:-400]
     h["streak"] = h.get("streak", 0) + 1
     h["best"] = max(h.get("best", 0), h["streak"])
-    bank(save, reward(h), f"🔁 {h['name']}{why}")
+    paid = reward(h)
+    bank(save, paid, f"🔁 {h['name']}{why}")
+    if h["streak"] % STREAK_BONUS_EVERY == 0:
+        bank(save, STREAK_BONUS, f"🔥 {h['streak']}-day streak: {h['name']}")
+        paid += STREAK_BONUS
     save["xp"] = save.get("xp", 0) + 2
-    return reward(h)
+    return paid
 
 
 def today_status(save: dict, d: date) -> list[dict]:
@@ -119,18 +139,24 @@ def settle(save: dict, today: date, bank, is_rest) -> list[str]:
     charged = 0
     while d < today:
         if not is_rest(save, d):
-            missed = []
+            missed, day_total = [], 0
             for h in habits(save):
                 if not active_on(h, d):
                     continue
                 if count(save, h["id"], d) >= h["target"]:
                     claim(save, h["id"], d, bank, " (auto-claimed)")
+                elif h["start"] == d.isoformat():
+                    pass  # the day you added it is free
                 elif charged < MAX_CHARGED_DAYS:
                     lost = h.get("streak", 0)
                     h["streak"] = 0
-                    bank(save, -penalty(h), f"🔁 Missed daily: {h['name']} ({d:%a})")
-                    missed.append(f"{h['name']} {count(save, h['id'], d)}/{h['target']} → **−{penalty(h)}**"
-                                  + (f" (streak {lost} lost)" if lost else ""))
+                    hit = min(penalty(h), DAILY_PENALTY_CAP - day_total)
+                    if hit > 0:
+                        day_total += hit
+                        bank(save, -hit, f"🔁 Missed daily: {h['name']} ({d:%a})")
+                    missed.append(f"{h['name']} {count(save, h['id'], d)}/{h['target']} → **−{max(hit, 0)}**"
+                                  + (f" (streak {lost} lost)" if lost else "")
+                                  + (" (capped)" if hit < penalty(h) else ""))
                 else:
                     h["streak"] = 0
             if missed:
@@ -145,13 +171,14 @@ def settle(save: dict, today: date, bank, is_rest) -> list[str]:
 
 
 def at_stake(save: dict, d: date) -> tuple[int, list[str]]:
-    """Coins on the line at midnight + 'Water 3/8' style lines, for nags."""
+    """Coins on the line at midnight + 'Water 3/8' style lines, for nags (first day free, daily cap applied)."""
     total, lines = 0, []
     for s in today_status(save, d):
         if not s["done"]:
-            total += penalty(s["h"])
             lines.append(f"{s['h']['name']} {s['count']}/{s['h']['target']}")
-    return total, lines
+            if s["h"]["start"] != d.isoformat():
+                total += penalty(s["h"])
+    return min(total, DAILY_PENALTY_CAP), lines
 
 
 def hit_rate(save: dict, today: date, days: int = 28) -> float | None:
