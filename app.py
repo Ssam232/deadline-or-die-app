@@ -1746,8 +1746,13 @@ def render_today(state: dict) -> None:
                 st.caption(f"Lock in today's mission before **{stt['deadline']:%I:%M %p}** for +{c['qualify_fuel']} fuel. "
                            f"Miss it and the safety car picks for you (−{c['qualify_penalty']}).")
             else:
-                st.markdown("### 🚦 Qualifying missed")
-                st.caption("The safety car is out. You can still lock in your own mission.")
+                if daily.peek_day(state, n_.date()).get("excused"):
+                    st.markdown("### 🚦 Lock in today's mission")
+                    st.caption(f"Qualifying was excused (the app was down at the deadline). Locking in still pays "
+                               f"+{c['qualify_fuel']}.")
+                else:
+                    st.markdown("### 🚦 Qualifying missed")
+                    st.caption("The safety car is out. You can still lock in your own mission.")
             render_qualify_form(state)
             if stt["pit_stops_left"]:
                 if st.checkbox("I'm sick / genuinely need a rest day", key="pit_chk") and \
