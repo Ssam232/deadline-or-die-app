@@ -1407,7 +1407,9 @@ def time_wheel(label: str, value: dtime, key: str, step: int = 5) -> dtime:
     try:
         import streamlit.components.v1 as components
         wheel = components.declare_component("timewheel", path=str(_WHEEL_DIR))
-        v = wheel(label=label, value=value.strftime("%H:%M"), step=step, key=key, default=value.strftime("%H:%M"))
+        acc = accent(st.session_state.get("_state") or {})[0]
+        v = wheel(label=label, value=value.strftime("%H:%M"), step=step, accent=acc, key=key,
+                  default=value.strftime("%H:%M"))
         h, m = (int(x) for x in str(v).split(":"))
         return dtime(h, m)
     except Exception:  # noqa: BLE001
@@ -1911,10 +1913,11 @@ def render_timer(state: dict) -> None:
         st.markdown(f"#### ⏱️ Focusing: {t['title'] if t else '—'}")
         if work and brk:
             st.caption(f"🍅 {tm['planned']} min of work · {PM.label(work, brk)}. Breaks don't count toward the log.")
+        ACC = accent(state)[0]
         _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
         _embed(f"""
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@700&display=swap" rel="stylesheet">
-<div id="t" style="font:700 52px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums;color:#f5c518;text-align:center;letter-spacing:.02em"></div>
+<div id="t" style="font:700 52px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums;color:{ACC};text-align:center;letter-spacing:.02em"></div>
 <div id="s" style="font:14px system-ui;color:#8b909c;text-align:center;"></div>
 <script>
 const st0={start_ms},end={end_ms},W={work or 0},B={brk or 0},T={tm["planned"]};
@@ -1929,7 +1932,7 @@ function f(){{const now=Date.now(),r=end-now,el=(now-st0)/60000;let ph='work',le
  const t=document.getElementById('t'),s=document.getElementById('s');
  if(ph==='done'){{t.textContent='+'+mmss(r);t.style.color='#ff6a5c';s.textContent='🏁 Session done — log it.';}}
  else if(ph==='break'){{t.textContent=mmss(left);t.style.color='#2ec4b6';s.textContent='☕ BREAK — stand up, water, no phone. Back at 00:00.';}}
- else{{t.textContent=mmss(left);t.style.color='#f5c518';s.textContent=(W&&B&&r>left+1000)?'Work — break in '+mmss(left)+'. Phone face-down.':'Phone face-down. One thing only.';}}
+ else{{t.textContent=mmss(left);t.style.color='{ACC}';s.textContent=(W&&B&&r>left+1000)?'Work — break in '+mmss(left)+'. Phone face-down.':'Phone face-down. One thing only.';}}
  if(last&&last!==ph)beep(ph==='work'?2:ph==='break'?1:3);last=ph;}}
 f();setInterval(f,500);
 </script>""", height=90)  # our own static markup only — no user content goes in here
@@ -2203,12 +2206,65 @@ CSS = """<style>
 .dod-row:last-child{border-bottom:0}
 .dod-dot{width:8px;height:8px;border-radius:50%;flex:none}
 .dod-row .m{color:var(--muted);font-size:.9rem}
+/* motion: one entrance, feedback on change and on press, nothing that loops */
+@keyframes dodIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes dodPop{0%{transform:scale(1)}35%{transform:scale(1.12);text-shadow:0 0 18px var(--y)}100%{transform:scale(1)}}
+@keyframes dodGrow{from{width:var(--from)}}
+.dod-cell{animation:dodIn .5s cubic-bezier(.2,.7,.2,1) both}
+.dod-cell:nth-child(2){animation-delay:.05s}.dod-cell:nth-child(3){animation-delay:.1s}.dod-cell:nth-child(4){animation-delay:.15s}
+.dod-v{display:inline-block;transform-origin:left center}
+.dod-v.chg{animation:dodPop .7s cubic-bezier(.2,.7,.2,1) .25s both}
+.dod-bar i{animation:dodGrow .9s cubic-bezier(.2,.7,.2,1) both}
+[data-testid^="stBaseButton"]{transition:transform .08s ease,filter .15s ease,background-color .2s ease}
+[data-testid^="stBaseButton"]:hover{filter:brightness(1.08)}
+[data-testid^="stBaseButton"]:active{transform:scale(.97)}
+[data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
+[data-baseweb="tab-panel"]{animation:dodIn .3s ease-out both}
+[data-testid="stProgressBarTrack"] div{transition:width .6s cubic-bezier(.2,.7,.2,1)}
+[data-baseweb="tab-highlight"]{transition:all .25s ease}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media (max-width:640px){
   .dod-cluster{grid-template-columns:repeat(2,1fr)}
   .dod-cell:nth-child(3){border-left:0}
   .dod-cell:nth-child(n+3){border-top:1px solid var(--line)}
   .dod-hero h1{font-size:2.2rem}
 }
+</style>"""
+
+
+
+# ── 🎨 Paint shop: UI themes you unlock in the Garage (Honda colours) ──
+THEMES = {  # key: (name, accent, text-on-accent, cost, level, blurb)
+    "phoenix": ("Phoenix Yellow", "#f5c518", "#14171d", 0, 1, "The yellow the DC2 Integra Type R made famous."),
+    "apex": ("Apex Blue", "#6a8dff", "#0d1020", 300, 2, "Apex Blue Pearl: an S2000 colour."),
+    "mugen": ("Mugen Gold", "#d9a441", "#14171d", 500, 3, "Gold wheels on a white Civic: the tuner look."),
+    "nsx": ("NSX Orange", "#ff7a1a", "#14171d", 700, 3, "A loud orange pearl off the NSX colour chart."),
+    "ctr": ("Championship White", "#f1efe8", "#14171d", 1000, 4, "White with a red badge: the Type R signature."),
+}
+
+
+def accent(state: dict) -> tuple[str, str]:
+    k = state.get("ui_theme", "phoenix")
+    _, acc, on, *_ = THEMES.get(k, THEMES["phoenix"])
+    return acc, on
+
+
+def theme_css(state: dict) -> str:
+    acc, on = accent(state)
+    r, g, b = (int(acc[i:i + 2], 16) for i in (1, 3, 5))
+    soft = f"rgba({r},{g},{b},.14)"
+    return f"""<style>
+:root{{--y:{acc}}}
+[data-testid^="stBaseButton-primary"]{{background:{acc}!important;border-color:{acc}!important}}
+[data-testid^="stBaseButton-primary"] *{{color:{on}!important}}
+[data-testid="stTab"][aria-selected="true"],[data-testid="stTab"][aria-selected="true"] *{{color:{acc}!important}}
+[data-baseweb="tab-highlight"]{{background-color:{acc}!important}}
+[data-testid="stProgressBarTrack"] div{{background-color:{acc}!important}}
+[data-testid="stButtonGroup"] button[aria-checked="true"]{{border-color:{acc}!important;background:{soft}!important}}
+[data-testid="stButtonGroup"] button[aria-checked="true"] *{{color:{acc}!important}}
+[data-testid="stSlider"] [role="slider"]{{background-color:{acc}!important}}
+[data-testid="stSliderThumbValue"]{{color:{acc}!important}}
+a{{color:{acc}}}
 </style>"""
 
 
@@ -2231,11 +2287,17 @@ def render_cluster(state: dict) -> None:
         ("Focus today", f"{focus_today(state)}m", "", False),
         ("Car", f"{cond}%", "repair in the Garage" if cond < 60 else "", cond < 40),
     ]
+    prev = st.session_state.get("_cluster_prev", {})
+    pct = 100 * into / span
+    prev_pct = prev.get("xp_pct", pct)
+    st.session_state["_cluster_prev"] = {**{k: v for k, v, _, _ in cells}, "xp_pct": pct}
     st.markdown(
         "<div class='dod-cluster'>" + "".join(
-            f"<div class='dod-cell'><div class='dod-k'>{k}</div><div class='dod-v{' bad' if bad else ''}'>{v}</div>"
+            f"<div class='dod-cell'><div class='dod-k'>{k}</div>"
+            f"<div class='dod-v{' bad' if bad else ''}{' chg' if k in prev and prev[k] != v else ''}'>{v}</div>"
             f"<div class='dod-s'>{sub or '&nbsp;'}</div></div>" for k, v, sub, bad in cells)
-        + f"<div class='dod-xp'><b>Level {lvl}</b><div class='dod-bar'><i style='width:{100 * into / span:.0f}%'></i></div>"
+        + f"<div class='dod-xp'><b>Level {lvl}</b><div class='dod-bar'>"
+          f"<i style='width:{pct:.0f}%;--from:{min(prev_pct, pct) if prev_pct <= pct else 0:.0f}%'></i></div>"
           f"{into}/{span} XP · task streak {state['streak']}</div></div>", unsafe_allow_html=True)
 
 
@@ -2261,6 +2323,7 @@ if _pw and not st.session_state.get("_authed"):
     st.stop()
 
 state = load_state()
+st.markdown(theme_css(state), unsafe_allow_html=True)
 PROFILE = I.profile(state, now().date(), TZ)  # history before today → steers today's surprises (same in the nagger)
 EV.set_profile(PROFILE)
 
@@ -2637,6 +2700,37 @@ with tab_garage:
                     st.rerun()
             else:
                 st.caption("Can't afford repairs. Go finish something.")
+
+    with st.expander("🎨 Paint shop — colour the whole app", expanded=False):
+        st.caption("Unlock Honda colours for the app itself: buttons, timer, instrument cluster, everything.")
+        owned_t = state.setdefault("themes_owned", ["phoenix"])
+        cur_t = state.get("ui_theme", "phoenix")
+        lvl_now = level_of(state["xp"])
+        cols = st.columns(len(THEMES))
+        for col, (k, (name, acc, on, cost, need, blurb)) in zip(cols, THEMES.items()):
+            with col:
+                st.markdown(f"<div style='height:54px;border-radius:10px;background:linear-gradient(135deg,{acc},"
+                            f"{acc}cc);border:1px solid #2c313c;margin-bottom:6px'></div><b>{name}</b>"
+                            f"<div style='color:#8b909c;font-size:.82rem;min-height:2.6em'>{blurb}</div>",
+                            unsafe_allow_html=True)
+                if k == cur_t:
+                    st.caption("✅ In use")
+                elif k in owned_t:
+                    if st.button("Use", key=f"theme_use_{k}", use_container_width=True):
+                        state["ui_theme"] = k
+                        save_state(state)
+                        flash(f"🎨 {name} applied.")
+                        st.rerun()
+                elif lvl_now < need:
+                    st.caption(f"🔒 Level {need}")
+                elif st.button(f"{cost:,} 🪙", key=f"theme_buy_{k}", use_container_width=True,
+                               disabled=state["coins"] < cost):
+                    bank(state, -cost, f"🎨 Paint: {name}")
+                    owned_t.append(k)
+                    state["ui_theme"] = k
+                    save_state(state)
+                    flash(f"🎨 **{name}** unlocked and applied.", celebrate=True, sound="jackpot")
+                    st.rerun()
 
     with st.expander("🏢 Showroom — the Honda ladder", expanded=False):
         lvl_now = level_of(state["xp"])
