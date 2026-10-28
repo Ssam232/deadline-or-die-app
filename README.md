@@ -144,6 +144,12 @@ Log in once — the address bar gains `?k=…`. Add *that* page to your Home Scr
 ## ⏱️ Focus challenges & session loot
 **⏱️ Focus challenges:** 1–3 a day, e.g. *start a 60-min session in the next 2 hours → this session counts ⚡ double* — the task you focused on pays 2× coins & XP when you finish it (90-min challenges add a crate). They're a surprise: no schedule anywhere — your phone pings the moment a window opens (seeded from your private topic, so even the code can't spoil it). Plus every full 25+ min session rolls a small random drop (3/day). As you level up, penalties grow (up to 2×) and your daily mission must total 30 → 60 minutes.
 
+## 🏎️ Racing (earned, not farmed)
+Races need **tickets**: 1 per proof-backed finish today + 1 per full focus session (25+ min), max **3 races a day**. A race plays out in real time (≈23 s for a 3-lap sprint up to ≈68 s for 12 laps) and the result, prize and "why" stay hidden until the cars cross the line.
+
+## ⏱️ The timer is proof
+Time you log on a task with the focus timer fills its proof note automatically. Once it reaches **80% of the task's honest time**, the timer alone counts as proof: no file or link needed (even in strict mode). Task rows show progress like ⏱️ 32/60m.
+
 ## 🏢 The Honda ladder
 Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Six upgrade paths (engine, wheels & tires, aero, brakes, forced induction, weight), each with real part names and a 💡 lesson — and each visible on the car. Every chassis has a tuning limit (Civic Si L3 … NSX L5); parts you buy carry over.
 

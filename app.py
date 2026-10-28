@@ -1029,13 +1029,30 @@ def car_svg(car: dict) -> str:
 
 
 # ─────────────────────────── UI pieces ───────────────────────────
+def timer_proof(t: dict) -> tuple[float, float]:
+    """(minutes on the focus timer, minutes needed for the timer alone to count as proof: 80% of honest time)."""
+    return float(t.get("focus_min") or 0), float(max(10, round(0.8 * (t.get("minutes") or 30))))
+
+
 def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     """mode: 'open' (normal completion) or 'redeem' (finishing a missed task for a partial refund)."""
     s = state["settings"]
     k = f"{scope}{mode}_{t['id']}"
     use_ai = s["ai_steward"] and bool(get_secret("ANTHROPIC_API_KEY"))
+    fm, need = timer_proof(t)
+    timer_ok = fm >= need
+    if fm:
+        dot = "#2ec4b6" if timer_ok else "#5b6070"
+        tail = ("— that's your proof. A file or link is optional." if timer_ok else
+                f"— log {need - fm:.0f} more min and the timer alone counts as proof.")
+        st.markdown(f"<div class='dod-row' style='border:0;padding:2px 0 6px'><span class='dod-dot' "
+                    f"style='background:{dot}'></span><div><b>⏱️ {fm:.0f} of {t.get('minutes') or 0} min on the "
+                    f"focus timer</b> <span class='m'>{tail}</span></div></div>", unsafe_allow_html=True)
+        if f"note_{k}" not in st.session_state:
+            st.session_state[f"note_{k}"] = f"⏱️ {fm:.0f} min on the focus timer. "
     note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.")
-    up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)", type=PROOF_TYPES, key=f"file_{k}")
+    up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else ""),
+                          type=PROOF_TYPES, key=f"file_{k}")
     link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}")
     honor = True
     if use_ai:
@@ -1048,12 +1065,15 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     errors, data, h = [], None, None
     if len(note.strip()) < 15:
         errors.append("Write at least a real sentence about what you did.")
-    if not up and (t.get("minutes") or 0) >= V.FILE_REQUIRED_FROM:
-        errors.append(f"Tasks of {V.FILE_REQUIRED_FROM}+ min need a real file as proof (screenshot, doc, photo).")
+    if timer_ok:
+        pass  # logged focus time is the proof: no file or link needed
+    elif not up and (t.get("minutes") or 0) >= V.FILE_REQUIRED_FROM:
+        errors.append(f"Tasks of {V.FILE_REQUIRED_FROM}+ min need a real file as proof (screenshot, doc, photo), "
+                      f"or {need:.0f} min on the focus timer.")
     elif s["strict_proof"] and not up:
-        errors.append("Strict mode: attach a file (turn off in Settings if you must).")
-    if not up and not link.strip():
-        errors.append("Attach a file or a link.")
+        errors.append(f"Strict mode: attach a file, or log {need:.0f} min on the focus timer.")
+    if not timer_ok and not up and not link.strip():
+        errors.append(f"Attach a file or a link, or log {need:.0f} min on the focus timer.")
     if up:
         data = up.getvalue()
         h = hashlib.sha256(data).hexdigest()
@@ -1070,7 +1090,8 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     if use_ai:
         with st.spinner("Race steward reviewing your proof…"):
             try:
-                verdict = ai_verify(state, t, note, link, data, up.name if up else "", up.type if up else "")
+                stamp = f"\n[App-verified: {fm:.0f} min logged on the focus timer for this task]" if fm else ""
+                verdict = ai_verify(state, t, note + stamp, link, data, up.name if up else "", up.type if up else "")
             except Exception as e:
                 st.error(f"Steward unreachable: {e}. Try again, or turn off the AI steward in Settings.")
                 return
@@ -1091,7 +1112,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     at = now()
     old_level = level_of(state["xp"])
     t.update({"completed_at": at.isoformat(), "proof_note": note.strip(), "proof_link": link.strip(),
-              "proof_file": proof_path, "verdict": verdict})
+              "proof_file": proof_path, "verdict": verdict, "proof_timer": round(fm, 1) if timer_ok else None})
     if mode == "open":
         reward, why = compute_reward(state, t, at)
         bank(state, reward, f"🏁 Done: {t['title']}")
@@ -1304,6 +1325,49 @@ def track_rating(state: dict, track: dict) -> float:
     return raw * (0.55 + 0.45 * car["condition"] / 100)
 
 
+RACE_DAY_CAP = 3  # races a day, max — however rich you are
+
+
+def race_tickets(state: dict) -> tuple[int, str]:
+    """Races are earned: 1 ticket per proof-backed finish today + 1 per full focus session (25+ min) today."""
+    today = now().date()
+    iso = today.isoformat()
+    finishes = len(daily.finished_on(state, today))
+    sessions = sum(1 for x in state.get("focus_log", []) if x.get("date") == iso and x.get("full") and x["min"] >= 25)
+    raced = sum(1 for r in state.get("races", []) if r["ts"][:10] == iso)
+    left = max(0, min(RACE_DAY_CAP, finishes + sessions) - raced)
+    if raced >= RACE_DAY_CAP:
+        why = f"That's {RACE_DAY_CAP} races today — the track's closed till tomorrow."
+    elif not left:
+        why = "No race tickets. Finish a task with proof, or complete a 25+ min focus session, to earn one."
+    else:
+        why = f"🎟️ {left} race ticket{'s' if left > 1 else ''} · earned from {finishes} finish(es) + {sessions} session(s) today"
+    return left, why
+
+
+@st.fragment(run_every=2)
+def _race_result(rp: dict) -> None:
+    """The result stays hidden until the cars cross the line, then reveals itself (and refreshes your coins)."""
+    if not rp.get("revealed"):
+        left = rp["reveal_at"] - time.time()
+        if left > 0:
+            st.caption(f"🏁 Result in {int(left) + 1}s — watch it play out.")
+            return
+        rp["revealed"] = True
+        kind, msg, snd, party = rp["result"]
+        st.session_state["sound"] = snd
+        if party:
+            st.session_state["celebrate"] = True
+        st.rerun()  # full app: coins in the cluster catch up, sound (and balloons) play
+    kind, msg, *_ = rp["result"]
+    getattr(st, kind)(msg)
+    st.markdown(rp["why"])
+
+
+def race_seconds(track: dict) -> int:
+    return 8 + 5 * track["laps"]  # 23 s for a 3-lap sprint … 68 s for the 12-lap Ring
+
+
 def simulate_race(state: dict, track: dict) -> None:
     car = state["car"]
     cond_before = car["condition"]
@@ -1348,21 +1412,21 @@ def simulate_race(state: dict, track: dict) -> None:
     mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
     why = RV.explain("DNF" if you["dnf"] else pos, gap, track["name"], cond_before, heat_lvl,
                      G.effective(car["parts"], mid), G.cap(mid), G.PART_INFO, G.installed, G.next_upgrade)
+    secs = race_seconds(track)
+    if you["dnf"]:
+        res = ("error", f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "fail", False)
+    elif pos == 1:
+        res = ("success", f"🏆 **WIN** at {track['name']}! +{payout} coins. Tomorrow Tom eats your dust.", "jackpot", True)
+    elif payout:
+        res = ("success", f"P{pos} at {track['name']} — +{payout} coins. **{gap:.1f}s** off {winner['name']}.", "win", False)
+    else:
+        res = ("warning", f"P{pos} at {track['name']}, **{gap:.1f}s** off the win.", "fail", False)
     st.session_state["race_replay"] = {
         "html": RV.replay_html(track["name"], history, names, [f["color"] for f in field], 0, track["laps"],
-                               ticker, dnf_tick),
-        "why": why, "title": f"{track['name']} — " + ("DNF" if you["dnf"] else f"P{pos}"),
+                               ticker, dnf_tick, seconds=secs),
+        "why": why, "title": track["name"], "result": res, "payout": payout,
+        "reveal_at": time.time() + secs + 1, "revealed": False,
     }
-    if you["dnf"]:
-        flash(f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "error",
-              sound="fail")
-    elif pos == 1:
-        flash(f"🏆 **WIN** at {track['name']}! +{payout} coins. Tomorrow Tom eats your dust.", celebrate=True,
-              sound="jackpot")
-    elif payout:
-        flash(f"P{pos} at {track['name']} — +{payout} coins. **{gap:.1f}s** off {winner['name']}.", sound="win")
-    else:
-        flash(f"P{pos} at {track['name']}, **{gap:.1f}s** off the win. Replay + why below.", "warning", sound="fail")
     st.rerun()
 
 
@@ -1782,7 +1846,9 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
     """One open task: due chip + value; opens to finish (proof), extend or abandon."""
     s = state["settings"]
     dl = parse_dt(t["deadline"])
-    with st.expander(f"{chip(dl)} {t['title']} · {fmt_left(dl - now())} · +{t['reward']}"):
+    fm_ = t.get("focus_min") or 0
+    with st.expander(f"{chip(dl)} {t['title']} · {fmt_left(dl - now())} · +{t['reward']}"
+                     + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else "")):
         g = goal_title(state, t.get("goal_id"))
         st.markdown(
             f"**Due** {dl:%a %b %d, %I:%M %p} · **{t['difficulty']}** · +{t['reward']} 🪙 / −{t['penalty']} 🪙"
@@ -1874,7 +1940,9 @@ def render_today(state: dict) -> None:
                 st.markdown(f"✅ ~~{t['title']}~~")
             elif t["status"] == "open":
                 dl = parse_dt(t["deadline"])
-                with st.expander(f"📸 {t['title']} · {fmt_left(dl - n_)} left"):
+                fm_ = t.get("focus_min") or 0
+                with st.expander(f"📸 {t['title']} · {fmt_left(dl - n_)} left"
+                                 + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else "")):
                     render_proof_form(state, t, "open", scope="today_")
             else:
                 st.markdown(f"💀 {t['title']}")
@@ -2182,6 +2250,10 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
                         + extra + ("\n\n" + drop_msg if drop_msg else ""))
             snd = "jackpot"
     save_state(state)
+    fm_, need_ = timer_proof(t)
+    if fm_ >= need_ and t.get("status") == "open":
+        drop_msg = (drop_msg + "\n\n" if drop_msg else "") + (
+            f"✅ {fm_:.0f} min logged on *{t['title']}* — that counts as proof. Open it and submit to collect.")
     flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
           + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),
           sound=snd, celebrate=bool(drop_msg))
@@ -2480,6 +2552,9 @@ def render_cluster(state: dict) -> None:
     lvl = level_of(state["xp"])
     into, span = state["xp"] - xp_for_level(lvl), xp_for_level(lvl + 1) - xp_for_level(lvl)
     ds, cond, coins = state.get("day_streak", 0), state["car"]["condition"], state["coins"]
+    rp = st.session_state.get("race_replay") or {}
+    if rp.get("revealed") is False:
+        coins -= rp.get("payout", 0)  # no spoilers while the race is still running
     cells = [
         ("Coins", f"{coins:,}", "in debt — black flag" if coins < 0 else "", coins < 0),
         ("Day streak", f"{ds}", f"best {state.get('best_day_streak', 0)}", False),
@@ -2616,10 +2691,12 @@ lvl = level_of(state["xp"])
 
 open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
 tab_today, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
-    ["🏁 Today", "✅ Tasks", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"])
+    ["🏁 Today", "✅ Tasks", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"],
+    key="nav", on_change="ignore" if os.getenv("DOD_ALL_TABS") else "rerun")  # remembers the open tab; only it runs
 
 # ── Today: the cockpit. Do-now on the left, instruments on the right; stacks on a phone. ──
 with tab_today:
+  if tab_today.open is not False:
     c_main, c_rail = st.columns([1.55, 1], gap="large")
     with c_main:
         render_today(state)
@@ -2632,6 +2709,7 @@ with tab_today:
 # ── Pit Wall ──
 # ── Tasks ──
 with tab_tasks:
+  if tab_tasks.open is not False:
     points_guide()
     with st.expander("➕ New task", expanded=not open_tasks):
         task_form(state, "new_task_form")
@@ -2662,6 +2740,7 @@ with tab_tasks:
 
 # ── Goals ──
 with tab_goals:
+  if tab_goals.open is not False:
     existing = {g["title"] for g in state["goals"]}
     starters = [s_ for s_ in starter_goals() if s_[0] not in existing]
     if starters:
@@ -2798,6 +2877,7 @@ def _hlabel(h: int) -> str:
 
 
 with tab_stats:
+  if tab_stats.open is not False:
     import altair as alt
     full = I.history(state, now().date() + timedelta(days=1), TZ)  # last 28 days, today included
     k = st.columns(4)
@@ -2883,6 +2963,7 @@ with tab_stats:
 
 # ── Garage ──
 with tab_garage:
+  if tab_garage.open is not False:
     car = state["car"]
     model = CAR_BY_ID.get(car.get("model"), CARS[0])
     g_l, g_r = st.columns([1.3, 1], gap="large", vertical_alignment="center")
@@ -3014,6 +3095,8 @@ with tab_garage:
 
 # ── Race ──
 with tab_race:
+  if tab_race.open is not False:
+    car = state["car"]
     reasons = black_flag_reasons(state)
     if reasons:
         st.error("⬛ **Black flag.** Race control won't let you out: " + "; ".join(reasons) + ".")
@@ -3037,32 +3120,42 @@ with tab_race:
             st.warning("Car under 40% — real risk of a DNF.")
         if lvl < track["level"]:
             st.info(f"Unlocks at driver level {track['level']}. Earn XP by finishing tasks.")
-        elif state["coins"] < track["fee"]:
-            st.info("Can't cover the entry fee.")
-        elif st.button("🚦 Lights out", type="primary"):
-            bank(state, -track["fee"], f"🎟️ Entry: {track['name']}")
-            simulate_race(state, track)
+        else:
+            left_t, why_t = race_tickets(state)
+            rp_ = st.session_state.get("race_replay")
+            racing = bool(rp_ and not rp_.get("revealed"))
+            st.caption(why_t)
+            if state["coins"] < track["fee"]:
+                st.info("Can't cover the entry fee.")
+            elif racing:
+                st.button("🏎️ Race in progress…", disabled=True)
+            elif st.button("🚦 Lights out", type="primary", disabled=not left_t):
+                bank(state, -track["fee"], f"🎟️ Entry: {track['name']}")
+                simulate_race(state, track)
 
         rp = st.session_state.get("race_replay")
         if rp:
-            st.markdown(f"#### 📺 Replay · {rp['title']}")
+            st.markdown(f"#### 📺 {rp['title']}")
             (st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html)(
                 rp["html"], height=460)
-            st.markdown(rp["why"])
+            _race_result(rp)
 
-        if state["races"]:
+        _hide = 1 if (st.session_state.get("race_replay") or {}).get("revealed") is False else 0
+        if state["races"][_hide:]:
             with st.expander("Race history"):
-                for r in state["races"][:15]:
+                for r in state["races"][_hide:15]:
                     pos = r["pos"] if r["pos"] == "DNF" else f"P{r['pos']}"
                     st.markdown(f"**{pos}** {r['track']} · +{r['payout']} 🪙 "
                                 f"<small>· {parse_dt(r['ts']):%b %d}</small>", unsafe_allow_html=True)
 
 # ── Lounge ──
 with tab_lounge:
+  if tab_lounge.open is not False:
     render_lounge(state)
 
 # ── Settings ──
 with tab_set:
+  if tab_set.open is not False:
     s = state["settings"]
     sec = st.segmented_control("Section", ["Driver", "Rules", "Boards", "Phone & locks", "Integrations", "Backup"],
                                default="Driver", key="set_sec", label_visibility="collapsed") or "Driver"
