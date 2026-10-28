@@ -95,11 +95,19 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 ## 🎉 Live events
 0–2 random events a day (10 AM–8 PM), pushed to your phone: ⚡ double coins & XP (3h) · 🎁 supply drop (free crate, 2h) · 🎯 bounty (+75 for a deep-work finish, 4h) · 🔧 pit crew (free +30% repair).
 
-## 🗓️ Your DECK 12 board
-Settings → 🔎 Find my boards → Link it. Cards from **today + the next 7 days** become one-tap mission suggestions (an upcoming card becomes "Work on: …" — an hour on it today, the card itself stays open); Deadline or Die tasks due within 7 days appear on your board as 🏁 cards and turn ✅ when finished. Columns are auto-detected (title, date or weekday select, time text, done checkbox/status).
+## 🗓️ Your DECK 12 boards (input + output)
+Settings → 🔎 Find my boards, then pick a role for each:
+- **📥 Input** (e.g. Assignments): cards from today + the next 7 days (recurring weekday cards marked 🔁) become one-tap mission suggestions, and one-off events can be turned into goals. One-off cards you pick tick off when you finish them; recurring cards are never touched.
+- **📤 Output** (e.g. Fortuna, your daily schedule): **write-only**. Every task lands on it as a 🏁 card on the day/time it's *set to happen* — a board card's time, your mission laid out from "I'll START at", "gym **at** 6pm" in quick add, a prep step's day, or when you actually start the timer — and, if none of those, **when it was assigned**. Cards move if rescheduled, turn ✅ when done, and go to Notion's trash once their day is over. Nothing is ever read back from the output board, so anything else you put there stays out of the game.
 
 ## 🗓️ Events → goals (conference, talk, exam, submission)
 🎯 Goals → *Prep for an upcoming event*: pick anything on your board in the next 60 days (or type one). It becomes a goal with a prep plan worked **backwards from the date** — e.g. a conference poster: story → figures → draft → supervisor feedback → revise → order print → practice pitch → pack. Squeezed automatically if the event is close; edit or untick any step. Each step is a real deadline (proof, coins, penalties) that fills the goal's bar, lands on your board as a 🏁 card within 7 days, and shows as a countdown on the Today card and in the morning push ("behind!" if prep is lagging). Or let the prep **feed into a bigger goal** you already have.
+
+## 📊 Stats → the engine
+The 📊 Stats tab shows finishes, on-time rate, focus hours, hours by category, finishes per week, minutes by hour of day and a weekday × hour heatmap. From your history (up to yesterday, after 5 active days) the engine works out your **peak hours** and **dead zones** (inside your working day, but no work happening) and uses them:
+- ⏱️ focus challenges and ⚡ live events are up to 4× likelier to land in dead zones, and 💡 phone suggestions aim there too;
+- ☀️ the morning briefing lands an hour before you usually start;
+- 🎲 *Just tell me what to do* hands you deep work in peak hours and quick wins outside them.
 
 ## 🔒 Consequences that actually bite
 Pick **🔒 Games locked on PC + phone until it's done** as a task's consequence (it's the default). Miss it and you're LOCKED until you finish it late (🩹 redeem) or 24h pass. A running focus session also locks (toggle in Settings). 🆘 Emergency unlock in the app: 1 hour for 100 coins (more at higher levels).

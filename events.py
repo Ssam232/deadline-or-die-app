@@ -27,6 +27,19 @@ TYPES = {
 BOUNTY = 75
 
 
+_PROFILE: dict | None = None  # set by app/nagger from insights.profile(): steers WHEN surprises land
+
+
+def set_profile(p: dict | None) -> None:
+    global _PROFILE
+    _PROFILE = p
+
+
+def _hour_w(hour: int) -> float:
+    import insights
+    return insights.hour_weight(_PROFILE, hour)
+
+
 def _seed(kind: str, d: date) -> str:
     """Salted with your private ntfy topic, so the public code can't be used to predict the schedule."""
     return f"{kind}-{d.isoformat()}-{os.getenv('NTFY_TOPIC', '')}"
@@ -42,7 +55,8 @@ def todays(d: date, tz) -> list[dict]:
         if k in used:
             continue
         used.add(k)
-        start_min = rng.randrange(10 * 60, 20 * 60, 15)
+        opts = list(range(10 * 60, 20 * 60, 15))
+        start_min = rng.choices(opts, weights=[_hour_w(m // 60) for m in opts])[0]
         start = datetime.combine(d, dtime(start_min // 60, start_min % 60), tz)
         out.append({"id": f"{d.isoformat()}#{i}", "type": k, "start": start,
                     "end": start + timedelta(minutes=TYPES[k]["minutes"]), **TYPES[k]})
@@ -72,7 +86,14 @@ def focus_challenges(d: date, tz) -> list[dict]:
     """1–3 timed challenges a day: start a session of N minutes inside the window, win the prize."""
     rng = random.Random(_seed("challenges", d))
     n = rng.choice([1, 2, 2, 3])
-    starts = sorted(rng.sample(range(9 * 60, 19 * 60 + 1, 30), n))
+    slots = list(range(9 * 60, 19 * 60 + 1, 30))
+    w = [_hour_w(m // 60) for m in slots]  # dead zones (up but not working) get up to 4× the odds
+    starts = []
+    for _ in range(n):
+        k = rng.choices(range(len(slots)), weights=w)[0]
+        starts.append(slots.pop(k))
+        w.pop(k)
+    starts.sort()
     out = []
     for i, s in enumerate(starts):
         minutes = rng.choices([25, 50, 60, 90], weights=[3, 3, 3, 2])[0]

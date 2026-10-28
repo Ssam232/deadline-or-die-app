@@ -49,9 +49,11 @@ def parse(text: str, now: datetime) -> dict:
             t = t.replace(mm.group(0), " ")
 
     at = dtime(23, 59)
-    mm = re.search(r"\b(?:by|at|before|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", t, re.I)
+    at_time = False
+    mm = re.search(r"(?:\b(by|at|before)|(@))\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", t, re.I)
     if mm:
-        h, mi, ap = int(mm.group(1)), int(mm.group(2) or 0), (mm.group(3) or "").lower()
+        at_time = (mm.group(1) or mm.group(2) or "").lower() in ("at", "@")  # "at 3pm" = it happens then
+        h, mi, ap = int(mm.group(3)), int(mm.group(4) or 0), (mm.group(5) or "").lower()
         if ap == "pm" and h < 12:
             h += 12
         elif ap == "am" and h == 12:
@@ -72,11 +74,15 @@ def parse(text: str, now: datetime) -> dict:
     cat = V.guess_category(title)
     mins = minutes or {"show": 60, "life": 30, "health": 60, "admin": 30, "deep": 45}[cat]
     mins = min(V.MINUTES, key=lambda x: abs(x - mins))  # snap to the honest-time buckets
-    return {"title": title, "minutes": mins, "due": due, "category": cat}
+    out = {"title": title, "minutes": mins, "due": due, "category": cat, "at": None}
+    if at_time:  # happens at that time → due when it's over
+        out["at"], out["due"] = due, due + timedelta(minutes=mins)
+    return out
 
 
-def pick_next(tasks: list[dict], now: datetime) -> dict | None:
-    """🎲 'Just tell me what to do': today's mission first, then what's due soonest, quick wins breaking ties."""
+def pick_next(tasks: list[dict], now: datetime, deep_hour: bool = False) -> dict | None:
+    """🎲 'Just tell me what to do': today's mission first, then what's due soonest. In your peak hours it hands you
+    the meaty task; outside them, the quick win."""
     today = now.date().isoformat()
     open_t = [t for t in tasks if t.get("status") == "open"]
     if not open_t:
@@ -84,7 +90,9 @@ def pick_next(tasks: list[dict], now: datetime) -> dict | None:
 
     def score(t):
         due_h = (datetime.fromisoformat(t["deadline"]) - now).total_seconds() / 3600
-        return (t.get("mission_day") != today, due_h > 24, due_h, (t.get("minutes") or 60) > 30)
+        small = (t.get("minutes") or 60) <= 30
+        return (t.get("mission_day") != today, due_h > 24, int(max(due_h, 0) // 6), small if deep_hour else not small,
+                due_h)
     return min(open_t, key=score)
 
 

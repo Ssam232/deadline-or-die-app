@@ -34,6 +34,7 @@ import carart
 import contracts as K
 import events as EV
 import garage as G
+import insights as I
 import daily
 import locks as LK
 import pomo as PM
@@ -283,6 +284,12 @@ def board_cfg(state: dict) -> tuple[str, str] | None:
     return (token, db) if db and token else None
 
 
+def out_cfg(state: dict) -> tuple[str, str] | None:
+    """The write-only output board (e.g. Fortuna)."""
+    db, token = state["settings"].get("out_db"), get_secret("NOTION_TOKEN")
+    return (token, db) if db and token else None
+
+
 def notion_ctx() -> tuple[Notion, dict] | None:
     cfg = notion_cfg()
     return (Notion(cfg[0]), _workspace(*cfg)) if cfg else None
@@ -353,12 +360,14 @@ def save_state(state: dict) -> None:
     try:
         n, ids = notion_ctx()
         errs = _push_tasks(n, ids, state)
-        bc = board_cfg(state)
-        if bc:
-            try:
-                errs += B.sync_out(n, _board_map(*bc), state["tasks"], now())
-            except Exception as e:  # board problems never block saving
-                errs.append(f"board: {e}")
+        bc, oc = board_cfg(state), out_cfg(state)
+        try:  # board problems never block saving
+            if bc:
+                errs += B.sync_in(n, _board_map(*bc), state["tasks"])
+            if oc:
+                errs += B.sync_out(n, _board_map(*oc), state["tasks"], now())
+        except Exception as e:
+            errs.append(f"board: {e}")
         save_json(n, ids["save_page"], state)
         st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
         if ids.get("dashboard"):
@@ -1361,8 +1370,10 @@ def render_event_planner(state: dict) -> None:
             dl = datetime.combine(d, dtime(23, 59), TZ)
             if dl <= now():
                 continue
-            state["tasks"].append(make_task(str(r["title"]).strip(), f"Prep for {title.strip()} ({ev_date:%b %d}).",
-                                            dl, None, "", g["id"], category=r["category"], minutes=int(r["minutes"])))
+            pt = make_task(str(r["title"]).strip(), f"Prep for {title.strip()} ({ev_date:%b %d}).",
+                           dl, None, "", g["id"], category=r["category"], minutes=int(r["minutes"]))
+            pt.update(scheduled=datetime.combine(d, dtime(0, 0), TZ).isoformat(), scheduled_time=False)
+            state["tasks"].append(pt)
             n_ += 1
         save_state(state)
         flash(f"🎯 **{g['title']}** — {n_} prep steps on the clock. The next 7 days of them are on your DECK 12 "
@@ -1457,6 +1468,8 @@ def render_qualify_form(state: dict) -> None:
                     t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
                     if not b.get("recurring"):  # one-off card: ticks off on the board when you finish
                         t.update(board_page=b["id"], board_state="open")
+                    if b["when"] and bdue != datetime.combine(today, dtime(21, 0), TZ):
+                        t.update(scheduled=datetime.combine(today, bt, TZ).isoformat(), scheduled_time=True)
                     state["tasks"].append(t)
                     ids.append(t["id"])
                 for pk in paper_pick:
@@ -1472,6 +1485,13 @@ def render_qualify_form(state: dict) -> None:
                     state["tasks"].append(t)
                     ids.append(t["id"])
                 msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
+                cursor = max(datetime.combine(today, start_t, TZ), now().replace(second=0, microsecond=0))
+                for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
+                    t = next(x for x in state["tasks"] if x["id"] == tid)
+                    if t.get("scheduled") and parse_dt(t["scheduled"]).date() >= today:
+                        continue
+                    t.update(scheduled=cursor.isoformat(), scheduled_time=True)
+                    cursor += timedelta(minutes=(t.get("minutes") or 30) + 10)
                 save_state(state)
                 flash(msg + f" You start at **{start_t:%I:%M %p}** — the phone will check.", sound="win")
                 st.rerun()
@@ -1535,8 +1555,10 @@ def focus_today(state: dict) -> int:
     return int(sum(x["min"] for x in state.get("focus_log", []) if x["date"] == today))
 
 
-def _add_quick(state: dict, title: str, minutes: int, due: datetime, category: str) -> dict:
+def _add_quick(state: dict, title: str, minutes: int, due: datetime, category: str, at: datetime | None = None) -> dict:
     t = make_task(title, "", due, None, "", category=category, minutes=minutes)
+    if at:
+        t.update(scheduled=at.isoformat(), scheduled_time=True)
     stt = daily.status(state, now())
     if due.date() == now().date() and stt["qualified"]:
         t["mission_day"] = now().date().isoformat()
@@ -1554,7 +1576,7 @@ def render_quick_add(state: dict, key: str = "qa") -> None:
             go = c2.form_submit_button("Add", type="primary", use_container_width=True)
         if go and text.strip():
             p = Q.parse(text, now())
-            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"])
+            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"], at=p["at"])
             flash(f"⚡ Added **{t['title']}** · {V.CATEGORIES[t['category']]['label']} · {min_label(t['minutes'])} → "
                   f"**+{t['reward']}** · due {p['due']:%a %I:%M %p}" + (" · added to today's mission" if t.get("mission_day") else ""))
             st.rerun()
@@ -1566,6 +1588,12 @@ def render_quick_add(state: dict, key: str = "qa") -> None:
                 t = _add_quick(state, label.split(" ", 1)[1], mins, datetime.combine(now().date(), dtime(23, 59), TZ), cat)
                 flash(f"⚡ Added **{t['title']}** → +{t['reward']}" + (" · in today's mission" if t.get("mission_day") else ""))
                 st.rerun()
+
+
+def _mark_started(t: dict) -> None:
+    """No schedule yet? Then the output board shows it when you actually started it."""
+    if not t.get("scheduled") or parse_dt(t["scheduled"]).date() != now().date():
+        t.update(scheduled=now().replace(second=0, microsecond=0).isoformat(), scheduled_time=True)
 
 
 def _pomo_pick(state: dict) -> tuple[int | None, int | None]:
@@ -1600,11 +1628,12 @@ def render_timer(state: dict) -> None:
                 return
             work, brk = _pomo_pick(state)
             if st.button("🎲 Just tell me what to do", use_container_width=True, key="pick_next"):
-                pick = Q.pick_next(state["tasks"], now())
+                pick = Q.pick_next(state["tasks"], now(), deep_hour=I.in_peak(PROFILE, now().hour))
                 if pick:
                     plen = Q.session_length(pick)
                     state["timer"] = {"task_id": pick["id"], "start": now().isoformat(), "planned": plen,
                                       "work": work, "brk": brk}
+                    _mark_started(pick)
                     save_state(state)
                     flash(f"🎲 **Do this now: {pick['title']}** — {plen}-min focus timer started. Nothing else exists.",
                           sound="win")
@@ -1620,6 +1649,7 @@ def render_timer(state: dict) -> None:
                          type="primary", use_container_width=True):
                 state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned,
                                   "work": work, "brk": brk}
+                _mark_started(next(x for x in state["tasks"] if x["id"] == tid))
                 save_state(state)
                 st.rerun()
             tok = state.get("tokens", {})
@@ -1673,8 +1703,9 @@ f();setInterval(f,500);
             if mins >= 1 and t:
                 full = mins >= tm["planned"]
                 t["focus_min"] = round(t.get("focus_min", 0) + mins, 1)
-                state.setdefault("focus_log", []).append({"date": now().date().isoformat(), "task": t["id"],
-                                                          "min": round(mins, 1), "full": full})
+                state.setdefault("focus_log", []).append({"date": start.date().isoformat(), "task": t["id"],
+                                                          "min": round(mins, 1), "full": full,
+                                                          "start": start.isoformat(), "cat": t.get("category")})
                 del state["focus_log"][:-500]
                 state["xp"] += int(mins // 5)
                 drop_msg, snd = "", ("win" if full else None)
@@ -1841,6 +1872,8 @@ if _pw and not st.session_state.get("_authed"):
     st.stop()
 
 state = load_state()
+PROFILE = I.profile(state, now().date(), TZ)  # history before today → steers today's surprises (same in the nagger)
+EV.set_profile(PROFILE)
 
 sync_msgs = []
 if st.session_state.pop("_fresh_load", False) and notion_cfg():
@@ -1932,8 +1965,8 @@ c4.metric("🔧 Car", f"{state['car']['condition']}%")
 st.caption(f"🧑‍✈️ Level {lvl} · {state['xp'] - xp_for_level(lvl)}/{xp_for_level(lvl + 1) - xp_for_level(lvl)} XP · "
            f"task streak {state['streak']} (best {state['best_streak']})")
 
-tab_pit, tab_tasks, tab_goals, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
-    ["🏁 Pit Wall", "✅ Tasks", "🎯 Goals", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"])
+tab_pit, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
+    ["🏁 Pit Wall", "✅ Tasks", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"])
 
 open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
 
@@ -2208,6 +2241,102 @@ with tab_goals:
                     save_state(state)
                     st.rerun()
 
+# ── Stats ──
+VIZ = {"normal": "#3987e5", "dead": "#d95926", "peak": "#199e70", "low": "#1d2735", "grid": "#2b2e36"}
+
+
+def _chart(c) -> None:
+    try:
+        st.altair_chart(c, width="stretch")
+    except TypeError:
+        st.altair_chart(c, use_container_width=True)
+
+
+def _hlabel(h: int) -> str:
+    return datetime(2000, 1, 1, h).strftime("%I %p").lstrip("0")
+
+
+with tab_stats:
+    import altair as alt
+    full = I.history(state, now().date() + timedelta(days=1), TZ)  # last 28 days, today included
+    k = st.columns(4)
+    k[0].metric("Finished · 28 days", full["done"],
+                help="Tasks you finished with proof (incl. redeemed) in the last 28 days.")
+    rate = full["on_time"] / full["done"] if full["done"] else None
+    k[1].metric("On time", f"{rate:.0%}" if rate is not None else "—",
+                delta=f"{full['failed']} missed" if full["failed"] else None, delta_color="inverse")
+    k[2].metric("Focus hours", f"{full['focus_min'] / 60:.1f}", help="Timer-logged work minutes (breaks excluded).")
+    k[3].metric("Active days", f"{full['active_days']}/28")
+
+    if not full["done"] and not full["focus_min"]:
+        st.info("Nothing logged yet. Finish a task or run a focus session and this page starts filling in.")
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Hours by category** · 28 days")
+            cat = pd.DataFrame([{"Category": V.CATEGORIES.get(c_, {}).get("label", c_), "Hours": round(m_ / 60, 1)}
+                                for c_, m_ in full["cat_min"].items()]).sort_values("Hours", ascending=False) \
+                if full["cat_min"] else pd.DataFrame({"Category": [], "Hours": []})
+            _chart(alt.Chart(cat).mark_bar(cornerRadiusEnd=4, color=VIZ["normal"]).encode(
+                x=alt.X("Hours:Q", title="Hours"),
+                y=alt.Y("Category:N", sort="-x", title=None, scale=alt.Scale(paddingInner=0.35),
+                        axis=alt.Axis(labelLimit=160)),
+                tooltip=["Category", "Hours"]).properties(height=max(150, 46 * len(cat))))
+        with c2:
+            st.markdown("**Finishes per week**")
+            wk = pd.DataFrame([{"Week of": f"{w:%b %d}", "Finished": n_} for w, n_ in full["weeks"]])
+            _chart(alt.Chart(wk).mark_bar(cornerRadiusEnd=4, color=VIZ["normal"], size=22).encode(
+                x=alt.X("Week of:N", sort=None, title=None), y=alt.Y("Finished:Q", title="Tasks"),
+                tooltip=["Week of", "Finished"]).properties(height=200))
+
+        st.markdown("**When you actually work** · minutes per hour of day, 28 days")
+        zone = {h_: "Peak" for h_ in PROFILE["peak"]} | {h_: "Dead zone" for h_ in PROFILE["dead"]}
+        hrs = pd.DataFrame([{"Hour": _hlabel(h_), "h": h_, "Minutes": round(full["hour_min"][h_]),
+                             "Zone": zone.get(h_, "Normal") if PROFILE["ready"] else "Normal"} for h_ in range(6, 24)])
+        zscale = alt.Scale(domain=["Normal", "Peak", "Dead zone"], range=[VIZ["normal"], VIZ["peak"], VIZ["dead"]])
+        xh = alt.X("Hour:N", sort=[_hlabel(h_) for h_ in range(6, 24)], title=None)
+        band = alt.Chart(hrs[hrs["Zone"] == "Dead zone"]).mark_rect(opacity=0.22, cornerRadius=3).encode(
+            x=xh, color=alt.Color("Zone:N", scale=zscale, legend=None),
+            tooltip=[alt.Tooltip("Hour"), alt.Tooltip("Minutes"), alt.Tooltip("Zone")])
+        bars = alt.Chart(hrs).mark_bar(cornerRadiusEnd=4).encode(
+            x=xh, y=alt.Y("Minutes:Q", title="Minutes"),
+            color=alt.Color("Zone:N", scale=zscale, legend=alt.Legend(orient="top", title=None)),
+            tooltip=["Hour", "Minutes", "Zone"])
+        _chart((band + bars).properties(height=220))
+        if PROFILE["ready"]:
+            st.caption("🟠 shaded = dead zones (inside your working day, almost no work) — where the surprises aim.")
+
+        st.markdown("**Your week** · minutes by day and hour")
+        days_ = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        hm_ = pd.DataFrame([{"Day": days_[d_], "d": d_, "Hour": _hlabel(h_), "h": h_,
+                             "Minutes": round(full["wd_hour"][d_][h_])} for d_ in range(7) for h_ in range(6, 24)])
+        _chart(alt.Chart(hm_).mark_rect(cornerRadius=3, stroke="#0e1117", strokeWidth=2).encode(
+            x=alt.X("Hour:N", sort=alt.SortField("h"), title=None),
+            y=alt.Y("Day:N", sort=days_, title=None),
+            color=alt.Color("Minutes:Q", scale=alt.Scale(range=[VIZ["low"], VIZ["normal"], "#a9cbf5"]),
+                            legend=alt.Legend(title="Min")),
+            tooltip=["Day", "Hour", "Minutes"]).properties(height=230))
+
+    st.subheader("🧠 How the engine uses this")
+    if not PROFILE["ready"]:
+        st.caption(f"The engine starts steering after {I.MIN_ACTIVE_DAYS} active days with 2+ hours logged "
+                   f"(you're at {PROFILE['active_days']} day(s), {PROFILE['total_min'] / 60:.1f} h, up to yesterday). "
+                   "Until then, surprises are spread evenly from 9 AM to 7 PM.")
+    else:
+        w0, w1 = PROFILE["window"]
+        st.markdown(
+            f"- 🕘 **Your working day:** {_hlabel(w0)}–{_hlabel(w1 % 24)}"
+            + (f", usually starting around **{_hlabel(PROFILE['usual_start'])}**" if PROFILE["usual_start"] is not None else "")
+            + f".\n- 🟢 **Peak hours:** {I.fmt_hours(PROFILE['peak'])} → 🎲 *Just tell me what to do* hands you the "
+              "meaty task in these hours; outside them, the quick win."
+            + f"\n- 🟠 **Dead zones:** {I.fmt_hours(PROFILE['dead'])} — you're up, but not working. ⏱️ Focus challenges "
+              "and ⚡ live events are up to **4×** likelier to land here, and 💡 phone suggestions aim here too."
+            + f"\n- ☀️ **Morning briefing** lands at {_hlabel(I.brief_hour(PROFILE, 8))} (an hour before you usually start)."
+            + "\n\nBuilt from history up to yesterday, so today's surprises stay put while you work.")
+    with st.expander("📋 Table view"):
+        st.dataframe(pd.DataFrame({"Hour": [_hlabel(h_) for h_ in range(24)],
+                                   "Minutes (28d)": [round(x) for x in full["hour_min"]]}), hide_index=True)
+
 # ── Garage ──
 with tab_garage:
     car = state["car"]
@@ -2413,18 +2542,30 @@ with tab_set:
     else:
         st.caption("📳 Phone buzzes off — set NTFY_TOPIC (see README).")
 
-    st.subheader("🗓️ Your DECK 12 board")
-    st.caption("Link your existing board (e.g. Assignments): today's cards become one-tap mission suggestions, and "
-               "Deadline or Die tasks due this week show up on it as 🏁 cards that tick off when you finish.")
+    st.subheader("🗓️ Your DECK 12 boards")
+    st.caption("**Input board** (e.g. Assignments): today + upcoming cards become one-tap suggestions and events you "
+               "can prep for. **Output board** (e.g. Fortuna): write-only — every task lands on it at the time it's "
+               "set to happen (or when it was assigned) and ticks ✅ when done. Nothing is ever read back from the "
+               "output board, so anything else you put there stays out of the game.")
     if not notion_cfg():
         st.caption("Needs the Notion connection first.")
     else:
-        cur = s.get("board_db")
-        if cur:
-            try:
-                st.success("Linked: " + B.describe(_board_map(get_secret("NOTION_TOKEN"), cur)))
-            except Exception as e:
-                st.error(f"Can't read the linked board: {e}. Is it inside DECK 12 (shared with the integration)?")
+        for key_, label_ in (("board_db", "📥 Input"), ("out_db", "📤 Output (write-only)")):
+            cur = s.get(key_)
+            if cur:
+                try:
+                    st.success(f"{label_}: **{_board_map(get_secret('NOTION_TOKEN'), cur)['name']}** · "
+                               + B.describe(_board_map(get_secret("NOTION_TOKEN"), cur)))
+                except Exception as e:
+                    st.error(f"{label_}: can't read it ({e}). Is it inside DECK 12 (shared with the integration)?")
+                if st.button(f"Unlink {label_.split()[1].lower()} board", key=f"unlink_{key_}"):
+                    s[key_] = ""
+                    save_state(state)
+                    st.rerun()
+            else:
+                st.caption(f"{label_}: not linked")
+        if s.get("board_db") and s.get("board_db") == s.get("out_db"):
+            st.warning("Input and output are the same board — pick a separate one for output.")
         if st.button("🔎 Find my boards"):
             try:
                 n_, ids_ = notion_ctx()
@@ -2437,9 +2578,9 @@ with tab_set:
                 st.info("No other databases are visible. If your board is a linked view, share its source database "
                         "with the Deadline or Die connection.")
             else:
-                pick = st.selectbox("Which one is your board?", [d["id"] for d in dbs],
+                pick = st.selectbox("Which board?", [d["id"] for d in dbs],
                                     format_func=lambda i: next(d["title"] for d in dbs if d["id"] == i))
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.columns(3)
                 if c1.button("Test it"):
                     try:
                         m = B.detect(Notion(get_secret("NOTION_TOKEN")), pick)
@@ -2448,16 +2589,18 @@ with tab_set:
                         st.caption("Today on it: " + (", ".join(i["title"] for i in items) or "nothing"))
                     except Exception as e:
                         st.error(str(e))
-                if c2.button("Link it", type="primary"):
+                if c2.button("📥 Use as input"):
                     s["board_db"] = pick
                     save_state(state)
                     st.session_state.pop("board_list", None)
-                    flash("🗓️ Board linked. Today's cards now show up when you set your mission.")
+                    flash("📥 Input board linked — its cards show up as suggestions.")
                     st.rerun()
-        if cur and st.button("Unlink board"):
-            s["board_db"] = ""
-            save_state(state)
-            st.rerun()
+                if c3.button("📤 Use as output", type="primary"):
+                    s["out_db"] = pick
+                    save_state(state)
+                    st.session_state.pop("board_list", None)
+                    flash("📤 Output board linked — your tasks now land on it (write-only).")
+                    st.rerun()
 
     st.subheader("🔒 Lock enforcement")
     lt = LK.topic(get_secret("NTFY_TOPIC"))

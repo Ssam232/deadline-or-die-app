@@ -2,9 +2,11 @@
 🗓️ Bridge to your existing Notion board (e.g. the Assignments board in DECK 12) — no two islands.
 
   • Pull: today's cards on your board show up as one-tap suggestions when you set your mission.
-  • Push: Deadline or Die tasks due in the next 7 days appear on your board as "🏁 …" cards,
-          get ticked/renamed "✅ …" when you finish them with proof, and are tidied off the board
-          (Notion trash) once their day is over — your own recurring cards are never touched.
+  • Input board (e.g. Assignments): today + upcoming cards become one-tap suggestions; one-off cards you pick
+          tick off when you finish them. Recurring weekday cards are never touched.
+  • Output board (e.g. Fortuna, a daily schedule): WRITE-ONLY. Every task appears as a "🏁 …" card on the day/time
+          it's set to happen (or when it was assigned), ticks ✅ when done, and is tidied away after its day.
+          Nothing is ever read back from it, so whatever else you put there stays out of the game.
 
 The board's columns are auto-detected, so it works with whatever setup you already have:
   title · a Date column (if any) · a weekday Select/Status (Monday…Sunday) · a "Time" text · a done checkbox/status.
@@ -160,23 +162,43 @@ def pull_range(n: Notion, m: dict, start: date, days: int, skip_ids: set[str] = 
     return sorted(out, key=lambda x: (x["date"], x["when"] or "99"))
 
 
-def push(n: Notion, m: dict, t: dict, tz) -> str:
+def slot(t: dict, tz) -> tuple[datetime, bool, int]:
+    """When the task is set to happen → (start, has_time, minutes). No schedule? Then when it was assigned."""
+    mins = int(t.get("minutes") or 30)
+    if t.get("scheduled"):
+        return datetime.fromisoformat(t["scheduled"]).astimezone(tz), t.get("scheduled_time", True), mins
+    return datetime.fromisoformat(t.get("created") or t["deadline"]).astimezone(tz), True, mins
+
+
+def _hm(d: datetime) -> str:
+    return d.strftime("%I:%M %p").lstrip("0")
+
+
+def card_props(m: dict, t: dict, tz) -> dict:
+    start, timed, mins = slot(t, tz)
     dl = datetime.fromisoformat(t["deadline"]).astimezone(tz)
     props = {m["title"]: {"title": rt(MARK + t["title"])}}
     if m["date"]:
-        props[m["date"]] = {"date": {"start": dl.isoformat()}}
+        props[m["date"]] = {"date": ({"start": start.isoformat(), "end": (start + timedelta(minutes=mins)).isoformat()}
+                                     if timed else {"start": start.date().isoformat()})}
     if m["weekday"]:
-        opt = m["weekday_opts"].get(WEEKDAYS[dl.weekday()])
+        opt = m["weekday_opts"].get(WEEKDAYS[start.weekday()])
         if opt:
             props[m["weekday"]] = ({"multi_select": [{"name": opt}]} if m["weekday_type"] == "multi_select"
                                    else {m["weekday_type"]: {"name": opt}})
     if m["time"]:
-        props[m["time"]] = {"rich_text": rt(f"Due {dl:%I:%M %p}".replace(" 0", " "))}
-    return n.req("POST", "/pages", json={"parent": {"database_id": m["db"]}, "properties": props,
+        txt = (f"{_hm(start)} - {_hm(start + timedelta(minutes=mins))}" if timed
+               else f"{mins} min · due {_hm(dl)}")
+        props[m["time"]] = {"rich_text": rt(txt)}
+    return props
+
+
+def push(n: Notion, m: dict, t: dict, tz) -> str:
+    return n.req("POST", "/pages", json={"parent": {"database_id": m["db"]}, "properties": card_props(m, t, tz),
                                          "icon": {"type": "emoji", "emoji": "⏱️"}})["id"]
 
 
-def mark_finished(n: Notion, m: dict, page_id: str, title: str, status: str) -> None:
+def mark_finished(n: Notion, m: dict, page_id: str, title: str, status: str, mark: str = "") -> None:
     icon = {"done": "🏁", "redeemed": "🩹", "failed": "💀"}.get(status, "⏱️")
     prefix = "✅ " if status in ("done", "redeemed") else "💀 "
     props = {m["title"]: {"title": rt(prefix + title)}}
@@ -187,23 +209,44 @@ def mark_finished(n: Notion, m: dict, page_id: str, title: str, status: str) -> 
 
 
 def sync_out(n: Notion, m: dict, tasks: list[dict], now: datetime) -> list[str]:
-    """Push upcoming tasks to the board and close out finished ones. Returns errors (never raises)."""
+    """OUTPUT board (e.g. Fortuna) — write-only. Every task lands on the day/time it's set to happen (or when it
+    was assigned), moves if it's rescheduled, ticks ✅ when finished, and is tidied into Notion's trash once its day
+    is over. Nothing is ever read back, and cards you add yourself are never touched."""
     errs = []
-    horizon = now + timedelta(days=PUSH_WINDOW_DAYS)
+    tz = now.tzinfo
+    horizon = (now + timedelta(days=PUSH_WINDOW_DAYS)).date()
     for t in tasks:
         try:
-            dl = datetime.fromisoformat(t["deadline"])
-            if t["status"] == "open" and not t.get("board_page") and now < dl <= horizon:
-                t["board_page"] = push(n, m, t, now.tzinfo)
-                t["board_state"], t["board_pushed"] = "open", True
-            elif t.get("board_page") and t["status"] != t.get("board_state"):
+            start, timed, mins = slot(t, tz)
+            sig = f"{t['title']}|{start.isoformat()}|{timed}|{mins}"
+            if t["status"] == "open" and not t.get("out_page"):
+                if start.date() <= horizon:
+                    t["out_page"], t["out_state"], t["out_sig"] = push(n, m, t, tz), "open", sig
+            elif t.get("out_page") and t["status"] == "open" and t.get("out_sig") != sig:
+                n.req("PATCH", f"/pages/{t['out_page']}", json={"properties": card_props(m, t, tz)})
+                t["out_sig"] = sig
+            elif t.get("out_page") and t["status"] != t.get("out_state"):
+                mark_finished(n, m, t["out_page"], t["title"], t["status"])
+                t["out_state"] = t["status"]
+            elif t.get("out_page") and t["status"] != "open" and not t.get("out_archived"):
+                ended = max(start.date(), datetime.fromisoformat(
+                    t.get("completed_at") or t.get("failed_at") or t["deadline"]).astimezone(tz).date())
+                if ended < now.date():
+                    n.req("PATCH", f"/pages/{t['out_page']}", json={"archived": True})
+                    t["out_archived"] = True
+        except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
+            errs.append(f"{t['title']}: {e}")
+    return errs
+
+
+def sync_in(n: Notion, m: dict, tasks: list[dict]) -> list[str]:
+    """INPUT board (e.g. Assignments): one-off cards you picked into a mission tick off when you finish them."""
+    errs = []
+    for t in tasks:
+        try:
+            if t.get("board_page") and t["status"] != t.get("board_state") and t["status"] != "open":
                 mark_finished(n, m, t["board_page"], t["title"], t["status"])
                 t["board_state"] = t["status"]
-            elif (t.get("board_pushed") and t["status"] != "open" and not t.get("board_archived")
-                  and dl.astimezone(now.tzinfo).date() < now.date()):
-                # our own 🏁 card, finished and its day is over: tidy it off a weekly board (Notion trash, 30 days)
-                n.req("PATCH", f"/pages/{t['board_page']}", json={"archived": True})
-                t["board_archived"] = True
-        except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
+        except Exception as e:  # noqa: BLE001
             errs.append(f"{t['title']}: {e}")
     return errs

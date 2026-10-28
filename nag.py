@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import daily
 import events as EV
+import insights as I
 import locks as LK
 from notify import push
 from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, pull_rows, save_json, update_dashboard
@@ -181,9 +182,17 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
     return out
 
 
-def ad_slots(d) -> list[datetime]:
+def ad_slots(d, prof: dict | None = None) -> list[datetime]:
+    """Two suggestion pushes a day, aimed at your dead zones once the engine has enough history."""
     rng = random.Random(f"ads-{d.isoformat()}")
-    mins = sorted(rng.sample(range(12 * 60, 19 * 60 + 31, 15), 2))
+    opts = list(range(12 * 60, 19 * 60 + 31, 15))
+    w = [I.hour_weight(prof, m // 60) for m in opts]
+    mins = []
+    for _ in range(2):
+        k = rng.choices(range(len(opts)), weights=w)[0]
+        mins.append(opts.pop(k))
+        w.pop(k)
+    mins.sort()
     return [datetime.combine(d, datetime.min.time(), TZ) + timedelta(minutes=m) for m in mins]
 
 
@@ -226,6 +235,9 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     now = now or datetime.now(TZ)
     ids = ensure_workspace(n, parent)
     save = load_json(n, ids["save_page"]) or {}
+    prof = I.profile(save, now.date(), TZ) if save else None  # same history-before-today profile as the app
+    EV.set_profile(prof)
+    brief_at = I.brief_hour(prof, BRIEF_HOUR)
     mem = load_json(n, ids["nag_page"]) or {}
     mem.setdefault("tasks", {})
     rows = pull_rows(n, ids["tasks_db"])
@@ -260,7 +272,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
 
     day_mem = mem.setdefault("day", {})
     if save and not quiet and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):
-        for i, slot in enumerate(ad_slots(now.date())):
+        for i, slot in enumerate(ad_slots(now.date(), prof)):
             key = f"ad{i}"
             if slot <= now < slot + timedelta(hours=2) and not day_mem.get(key):
                 day_mem[key] = True
@@ -289,7 +301,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     open_keys = {t["key"] for t in tasks}
     mem["tasks"] = {k: v for k, v in mem["tasks"].items() if k in open_keys}
 
-    if not quiet and now.hour >= BRIEF_HOUR and mem.get("brief") != today:
+    if not quiet and now.hour >= brief_at and mem.get("brief") != today:
         mem["brief"] = today
         upcoming = sorted((t for t in tasks if timedelta(0) < t["deadline"] - now < timedelta(hours=48)),
                           key=lambda t: t["deadline"])
