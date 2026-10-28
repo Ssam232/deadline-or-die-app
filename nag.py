@@ -21,7 +21,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from notify import push
-from notion_store import Notion, due_to_dt, ensure_workspace, load_json, pull_rows, save_json
+from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, pull_rows, save_json, update_dashboard
 
 TZ = ZoneInfo(os.getenv("DOD_TZ", "America/Edmonton"))
 QUIET_HOURS = os.getenv("QUIET_HOURS", "23-7")
@@ -190,6 +190,11 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                  f"Rival heat: {save.get('rival_heat', 0)}.", 4, ["wrench"])
 
     save_json(n, ids["nag_page"], mem)
+    if ids.get("dashboard") and save:
+        try:  # keeps the Notion countdowns fresh even when the app isn't opened
+            update_dashboard(n, ids["dashboard"], save, TZ, app_url)
+        except NotionError as e:
+            print(f"Dashboard update failed: {e}")
     return sent
 
 

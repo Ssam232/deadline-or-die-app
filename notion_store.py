@@ -119,6 +119,112 @@ def _tasks_db_schema(parent: str) -> dict:
     }
 
 
+DASHBOARD_MARK = "PIT WALL"
+TASK_ICONS = {"open": "⏱️", "done": "🏁", "failed": "💀", "redeemed": "🩹"}
+HOW_IT_WORKS = [
+    "Add a row below with a Due date (and a Size + Consequence if you like). It joins the game next time the app "
+    "opens, or the nagger sees it within 30 min.",
+    "Finish it → open the app → submit proof (photo, screenshot, file or link). Only proof counts: ticking Done "
+    "here, moving the date or deleting the row gets reverted.",
+    "Proof approved → coins + XP + a pit crate (coins, free part, streak shield, repair, or a 3× jackpot).",
+    "Miss it → lose coins, −15% car, streak gone, rivals get faster, and your consequence lands in the penalty box.",
+    "Your phone escalates: 24h heads-up → 6h → 2h red zone (repeats) → 30 min final warning → DNF.",
+    "Coins buy car upgrades. Race your procrastination rivals in the app. Debt or unserved penalties = black flag.",
+]
+
+
+def seg(text: str, bold: bool = False, color: str = "default", link: str | None = None) -> dict:
+    t = {"content": text[:CHUNK]}
+    if link:
+        t["link"] = {"url": link}
+    return {"type": "text", "text": t, "annotations": {"bold": bold, "color": color}}
+
+
+def _make_dashboard(n: Notion, parent: str) -> str:
+    bullets = [{"object": "block", "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [seg(s)]}} for s in HOW_IT_WORKS]
+    res = n.req("PATCH", f"/blocks/{parent}/children", json={"children": [
+        {"object": "block", "type": "callout", "callout": {
+            "rich_text": [seg(DASHBOARD_MARK, bold=True), seg("  ·  waiting for the first lap…")],
+            "icon": {"type": "emoji", "emoji": "🏎️"}, "color": "gray_background"}},
+        {"object": "block", "type": "toggle", "toggle": {
+            "rich_text": [seg("📖 How it works", bold=True)], "children": bullets}},
+        {"object": "block", "type": "divider", "divider": {}},
+    ]})
+    try:
+        n.req("PATCH", f"/pages/{parent}", json={"icon": {"type": "emoji", "emoji": "🏁"}})
+    except NotionError:
+        pass
+    return res["results"][0]["id"]
+
+
+def _dress_db(n: Notion, db_id: str) -> None:
+    try:
+        n.req("PATCH", f"/databases/{db_id}", json={"icon": {"type": "emoji", "emoji": "🏁"}})
+    except NotionError:
+        pass
+
+
+def _fmt_left(td) -> str:
+    s = int(td.total_seconds())
+    if s < 0:
+        return "overdue"
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    return f"{d}d {h}h" if d else f"{h}h {s // 60}m" if h else f"{s // 60}m"
+
+
+def dashboard_content(save: dict, tz, app_url: str | None = None, now: datetime | None = None) -> dict:
+    """The live Pit Wall: same numbers as the app, readable at a glance in Notion."""
+    import math
+    now = now or datetime.now(tz)
+    coins, streak, xp = save.get("coins", 0), save.get("streak", 0), save.get("xp", 0)
+    car = save.get("car", {}).get("condition", 100)
+    heat = save.get("rival_heat", 0)
+    lvl = int(math.sqrt(max(xp, 0) / 50)) + 1
+    unserved = [p for p in save.get("penalty_box", []) if not p.get("served")]
+    flags = (["in debt"] if coins < 0 else []) + ([f"{len(unserved)} penalty unserved"] if unserved else []) + \
+            (["car wrecked"] if car < 20 else [])
+    open_tasks = sorted((t for t in save.get("tasks", []) if t.get("status") == "open"),
+                        key=lambda t: t["deadline"])
+    out = [seg(DASHBOARD_MARK, bold=True), seg(f"  ·  updated {now:%a %I:%M %p}\n", color="gray"),
+           seg(f"🪙 {coins}", bold=True), seg(" coins    "),
+           seg(f"🔥 {streak}", bold=True), seg(" streak    "),
+           seg(f"🧑‍✈️ Lv {lvl}", bold=True), seg("    "),
+           seg(f"🔧 {car}%", bold=True, color="red" if car < 40 else "default"), seg(" car    "),
+           seg(f"🌡️ {heat}", bold=True, color="red" if heat else "default"), seg(" rival heat\n")]
+    if flags:
+        out.append(seg("⬛ BLACK FLAG — " + ", ".join(flags) + "\n", bold=True, color="red"))
+    else:
+        out.append(seg("🟢 Green flag — clear to race\n", color="green"))
+    for p in unserved[:2]:
+        out.append(seg(f"🚨 Penalty box: {p['consequence']}\n", color="red"))
+    if open_tasks:
+        out.append(seg("\nNext up\n", bold=True))
+        for t in open_tasks[:3]:
+            dl = datetime.fromisoformat(t["deadline"])
+            left = dl - now
+            hrs = left.total_seconds() / 3600
+            dot = "💀" if hrs < 0 else "🔴" if hrs < 12 else "🟡" if hrs < 48 else "🟢"
+            out.append(seg(f"{dot} {t['title']}", bold=True))
+            out.append(seg(f"  —  {dl.astimezone(tz):%a %b %d, %I:%M %p}  ·  {_fmt_left(left)}"
+                           f"  ·  +{t['reward']} / −{t['penalty']}\n", color="gray"))
+    else:
+        out.append(seg("\nNothing on the board. Add a row below with a Due date — the car needs fuel.\n",
+                       color="gray"))
+    if app_url:
+        out.append(seg("\n"))
+        out.append(seg("Open Deadline or Die →", bold=True, link=app_url))
+    color = "red_background" if flags else ("orange_background" if open_tasks and
+                                            (datetime.fromisoformat(open_tasks[0]["deadline"]) - now)
+                                            .total_seconds() < 12 * 3600 else "gray_background")
+    return {"rich_text": out[:100], "color": color, "icon": {"type": "emoji", "emoji": "🏎️"}}
+
+
+def update_dashboard(n: Notion, block_id: str, save: dict, tz, app_url: str | None = None) -> None:
+    n.req("PATCH", f"/blocks/{block_id}", json={"callout": dashboard_content(save, tz, app_url)})
+
+
 def _make_page(n: Notion, parent: str, title: str, emoji: str, note: str) -> str:
     return n.req("POST", "/pages", json={
         "parent": {"type": "page_id", "page_id": parent},
@@ -141,8 +247,13 @@ def ensure_workspace(n: Notion, parent_page: str) -> dict:
             ids["save_page"] = b["id"]
         elif t == "child_page" and title == NAG_PAGE_TITLE:
             ids["nag_page"] = b["id"]
+        elif t == "callout" and plain(b["callout"].get("rich_text")).startswith(DASHBOARD_MARK):
+            ids["dashboard"] = b["id"]
+    if "dashboard" not in ids:  # goes first on a fresh page, so it sits above the table
+        ids["dashboard"] = _make_dashboard(n, parent)
     if "tasks_db" not in ids:
         ids["tasks_db"] = n.req("POST", "/databases", json=_tasks_db_schema(parent))["id"]
+        _dress_db(n, ids["tasks_db"])
     if "save_page" not in ids:
         ids["save_page"] = _make_page(n, parent, SAVE_PAGE_TITLE, "💾",
                                       "Game save. Don't edit by hand — the app overwrites it.")
@@ -200,11 +311,12 @@ def task_props(t: dict, goal: str = "") -> dict:
 
 def upsert_task(n: Notion, db_id: str, t: dict, goal: str = "") -> None:
     props = task_props(t, goal)
+    icon = {"type": "emoji", "emoji": TASK_ICONS.get(t["status"], "⏱️")}
     if t.get("sync_page"):
-        n.req("PATCH", f"/pages/{t['sync_page']}", json={"properties": props})
+        n.req("PATCH", f"/pages/{t['sync_page']}", json={"properties": props, "icon": icon})
     else:
         t["sync_page"] = n.req("POST", "/pages", json={"parent": {"database_id": db_id},
-                                                       "properties": props})["id"]
+                                                       "properties": props, "icon": icon})["id"]
 
 
 def archive_page(n: Notion, page_id: str) -> None:

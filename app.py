@@ -31,7 +31,7 @@ import streamlit as st
 
 from notify import push
 from notion_store import (Notion, NotionError, STATUS, archive_page, due_to_dt, ensure_workspace, load_json,
-                          pull_rows, save_json, task_props, upload_proof, upsert_task)
+                          pull_rows, save_json, task_props, update_dashboard, upload_proof, upsert_task)
 
 # ─────────────────────────── config ───────────────────────────
 TZ = ZoneInfo(os.getenv("DOD_TZ", "America/Edmonton"))
@@ -277,6 +277,11 @@ def save_state(state: dict) -> None:
         errs = _push_tasks(n, ids, state)
         save_json(n, ids["save_page"], state)
         st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
+        if ids.get("dashboard"):
+            try:
+                update_dashboard(n, ids["dashboard"], state, TZ, get_secret("APP_URL"))
+            except NotionError:
+                pass
         if errs:
             flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
     except Exception as e:
