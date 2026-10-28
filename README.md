@@ -97,7 +97,7 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 
 ## 🗓️ Your DECK 12 boards (input + output)
 Settings → 🔎 Find my boards, then pick a role for each:
-- **📥 Input** (e.g. Assignments): cards from today + the next 7 days (recurring weekday cards marked 🔁) become one-tap mission suggestions, and one-off events can be turned into goals. One-off cards you pick tick off when you finish them; recurring cards are never touched.
+- **📥 Input** (e.g. Assignments): **strictly read-only** — nothing is ever written to it. Cards from today + the next 7 days (recurring weekday cards marked 🔁) become one-tap mission suggestions, and one-off events can be turned into goals.
 - **📤 Output** (e.g. Fortuna, your daily schedule): **write-only**. Every task lands on it as a 🏁 card on the day/time it's *set to happen* — a board card's time, your mission laid out from "I'll START at", "gym **at** 6pm" in quick add, a prep step's day, or when you actually start the timer — and, if none of those, **when it was assigned**. Cards move if rescheduled, turn ✅ when done, and go to Notion's trash once their day is over. Nothing is ever read back from the output board, so anything else you put there stays out of the game.
 
 ## 🗓️ Events → goals (conference, talk, exam, submission)

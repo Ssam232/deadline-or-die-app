@@ -209,8 +209,9 @@ def suggestion_candidates(n: Notion, save: dict, now: datetime) -> list[tuple[st
     if db:
         try:
             import board as B
-            linked = {x.get("board_page") for x in save.get("tasks", [])}
-            items = [i for i in B.pull_day(n, B.detect(n, db), now.date()) if i["id"] not in linked]
+            linked = {B.clean_id(x.get("board_src") or x.get("board_page") or "") for x in save.get("tasks", [])
+                      if x.get("status") == "open"}
+            items = [i for i in B.pull_day(n, B.detect(n, db), now.date()) if B.clean_id(i["id"]) not in linked]
             if items:
                 i = random.choice(items)
                 out.append(("📅 On your board today", f"{i['title']}{' · ' + i['when'] if i['when'] else ''} — "

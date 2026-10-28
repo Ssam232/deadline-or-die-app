@@ -371,8 +371,7 @@ def save_state(state: dict) -> None:
         errs = _push_tasks(n, ids, state)
         bc, oc = board_cfg(state), out_cfg(state)
         try:  # board problems never block saving
-            if bc:
-                errs += B.sync_in(n, _board_map(*bc), state["tasks"])
+            errs += B.retract_pushed(n, state["tasks"])  # input board is read-only: undo old pushes
             if oc:
                 errs += B.sync_out(n, _board_map(*oc), state["tasks"], now())
         except Exception as e:
@@ -1403,18 +1402,19 @@ def render_qualify_form(state: dict) -> None:
         board_pick, board_items = [], []
         if bc:
             try:
-                known = {t.get("board_page") for t in state["tasks"]}
+                known = {B.clean_id(t.get("board_src") or t.get("board_page") or "") for t in state["tasks"]
+                         if t["status"] == "open" or (t.get("completed_at") or "")[:10] == today.isoformat()}
                 board_items = [b for b in _board_range(*bc, today.isoformat(), BOARD_LOOKAHEAD + 1)
-                               if b["id"] not in known]
+                               if B.clean_id(b["id"]) not in known]
             except Exception as e:
                 st.caption(f"(Couldn't read your board: {e})")
             if board_items:
                 blabels = {b["id"]: _board_label(b, today) for b in board_items}
                 board_pick = st.multiselect(f"📅 From your DECK 12 board · today + next {BOARD_LOOKAHEAD} days",
                                             list(blabels), format_func=blabels.get,
-                                            help="Today's cards: finish them and they tick off on your board. "
-                                                 "Upcoming ones: you put in an hour on them TODAY (the card stays "
-                                                 "open). Big events like a conference? Turn them into a goal in 🎯 Goals.")
+                                            help="Read-only: nothing is ever written back to this board. Upcoming cards "
+                                                 "become an hour of work on them TODAY. Big events like a conference? "
+                                                 "Turn them into a goal in 🎯 Goals.")
         zc = zotero_cfg(state)
         paper_pick, papers = [], []
         if zc:
@@ -1475,8 +1475,7 @@ def render_qualify_form(state: dict) -> None:
                     if bdue <= now() + timedelta(minutes=5):
                         bdue = datetime.combine(today, dtime(23, 59), TZ)
                     t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
-                    if not b.get("recurring"):  # one-off card: ticks off on the board when you finish
-                        t.update(board_page=b["id"], board_state="open")
+                    t["board_src"] = b["id"]  # remembered so it isn't suggested twice — never written to
                     if b["when"] and bdue != datetime.combine(today, dtime(21, 0), TZ):
                         t.update(scheduled=datetime.combine(today, bt, TZ).isoformat(), scheduled_time=True)
                     state["tasks"].append(t)
@@ -2552,8 +2551,8 @@ with tab_set:
         st.caption("📳 Phone buzzes off — set NTFY_TOPIC (see README).")
 
     st.subheader("🗓️ Your DECK 12 boards")
-    st.caption("**Input board** (e.g. Assignments): today + upcoming cards become one-tap suggestions and events you "
-               "can prep for. **Output board** (e.g. Fortuna): write-only — every task lands on it at the time it's "
+    st.caption("**Input board** (e.g. Assignments): strictly read-only — today + upcoming cards become one-tap "
+               "suggestions and events you can prep for; nothing is ever written to it. **Output board** (e.g. Fortuna): write-only — every task lands on it at the time it's "
                "set to happen (or when it was assigned) and ticks ✅ when done. Nothing is ever read back from the "
                "output board, so anything else you put there stays out of the game.")
     if not notion_cfg():
@@ -2602,7 +2601,7 @@ with tab_set:
                     s["board_db"] = pick
                     save_state(state)
                     st.session_state.pop("board_list", None)
-                    flash("📥 Input board linked — its cards show up as suggestions.")
+                    flash("📥 Input board linked (read-only) — its cards show up as suggestions.")
                     st.rerun()
                 if c3.button("📤 Use as output", type="primary"):
                     s["out_db"] = pick

@@ -2,8 +2,8 @@
 🗓️ Bridge to your existing Notion board (e.g. the Assignments board in DECK 12) — no two islands.
 
   • Pull: today's cards on your board show up as one-tap suggestions when you set your mission.
-  • Input board (e.g. Assignments): today + upcoming cards become one-tap suggestions; one-off cards you pick
-          tick off when you finish them. Recurring weekday cards are never touched.
+  • Input board (e.g. Assignments): STRICTLY READ-ONLY. Today + upcoming cards become one-tap suggestions and
+          events you can prep for. The app never writes to it.
   • Output board (e.g. Fortuna, a daily schedule): WRITE-ONLY. Every task appears as a "🏁 …" card on the day/time
           it's set to happen (or when it was assigned), ticks ✅ when done, and is tidied away after its day.
           Nothing is ever read back from it, so whatever else you put there stays out of the game.
@@ -239,14 +239,24 @@ def sync_out(n: Notion, m: dict, tasks: list[dict], now: datetime) -> list[str]:
     return errs
 
 
-def sync_in(n: Notion, m: dict, tasks: list[dict]) -> list[str]:
-    """INPUT board (e.g. Assignments): one-off cards you picked into a mission tick off when you finish them."""
+def retract_pushed(n: Notion, tasks: list[dict]) -> list[str]:
+    """The input board is READ-ONLY. Cards an earlier version pushed onto it are moved to Notion's trash
+    (only cards the app itself created — flagged board_pushed — are ever touched)."""
     errs = []
     for t in tasks:
+        pushed = t.get("board_pushed") or (  # older builds didn't flag it: a link on a task that didn't come from
+            t.get("board_page") and t.get("details") != "From your DECK 12 board")  # the board = a card we made
+        if not pushed:
+            if t.get("board_page"):  # a card you picked from the board: keep only as a read-only reference
+                t["board_src"] = t.pop("board_page")
+                t.pop("board_state", None)
+            continue
         try:
-            if t.get("board_page") and t["status"] != t.get("board_state") and t["status"] != "open":
-                mark_finished(n, m, t["board_page"], t["title"], t["status"])
-                t["board_state"] = t["status"]
-        except Exception as e:  # noqa: BLE001
-            errs.append(f"{t['title']}: {e}")
+            n.req("PATCH", f"/pages/{t['board_page']}", json={"archived": True})
+        except Exception as e:  # noqa: BLE001 — already gone is fine
+            if "archived" not in str(e).lower() and "could not find" not in str(e).lower():
+                errs.append(f"{t['title']}: {e}")
+                continue
+        for k in ("board_page", "board_state", "board_pushed", "board_archived"):
+            t.pop(k, None)
     return errs
