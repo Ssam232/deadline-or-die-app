@@ -103,12 +103,12 @@ CARS = [
 ]
 CAR_BY_ID = {c["id"]: c for c in CARS}
 
-TRACKS = [
-    {"name": "Parking Lot Sprint", "laps": 3, "level": 1, "fee": 10, "ai": (30, 48), "prize": [60, 30, 15]},
-    {"name": "Bow River Circuit", "laps": 5, "level": 2, "fee": 25, "ai": (55, 75), "prize": [150, 75, 35]},
-    {"name": "Foothills Grand Prix", "laps": 7, "level": 4, "fee": 60, "ai": (80, 105), "prize": [360, 180, 90]},
-    {"name": "Rockies 6 Hours", "laps": 10, "level": 6, "fee": 120, "ai": (115, 150), "prize": [800, 400, 200]},
-    {"name": "Thesis Defense Ring", "laps": 12, "level": 8, "fee": 250, "ai": (150, 200), "prize": [2000, 900, 400]},
+TRACKS = [  # prizes stay a side-dish to real work at every stage (see race_sim in the README)
+    {"name": "Parking Lot Sprint", "laps": 3, "level": 1, "fee": 8, "ai": (30, 48), "prize": [50, 25, 12]},
+    {"name": "Bow River Circuit", "laps": 5, "level": 2, "fee": 20, "ai": (55, 75), "prize": [90, 45, 22]},
+    {"name": "Foothills Grand Prix", "laps": 7, "level": 4, "fee": 35, "ai": (80, 105), "prize": [140, 70, 35]},
+    {"name": "Rockies 6 Hours", "laps": 10, "level": 6, "fee": 50, "ai": (115, 150), "prize": [200, 100, 50]},
+    {"name": "Thesis Defense Ring", "laps": 12, "level": 8, "fee": 70, "ai": (150, 200), "prize": [260, 130, 65]},
 ]
 
 # ── conditioning layer ──
@@ -1326,20 +1326,28 @@ def track_rating(state: dict, track: dict) -> float:
 
 
 RACE_DAY_CAP = 3  # races a day, max — however rich you are
+TICKET_MIN_TASK = 30  # a finish earns a ticket only if the task was worth 30+ honest minutes
+
+
+def sandbag(state: dict, track: dict) -> float:
+    """Prize multiplier: 1.0 on a fair track, shrinking (to 0.3) the more your car outclasses it."""
+    r, hi = track_rating(state, track), track["ai"][1]
+    return 1.0 if r <= hi else max(0.3, min(1.0, hi * 1.15 / r))
 
 
 def race_tickets(state: dict) -> tuple[int, str]:
     """Races are earned: 1 ticket per proof-backed finish today + 1 per full focus session (25+ min) today."""
     today = now().date()
     iso = today.isoformat()
-    finishes = len(daily.finished_on(state, today))
+    finishes = sum(1 for t in daily.finished_on(state, today) if (t.get("minutes") or 0) >= TICKET_MIN_TASK)
     sessions = sum(1 for x in state.get("focus_log", []) if x.get("date") == iso and x.get("full") and x["min"] >= 25)
     raced = sum(1 for r in state.get("races", []) if r["ts"][:10] == iso)
     left = max(0, min(RACE_DAY_CAP, finishes + sessions) - raced)
     if raced >= RACE_DAY_CAP:
         why = f"That's {RACE_DAY_CAP} races today — the track's closed till tomorrow."
     elif not left:
-        why = "No race tickets. Finish a task with proof, or complete a 25+ min focus session, to earn one."
+        why = ("No race tickets. Finish a 30+ min task with proof, or complete a 25+ min focus session, "
+               "to earn one.")
     else:
         why = f"🎟️ {left} race ticket{'s' if left > 1 else ''} · earned from {finishes} finish(es) + {sessions} session(s) today"
     return left, why
@@ -1377,6 +1385,10 @@ def simulate_race(state: dict, track: dict) -> None:
     heat = 3 * heat_lvl  # your misses literally make them faster
     rivals = [{"name": n, "you": False, "rating": random.uniform(*track["ai"]) + heat + random.gauss(0, 5),
                "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
+    mult = sandbag(state, track)
+    if mult < 1:  # you outclass the track: the fast guys show up too
+        for r_ in rivals[:2]:
+            r_["rating"] = you["rating"] * random.uniform(0.9, 1.06) + random.gauss(0, 5)
     field = [you] + rivals
     for f in field:
         f["dist"], f["dnf"] = 0.0, False
@@ -1395,7 +1407,7 @@ def simulate_race(state: dict, track: dict) -> None:
 
     order = sorted(field, key=lambda f: (not f["dnf"], f["dist"]), reverse=True)
     pos = next(i for i, f in enumerate(order, 1) if f["you"])
-    payout = 0 if you["dnf"] else (track["prize"][pos - 1] if pos <= 3 else 0)
+    payout = 0 if you["dnf"] else (round(track["prize"][pos - 1] * mult) if pos <= 3 else 0)
     wear = 2 + track["laps"] // 3
     car["condition"] = max(0, car["condition"] - wear)
     state["xp"] += 5
@@ -1412,6 +1424,9 @@ def simulate_race(state: dict, track: dict) -> None:
     mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
     why = RV.explain("DNF" if you["dnf"] else pos, gap, track["name"], cond_before, heat_lvl,
                      G.effective(car["parts"], mid), G.cap(mid), G.PART_INFO, G.installed, G.next_upgrade)
+    if mult < 1:
+        why += (f"\n- 🪜 Your car outclasses {track['name']}, so two fast rivals joined and prizes paid "
+                f"×{mult:.2f}. Move up a track for full prizes.")
     secs = race_seconds(track)
     if you["dnf"]:
         res = ("error", f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "fail", False)
@@ -3114,8 +3129,13 @@ with tab_race:
         lo, hi = track["ai"]
         rating = track_rating(state, track)
         st.caption("🏁 " + RV.TRACK_CHARACTER.get(track["name"], ([], ""))[1].capitalize() + ".")
+        m_ = sandbag(state, track)
+        pz = [round(x * m_) for x in track["prize"]]
         st.markdown(f"Your car **{rating:.0f}** here vs rivals **{lo}–{hi}** · Entry **{track['fee']} 🪙** · "
-                    f"Prizes 🥇{track['prize'][0]} 🥈{track['prize'][1]} 🥉{track['prize'][2]}")
+                    f"Prizes 🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}")
+        if m_ < 1:
+            st.caption(f"🪜 You outclass this track: fast rivals show up and prizes pay ×{m_:.2f}. "
+                       "Move up a track for full prizes.")
         if car["condition"] < 40:
             st.warning("Car under 40% — real risk of a DNF.")
         if lvl < track["level"]:
