@@ -1580,10 +1580,10 @@ def render_qualify_form(state: dict) -> None:
                                 help="✅ your tasks · 📅 DECK 12 (read-only; upcoming cards = an hour on them today) · "
                                      "📄 Zotero papers (45 min)")
     pending = st.session_state.setdefault("q_pending", [])
-    c1, c2 = st.columns([1.45, 1], vertical_alignment="bottom")
+    c1, c2 = st.columns([1, 1], vertical_alignment="bottom")
     c1.text_input("Add a task" if not opts else "Or add a task", key=f"q_new{fk}",
                   placeholder="e.g. Write 300 words of methods — Enter to add", on_change=_q_add, args=(fk,))
-    c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}", label_visibility="hidden")
+    c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}", label_visibility="collapsed")
     if pending:
         chips = [f"{Q.parse(t_, now())['title']} · {min_label(m_)}  ✕" for t_, m_ in pending]
         st.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
@@ -1820,11 +1820,11 @@ def render_timer(state: dict) -> None:
                           sound="win")
                     st.rerun()
             labels = {t["id"]: t["title"] for t in open_t}
-            c1, c2 = st.columns([3, 1])
+            c1, c2 = st.columns([1.6, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
             planned = c2.selectbox("Minutes", [25, 50, 60, 90, 120], key="timer_len", label_visibility="collapsed",
-                                   format_func=lambda m: f"{m} min focus")
+                                   format_func=lambda m: f"{m} min")
             wall = PM.wall_minutes(planned, work, brk)
             if st.button(f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
                          type="primary", use_container_width=True):
@@ -2039,7 +2039,8 @@ def render_lounge(state: dict) -> None:
 # This only adds what the theme can't: the instrument cluster, the live-card rail, dark text on yellow buttons.
 CSS = """<style>
 :root{--y:#f5c518;--r:#e10600;--t:#2ec4b6;--panel:#1b1f27;--line:#2c313c;--muted:#8b909c}
-.block-container{max-width:880px;padding-top:2.4rem}
+.block-container{max-width:1240px;padding-top:2.2rem}
+.st-key-rail [data-testid="stVerticalBlockBorderWrapper"],.st-key-rail>div{gap:.9rem}
 [data-testid="stBaseButton-primary"] *,[data-testid="stBaseButton-primaryFormSubmit"] *{color:#14171d!important;font-weight:700}
 .st-key-live_card{border-left:4px solid var(--y)!important}
 [data-testid="stMultiSelectTagsContainer"] [data-tag],[data-baseweb="tag"]{background:#2a2f3a!important;
@@ -2108,7 +2109,7 @@ def render_cluster(state: dict) -> None:
 
 
 # ─────────────────────────── app ───────────────────────────
-st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="centered")
+st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
     os.environ["NTFY_TOPIC"] = get_secret("NTFY_TOPIC")  # same secret seed as the nagger for surprise events
@@ -2208,11 +2209,14 @@ snd = st.session_state.pop("sound", None)
 if snd and state["settings"].get("sounds", True):
     st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
 
-render_today(state)
-render_dailies(state)
-
-render_quick_add(state, "qa_top")
-render_timer(state)
+# ── cockpit: what to do now on the left, the tools you reach for on the right (stacks on a phone) ──
+c_main, c_rail = st.columns([1.55, 1], gap="large")
+with c_main:
+    render_today(state)
+with c_rail:
+    render_timer(state)
+    render_dailies(state)
+    render_quick_add(state, "qa_top")
 
 lvl = level_of(state["xp"])
 
@@ -2223,6 +2227,8 @@ open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=la
 
 # ── Pit Wall ──
 with tab_pit:
+  pit_l, pit_r = st.columns([1.55, 1], gap="large")
+  with pit_l:
     reasons = black_flag_reasons(state)
     if reasons:
         st.error("⬛ **BLACK FLAG** — racing locked: " + "; ".join(reasons) + ".")
@@ -2259,8 +2265,15 @@ with tab_pit:
                     flash("Penalty served. Back on track.")
                     st.rerun()
 
-    render_contracts(state)
+    with st.expander("📜 Ledger"):
+        if not state["ledger"]:
+            st.caption("Nothing yet.")
+        for e in state["ledger"][:15]:
+            st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
+                        f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
+    _rules_expander = st.expander("📖 Rules")
 
+  with pit_r:
     st.subheader("⏱️ Next up")
     if not open_tasks:
         st.info("No open tasks. Add one in ✅ Tasks — or break a goal down in 🎯 Goals.")
@@ -2271,14 +2284,9 @@ with tab_pit:
                     f"<small>{dl:%a %b %d, %I:%M %p} · +{t['reward']} / −{t['penalty']}"
                     f"{' · 🎯 ' + html.escape(g) if g else ''}</small>", unsafe_allow_html=True)
 
-    with st.expander("📜 Ledger"):
-        if not state["ledger"]:
-            st.caption("Nothing yet.")
-        for e in state["ledger"][:15]:
-            st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
-                        f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
+    render_contracts(state)
 
-    with st.expander("📖 Rules"):
+  with _rules_expander:
         st.markdown(f"""
 - **Every task** has a deadline, a reward and a penalty (set by its size).
 - **Finish it → submit proof** (file and/or link + a note). With an Anthropic key, an AI race steward checks it; otherwise it's on your honor. The same file can never be reused.
@@ -2594,25 +2602,26 @@ with tab_stats:
 # ── Garage ──
 with tab_garage:
     car = state["car"]
-    st.markdown(car_svg(car), unsafe_allow_html=True)
-    st.markdown(f"### #{car['number']} {car['name']}")
     model = CAR_BY_ID.get(car.get("model"), CARS[0])
-    st.caption(f"**{model['name']}** · performance rating **{car_rating(state):.0f}** — {model['blurb']}")
-    st.caption(f"📚 {G.CHASSIS[model['id']][1]}")
-
-    st.progress(car["condition"] / 100, text=f"Condition {car['condition']}%")
-    missing = 100 - car["condition"]
-    if missing:
-        afford = min(missing, max(state["coins"], 0) // REPAIR_COST_PER_PT)
-        if afford:
-            if st.button(f"🔧 Repair +{afford}% ({afford * REPAIR_COST_PER_PT} 🪙)"):
-                car["condition"] += afford
-                bank(state, -afford * REPAIR_COST_PER_PT, "🔧 Repairs")
-                save_state(state)
-                flash("Repaired.")
-                st.rerun()
-        else:
-            st.caption("Can't afford repairs. Go finish something.")
+    g_l, g_r = st.columns([1.3, 1], gap="large", vertical_alignment="center")
+    g_l.markdown(car_svg(car), unsafe_allow_html=True)
+    with g_r:
+        st.markdown(f"### #{car['number']} {car['name']}")
+        st.caption(f"**{model['name']}** · performance rating **{car_rating(state):.0f}** — {model['blurb']}")
+        st.caption(f"📚 {G.CHASSIS[model['id']][1]}")
+        st.progress(car["condition"] / 100, text=f"Condition {car['condition']}%")
+        missing = 100 - car["condition"]
+        if missing:
+            afford = min(missing, max(state["coins"], 0) // REPAIR_COST_PER_PT)
+            if afford:
+                if st.button(f"🔧 Repair +{afford}% ({afford * REPAIR_COST_PER_PT} 🪙)"):
+                    car["condition"] += afford
+                    bank(state, -afford * REPAIR_COST_PER_PT, "🔧 Repairs")
+                    save_state(state)
+                    flash("Repaired.")
+                    st.rerun()
+            else:
+                st.caption("Can't afford repairs. Go finish something.")
 
     with st.expander("🏢 Showroom — the Honda ladder", expanded=False):
         lvl_now = level_of(state["xp"])
