@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import random
+from datetime import date
 
 MAX_BET = 50
 MAX_HANDS = 15
@@ -26,12 +27,31 @@ def day_record(save: dict, today: str) -> dict:
     return rec
 
 
-def closed_reason(save: dict, today: str, finished_today: int, black_flag: list[str]) -> str | None:
+ENTRY_MINUTES = 60  # earn your way in: a finished task worth 1h+, or a single focus block of 1h+
+
+
+def entry_ticket(save: dict, d: date) -> str | None:
+    """Why the door is open today (None = not earned yet). Weekends are free."""
+    if d.weekday() >= 5:
+        return "🎉 Weekend — the lounge is open."
+    iso = d.isoformat()
+    for t in save.get("tasks", []):
+        if t.get("status") in ("done", "redeemed") and (t.get("completed_at") or "")[:10] == iso \
+                and (t.get("minutes") or 0) >= ENTRY_MINUTES:
+            return f"🎟️ Earned: you finished *{t['title']}* (1h+ task)."
+    for x in save.get("focus_log", []):
+        if x.get("date") == iso and x.get("min", 0) >= ENTRY_MINUTES:
+            return f"🎟️ Earned: a {int(x['min'])}-min focus block."
+    return None
+
+
+def closed_reason(save: dict, d: date, black_flag: list[str]) -> str | None:
     if black_flag:
         return "Black flag — the lounge doesn't serve drivers in the penalty box."
-    if not finished_today:
-        return "The lounge opens after your first proof-backed finish today. Work first, play after."
-    rec = day_record(save, today)
+    if not entry_ticket(save, d):
+        return ("The lounge opens after you finish a task worth 1h+ or run a single 1h focus block today. "
+                "Weekends it's open all day.")
+    rec = day_record(save, d.isoformat())
     if rec["hands"] >= MAX_HANDS:
         return f"That's {MAX_HANDS} hands today. Lounge is closed till tomorrow."
     if rec["net"] >= WIN_LIMIT:

@@ -2100,8 +2100,10 @@ def _cards(cs: list[str], hide_second: bool = False) -> str:
 
 def render_lounge(state: dict) -> None:
     today = now().date().isoformat()
-    finished = len(daily.finished_on(state, now().date()))
-    reason = L.closed_reason(state, today, finished, black_flag_reasons(state))
+    reason = L.closed_reason(state, now().date(), black_flag_reasons(state))
+    ticket = L.entry_ticket(state, now().date())
+    if ticket and not reason:
+        st.caption(ticket)
     rec = L.day_record(state, today)
     st.caption(f"Today: {rec['hands']}/{L.MAX_HANDS} hands · net {rec['net']:+d} 🪙 · max bet {L.MAX_BET} · "
                "the house has an edge — this is where coins go to have fun, not to multiply.")

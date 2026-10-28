@@ -96,7 +96,7 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 - Timer: pick a task, 25/50/60/90/120 min of work, log it. Counts toward contracts and the +15% verified bonus.
 - 🍅 Breaks: pick **25/5 pomodoro**, **50/10**, or a custom *break at N min* interval (remembered). The clock turns blue on breaks and beeps at each switch; only work minutes are logged, so breaks never pad the receipt.
 - Contracts: 3 rotating weekly challenges, big payouts.
-- Lounge: blackjack + snake eyes. Opens only after a finish today, max bet 50, 15 hands/day, closes at +200 or −300. House edge ~6% (blackjack) / ~17% (dice).
+- Lounge: blackjack + snake eyes. Opens after you finish a task worth 1h+ or run a single 1h focus block that day — and all day on weekends; max bet 50, 15 hands/day, closes at +200 or −300. House edge ~6% (blackjack) / ~17% (dice).
 
 ## 🎉 Live events
 0–2 random events a day (10 AM–8 PM), pushed to your phone: ⚡ double coins & XP (3h) · 🎁 supply drop (free crate, 2h) · 🎯 bounty (+75 for a deep-work finish, 4h) · 🔧 pit crew (free +30% repair).
