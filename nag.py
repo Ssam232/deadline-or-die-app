@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import daily
 import events as EV
+import locks as LK
 from notify import push
 from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, pull_rows, save_json, update_dashboard
 
@@ -180,6 +181,47 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
     return out
 
 
+def ad_slots(d) -> list[datetime]:
+    rng = random.Random(f"ads-{d.isoformat()}")
+    mins = sorted(rng.sample(range(12 * 60, 19 * 60 + 31, 15), 2))
+    return [datetime.combine(d, datetime.min.time(), TZ) + timedelta(minutes=m) for m in mins]
+
+
+def suggestion_candidates(n: Notion, save: dict, now: datetime) -> list[tuple[str, str]]:
+    """'Ads' for your own life: quick wins, today's board cards, unread papers."""
+    out = []
+    open_t = sorted((t for t in save.get("tasks", []) if t.get("status") == "open"),
+                    key=lambda t: ((t.get("minutes") or 60) > 30, t["deadline"]))
+    if open_t:
+        t = open_t[0]
+        out.append(("🎯 Quick win available",
+                    f"{t['title']} — {t.get('minutes') or 60} min → +{t['reward']}. Knock it out and the lounge opens."))
+    db = save.get("settings", {}).get("board_db")
+    if db:
+        try:
+            import board as B
+            linked = {x.get("board_page") for x in save.get("tasks", [])}
+            items = [i for i in B.pull_day(n, B.detect(n, db), now.date()) if i["id"] not in linked]
+            if items:
+                i = random.choice(items)
+                out.append(("📅 On your board today", f"{i['title']}{' · ' + i['when'] if i['when'] else ''} — "
+                                                     "add it to today's mission so it counts."))
+        except Exception as e:
+            print(f"board suggestion skipped: {e}")
+    zu, zk = os.getenv("ZOTERO_USER_ID"), os.getenv("ZOTERO_API_KEY")
+    if zu and zk:
+        try:
+            import zotero as Z
+            papers = Z.to_read(zu, zk, save.get("settings", {}).get("zotero_collection") or "To Read")
+            if papers:
+                p = random.choice(papers[:10])
+                out.append(("📄 From your reading list", f"{Z.label(p)} — 45 min of deep work = +51. "
+                                                        "Open the app and add it."))
+        except Exception as e:
+            print(f"zotero suggestion skipped: {e}")
+    return out
+
+
 def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(TZ)
     ids = ensure_workspace(n, parent)
@@ -216,6 +258,17 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     for msg in daily_nags(save, mem, now, quiet):
         send(*msg)
 
+    day_mem = mem.setdefault("day", {})
+    if save and not quiet and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):
+        for i, slot in enumerate(ad_slots(now.date())):
+            key = f"ad{i}"
+            if slot <= now < slot + timedelta(hours=2) and not day_mem.get(key):
+                day_mem[key] = True
+                cands = suggestion_candidates(n, save, now)
+                if cands:
+                    title, body = cands[(i + now.day) % len(cands)]
+                    send(title, body, 3, ["bulb"])
+
     sent_ev = mem.setdefault("events", [])
     for e in EV.active(now):  # random live events — the reason to open the app right now
         if e["id"] not in sent_ev and not quiet:
@@ -243,6 +296,8 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             elif not stt["qualified"]:
                 body += f"\n\n🚦 Qualifying closes {stt['deadline']:%I:%M %p} — lock in today's mission."
             body += f"\n📅 Day streak: {stt['day_streak']}"
+            g0, g1 = EV.golden_hour(now.date(), TZ)
+            body += f"\n🌅 Golden hour {g0:%I:%M}–{g1:%I:%M %p}: start a focus session then for guaranteed loot."
         if now.weekday() in DANGER_DAYS:
             body += "\n\n⚠️ Danger day. No one's watching you today — that's exactly why it counts. +20% on everything."
         send(f"🏁 Morning, {ctx['name']}", body, 3, ["checkered_flag"])
@@ -256,6 +311,8 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                  f"{idle} days without finishing anything. −4% condition a day until you do. "
                  f"Rival heat: {save.get('rival_heat', 0)}.", 4, ["wrench"])
 
+    if save:  # keep-alive so the PC enforcer / iPhone Shortcut always have a fresh lock state
+        LK.publish(topic, LK.status(save, now))
     save_json(n, ids["nag_page"], mem)
     if ids.get("dashboard") and save:
         try:  # keeps the Notion countdowns fresh even when the app isn't opened

@@ -22,5 +22,7 @@ jobs:
           NOTION_PARENT_PAGE: ${{ secrets.NOTION_PARENT_PAGE }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           APP_URL: ${{ secrets.APP_URL }}
+          ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
           DOD_TZ: America/Edmonton
           QUIET_HOURS: "23-7"

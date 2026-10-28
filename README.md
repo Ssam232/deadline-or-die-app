@@ -92,6 +92,34 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 ## 🗓️ Your DECK 12 board
 Settings → 🔎 Find my boards → Link it. Today's cards become one-tap mission suggestions; Deadline or Die tasks due within 7 days appear on your board as 🏁 cards and turn ✅ when finished. Columns are auto-detected (title, date or weekday select, time text, done checkbox/status).
 
+## 🔒 Consequences that actually bite
+Pick **🔒 Games locked on PC + phone until it's done** as a task's consequence (it's the default). Miss it and you're LOCKED until you finish it late (🩹 redeem) or 24h pass. A running focus session also locks (toggle in Settings). 🆘 Emergency unlock in the app: 1 hour for 100 coins (more at higher levels).
+
+The lock state is broadcast to your ntfy topic + `-lock`. Two things read it:
+
+**PC enforcer** (closes Overwatch, sim racing titles, etc. while locked)
+```
+pip install requests psutil
+python enforcer/enforcer.py --setup     # paste your NTFY_TOPIC, review the blocklist
+python enforcer/enforcer.py --status    # sanity check
+python enforcer/enforcer.py --install   # runs silently at every login
+```
+**iPhone Shortcut** (kicks you out of a game app while locked) — Shortcuts → Automation → + → **App** → pick the game(s) → **Is Opened** → **Run Immediately**, then add these actions:
+1. **Get Contents of URL** → `https://ntfy.sh/<YOUR_NTFY_TOPIC>-lock/raw?poll=1&since=3h`
+2. **Split Text** by *New Lines* → **Get Item from List** → *Last Item*
+3. **If** *Item from List* **begins with** `LOCKED` →
+   **Show Alert** (*Item from List*) → **Go to Home Screen** → **Open URLs** (your app link)
+4. **End If**
+
+## 📄 Zotero reading list
+Settings → add `ZOTERO_USER_ID` + `ZOTERO_API_KEY` (zotero.org/settings/keys; give the key write access so finished papers get tagged `read`). Papers in your "To Read" collection show up as one-tap 45-min deep-work tasks, and in the 2 daily 🎯 suggestion pushes. Add the same two values as GitHub Actions secrets for the pushes.
+
+## 📱 No password every time
+Log in once — the address bar gains `?k=…`. Add *that* page to your Home Screen, and put it in the `APP_URL` secret (Streamlit + GitHub) so notifications open logged in. Settings → 📱 Remember-me link shows it.
+
+## 🎁 Focus-session loot
+Full 25+ min sessions roll a drop (XP, coins, pit crate, ⚡ 2× token, 🔧 free-upgrade token), 3 per day. Start inside today's 🌅 golden hour (in the morning briefing) for a guaranteed good one. As you level up, penalties grow (up to 2×) and your daily mission must total 30 → 60 minutes.
+
 ## 🏢 The Honda ladder
 Civic Si → Integra Type R → S2000 → Civic Type R → NSX → NSX Type S → NSX GT3 Evo. Each needs a driver level and coins (Garage → Showroom). Six upgrade paths (engine, wheels & tires, aero, brakes, forced induction, weight), each with real part names and a 💡 lesson — and each visible on the car. Every chassis has a tuning limit (Civic Si L3 … NSX L5); parts you buy carry over.
 

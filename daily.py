@@ -29,9 +29,27 @@ SETTLE_LOOKBACK_DAYS = 7
 MAX_CHARGED_ZERO_DAYS = 3   # comeback rule: returning after a long absence shouldn't bury you
 
 
+def level(save: dict) -> int:
+    import math
+    return int(math.sqrt(max(save.get("xp", 0), 0) / 50)) + 1
+
+
+def level_factor(save: dict) -> float:
+    """The game gets harder as you get better: penalties grow 10% per level, up to 2×."""
+    return min(2.0, 1 + 0.1 * (level(save) - 1))
+
+
+def min_mission_minutes(save: dict) -> int:
+    return 30 if level(save) < 3 else 60
+
+
 def cfg(save: dict) -> dict:
     s = save.get("settings", {})
-    return {k: s.get(k, v) for k, v in DAILY_DEFAULTS.items()}
+    c = {k: s.get(k, v) for k, v in DAILY_DEFAULTS.items()}
+    f = level_factor(save)
+    c["qualify_penalty"] = round(c["qualify_penalty"] * f)
+    c["zero_day_penalty"] = round(c["zero_day_penalty"] * f)
+    return c
 
 
 def day(save: dict, d: date) -> dict:

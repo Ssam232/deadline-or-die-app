@@ -35,8 +35,10 @@ import contracts as K
 import events as EV
 import garage as G
 import daily
+import locks as LK
 import lounge as L
 import valuation as V
+import zotero as Z
 from notify import push
 from notion_store import (Notion, NotionError, STATUS, archive_page, due_to_dt, ensure_workspace, load_json,
                           pull_rows, save_json, task_props, update_dashboard, upload_proof, upsert_task)
@@ -125,6 +127,7 @@ HYPE = [
 ]
 CONSEQUENCE_PRESETS = [
     "(write my own)",
+    "🔒 Games locked on PC + phone until it's done",
     "No sim racing until it's done",
     "No gaming (PS5 / Switch) tonight",
     "No manga/manhwa for 24h",
@@ -255,6 +258,16 @@ def _board_today(token: str, db: str, day_iso: str) -> list[dict]:
     return B.pull_day(Notion(token), m, date.fromisoformat(day_iso))
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _zotero_list(user: str, key: str, coll: str) -> list[dict]:
+    return Z.to_read(user, key, coll)
+
+
+def zotero_cfg(state: dict) -> tuple[str, str, str] | None:
+    u, k = get_secret("ZOTERO_USER_ID"), get_secret("ZOTERO_API_KEY")
+    return (str(u), k, state["settings"].get("zotero_collection") or "To Read") if u and k else None
+
+
 def board_cfg(state: dict) -> tuple[str, str] | None:
     db, token = state["settings"].get("board_db"), get_secret("NOTION_TOKEN")
     return (token, db) if db and token else None
@@ -309,7 +322,18 @@ def _push_tasks(n: Notion, ids: dict, state: dict) -> list[str]:
     return errors
 
 
+def broadcast_lock(state: dict) -> None:
+    for p in state.get("penalty_box", []):  # enforced locks expire after 24h
+        if p.get("enforced") and not p["served"] and now() - parse_dt(p["created"]) >= timedelta(hours=LK.LOCK_HOURS):
+            p.update(served=True, served_at=now().isoformat(), how="expired")
+    st_ = LK.status(state, now())
+    msg = LK.message(st_)
+    if msg != state.get("_lock_msg") and LK.publish(get_secret("NTFY_TOPIC"), st_):
+        state["_lock_msg"] = msg
+
+
 def save_state(state: dict) -> None:
+    broadcast_lock(state)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     tmp = STATE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2, default=str))
@@ -550,6 +574,7 @@ def make_task(title, details, deadline: datetime, difficulty=None, consequence="
 def fail_task(state: dict, t: dict, reason: str) -> str:
     t["status"] = "failed"
     t["failed_at"] = now().isoformat()
+    t["penalty"] = round(t["penalty"] * daily.level_factor(state))  # pros pay more for misses
     bank(state, -t["penalty"], f"💀 {reason}: {t['title']}")
     state["car"]["condition"] = max(0, state["car"]["condition"] - MISS_DAMAGE)
     state["rival_heat"] += 1
@@ -562,9 +587,10 @@ def fail_task(state: dict, t: dict, reason: str) -> str:
         state["streak"] = 0
         streak_line = f"Your **{lost_streak}-task streak is gone.**" if lost_streak else "Streak: 0."
     if t.get("consequence"):
-        state["penalty_box"].append({"id": uuid.uuid4().hex[:8], "task": t["title"],
+        state["penalty_box"].append({"id": uuid.uuid4().hex[:8], "task": t["title"], "task_id": t["id"],
                                      "consequence": t["consequence"], "created": now().isoformat(),
-                                     "served": False})
+                                     "served": False,
+                                     "enforced": t["consequence"].startswith(LK.ENFORCED_MARK)})
     name = state["settings"].get("player_name") or "driver"
     msg = (f"### 💀 DNF — {reason.lower()}\n**{t['title']}**\n\n"
            f"−{t['penalty']} coins · −{MISS_DAMAGE}% car condition · {streak_line}\n\n"
@@ -689,9 +715,14 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
     guard, guard_why = V.payout(base, t, parse_dt(t["created"]), at, paid_today, t.get("focus_min", 0))
     t["_guard"] = guard
     dbl = 2 if EV.is_double(at) else 1
+    tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
+    used_token = False
+    if dbl == 1 and tok.get("double", 0) > 0:
+        tok["double"] -= 1
+        dbl, used_token = 2, True
     t["_guard"] = guard * dbl
     total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl))
-    parts = [f"base {base}"] + guard_why + (["×2 ⚡ event"] if dbl == 2 else [])
+    parts = [f"base {base}"] + guard_why + (["×2 ⚡ token"] if used_token else ["×2 ⚡ event"] if dbl == 2 else [])
     if early:
         parts.append(f"+{int(early * 100)}% early")
     if danger:
@@ -971,6 +1002,9 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         bank(state, refund, f"🩹 Redeemed: {t['title']}")
         state["xp"] += t["xp"] // 2
         t["status"], t["earned"] = "redeemed", refund
+        for p in state["penalty_box"]:
+            if p.get("task_id") == t["id"] and not p["served"]:
+                p.update(served=True, served_at=now().isoformat(), how="redeemed")
         msg = f"🩹 Redeemed **{t['title']}** — +{refund} coins back, +{t['xp'] // 2} XP. Late, but done."
         sound = "win"
     state["last_done_date"] = at.date().isoformat()
@@ -979,6 +1013,14 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         msg += f"\n\n🧑‍⚖️ Steward: *{verdict['comment']}*"
     if level_of(state["xp"]) > old_level:
         msg += f"\n\n⬆️ **Driver level {level_of(state['xp'])}!** Check the Race tab for new tracks."
+    if t.get("zotero_key") and zotero_cfg(state):
+        try:
+            zc = zotero_cfg(state)
+            Z.mark_read(zc[0], zc[1], t["zotero_key"])
+            _zotero_list.clear()
+            msg += "\n\n📄 Tagged **read** in Zotero."
+        except Exception as e:
+            msg += f"\n\n(Couldn't tag it in Zotero: {e})"
     err = notion_mark_done(state, t)
     if err:
         msg += f"\n\n(Couldn't tick it off in your Notion list: {err})"
@@ -1184,9 +1226,13 @@ def simulate_race(state: dict, track: dict) -> None:
     st.rerun()
 
 
+def remember_key(pw: str) -> str:
+    return hashlib.sha256(f"dod-remember:{pw}".encode()).hexdigest()[:24]
+
+
 def make_safety_car(due: datetime) -> dict:
     return make_task(daily.SAFETY_CAR_TITLE, "Proof: a screenshot of a 30-min timer + one line on what you did.",
-                     due, None, "No gaming tonight", category="deep", minutes=30)
+                     due, None, "🔒 Games locked on PC + phone until it's done", category="deep", minutes=30)
 
 
 def _next_half_hour() -> dtime:
@@ -1215,6 +1261,18 @@ def render_qualify_form(state: dict) -> None:
                 blabels = {b["id"]: b["title"] + (f" · {b['when']}" if b["when"] else "") for b in board_items}
                 board_pick = st.multiselect("📅 From your DECK 12 board today", list(blabels), format_func=blabels.get,
                                             help="Pick the ones that actually need doing — they'll tick off on your board too.")
+        zc = zotero_cfg(state)
+        paper_pick, papers = [], []
+        if zc:
+            try:
+                known_z = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
+                papers = [p for p in _zotero_list(*zc) if p["key"] not in known_z][:8]
+            except Exception as e:
+                st.caption(f"(Couldn't read Zotero: {e})")
+            if papers:
+                plabels = {p["key"]: Z.label(p) for p in papers}
+                paper_pick = st.multiselect(f"📄 From your Zotero “{zc[2]}”", list(plabels), format_func=plabels.get,
+                                            help="45 min of deep work each. Proof: your notes + a 2-line summary.")
         st.caption("Add what you'll finish **today** — small and specific beats big and vague. "
                    "Value = category × honest minutes (guide in ✅ Tasks).")
         new = [st.text_input(f"Mission {i + 1}", key=f"q_new_{i}", label_visibility="collapsed",
@@ -1233,8 +1291,12 @@ def render_qualify_form(state: dict) -> None:
             dl = datetime.combine(today, due_t, TZ)
             if titles and dl <= now() + timedelta(minutes=5):
                 st.error("'Done by' has to be later today.")
-            elif not titles and not picked and not board_pick:
+            elif not titles and not picked and not board_pick and not paper_pick:
                 st.error("Pick at least one thing. One small thing counts.")
+            elif (sum(x.get("minutes") or 60 for x in state["tasks"] if x["id"] in picked) + len(titles) * mins
+                  + len(board_pick) * 60 + len(paper_pick) * 45) < daily.min_mission_minutes(state):
+                st.error(f"Too easy. Today's mission needs at least {daily.min_mission_minutes(state)} minutes of "
+                         "honest work in total — add something or pick a bigger time.")
             else:
                 ids = list(picked)
                 for bid in board_pick:
@@ -1249,6 +1311,14 @@ def render_qualify_form(state: dict) -> None:
                         bdue = datetime.combine(today, dtime(23, 59), TZ)
                     t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
                     t.update(board_page=b["id"], board_state="open")
+                    state["tasks"].append(t)
+                    ids.append(t["id"])
+                for pk in paper_pick:
+                    p = next(x for x in papers if x["key"] == pk)
+                    pdl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
+                    t = make_task(f"📄 Read: {p['title'][:80]}", f"Proof: photo/screenshot of your notes + a 2-line "
+                                  f"summary. {p['url']}", pdl, None, "", category="deep", minutes=45)
+                    t["zotero_key"] = pk
                     state["tasks"].append(t)
                     ids.append(t["id"])
                 for title in titles:
@@ -1337,8 +1407,16 @@ def render_timer(state: dict) -> None:
                 state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned}
                 save_state(state)
                 st.rerun()
-            st.caption(f"Timer-verified tasks pay **+{int(V.TIMER_BONUS * 100)}%**. Today: "
-                       f"**{focus_today(state)} min** focused.")
+            g0, g1 = EV.golden_hour(now().date(), TZ)
+            tok = state.get("tokens", {})
+            golden_txt = (f"🌅 **Golden hour is NOW** (till {g1:%I:%M %p}) — sessions started now drop guaranteed loot."
+                          if g0 <= now() < g1 else f"🌅 Golden hour today: {g0:%I:%M}–{g1:%I:%M %p}.")
+            drops_left = EV.DROPS_PER_DAY - sum(1 for x in state.get("focus_log", [])
+                                                 if x["date"] == now().date().isoformat() and x.get("drop"))
+            st.caption(f"Full 25+ min sessions drop loot ({max(0, drops_left)} left today). {golden_txt} "
+                       f"Timer-verified tasks pay **+{int(V.TIMER_BONUS * 100)}%**. Today: **{focus_today(state)} min**."
+                       + (f" Tokens: ⚡×{tok.get('double', 0)} 🔧×{tok.get('upgrade', 0)}"
+                          if tok.get("double") or tok.get("upgrade") else ""))
             return
         t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
         start = parse_dt(tm["start"])
@@ -1366,9 +1444,35 @@ f();setInterval(f,500);
                                                           "min": round(mins, 1), "full": full})
                 del state["focus_log"][:-500]
                 state["xp"] += int(mins // 5)
+                drop_msg, snd = "", ("win" if full else None)
+                today_log = [x for x in state["focus_log"] if x["date"] == now().date().isoformat()]
+                if full and mins >= 25 and sum(1 for x in today_log if x.get("drop")) < EV.DROPS_PER_DAY:
+                    g0, g1 = EV.golden_hour(now().date(), TZ)
+                    golden = g0 <= start < g1
+                    kind = EV.roll_drop(golden)
+                    state["focus_log"][-1]["drop"] = kind
+                    tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
+                    if kind == "xp":
+                        state["xp"] += 20
+                        drop_msg = "🎁 Session drop: **+20 XP**"
+                    elif kind == "coins":
+                        bank(state, 30, "🎁 Session drop")
+                        drop_msg = "🎁 Session drop: **+30 coins**"
+                    elif kind == "crate":
+                        drop_msg = "🎁 Session drop → " + open_crate(state, {"reward": 45})
+                    elif kind == "double_token":
+                        tok["double"] = tok.get("double", 0) + 1
+                        drop_msg = "🎁 Session drop: **⚡ 2× token** — your next finish pays double."
+                    else:
+                        tok["upgrade"] = tok.get("upgrade", 0) + 1
+                        drop_msg = "🎁 Session drop: **🔧 free-upgrade token** — install any part for free in the Garage."
+                    if golden:
+                        drop_msg = "🌅 **Golden hour bonus!** " + drop_msg
+                    snd = "jackpot" if kind in ("double_token", "upgrade_token") or golden else "win"
                 save_state(state)
                 flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
-                      + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min.", sound="win" if full else None)
+                      + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),
+                      sound=snd, celebrate=bool(drop_msg))
             else:
                 save_state(state)
             st.rerun()
@@ -1481,12 +1585,15 @@ st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="cente
 
 # Password gate — set APP_PASSWORD in secrets so nobody else can see your tasks and proof.
 _pw = get_secret("APP_PASSWORD")
+if _pw and not st.session_state.get("_authed") and st.query_params.get("k") == remember_key(_pw):
+    st.session_state["_authed"] = True
 if _pw and not st.session_state.get("_authed"):
     st.title("🏁 Deadline or Die")
     entered = st.text_input("Password", type="password")
     if entered:
         if hashlib.sha256(entered.encode()).digest() == hashlib.sha256(_pw.encode()).digest():
             st.session_state["_authed"] = True
+            st.query_params["k"] = remember_key(_pw)  # bookmark / home-screen this URL = no more password
             st.rerun()
         st.error("Wrong password.")
     st.stop()
@@ -1528,6 +1635,22 @@ for kind, m in st.session_state.pop("flash", []):
     getattr(st, kind)(m)
 if st.session_state.pop("celebrate", False):
     st.balloons()
+_lk = LK.status(state, now())
+if _lk["locked"]:
+    with st.container(border=True):
+        st.markdown("#### 🔒 LOCKED — games are blocked")
+        st.caption(" · ".join(_lk["reasons"]))
+        cost = round(LK.UNLOCK_COST * daily.level_factor(state))
+        if st.checkbox("I genuinely need an emergency unlock", key="unlock_chk") and \
+                st.button(f"🆘 Unlock for {LK.UNLOCK_HOURS}h · −{cost} 🪙", key="unlock_btn"):
+            bank(state, -cost, "🆘 Emergency unlock")
+            state["override_until"] = (now() + timedelta(hours=LK.UNLOCK_HOURS)).isoformat()
+            save_state(state)
+            flash(f"🆘 Unlocked for {LK.UNLOCK_HOURS}h. That cost {cost} coins — and Tomorrow Tom saw it.", "warning")
+            st.rerun()
+elif _lk.get("override"):
+    st.caption(f"🆘 Emergency unlock active until {parse_dt(state['override_until']):%I:%M %p}.")
+
 for e in EV.active(now()):
     left = fmt_left(e["end"] - now())
     claims = state.setdefault("event_claims", [])
@@ -1599,7 +1722,10 @@ with tab_pit:
             with st.container(border=True):
                 st.markdown(f"**{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
                             unsafe_allow_html=True)
-                if st.checkbox("I actually served this", key=f"served_chk_{p['id']}") and \
+                if p.get("enforced"):
+                    st.caption(f"🔒 Enforced on your PC + phone. Lifts when you finish *{p['task']}* (🩹 redeem it) "
+                               f"or after {LK.LOCK_HOURS}h.")
+                elif st.checkbox("I actually served this", key=f"served_chk_{p['id']}") and \
                         st.button("Release me", key=f"served_{p['id']}"):
                     p["served"], p["served_at"] = True, now().isoformat()
                     save_state(state)
@@ -1898,6 +2024,12 @@ with tab_garage:
                 c2.caption(f"🔒 Chassis limit L{cap_now}")
             else:
                 cost = part_cost(key, lv)
+                if state.get("tokens", {}).get("upgrade", 0) > 0 and c2.button("🔧 Install free (token)", key=f"tok_{key}"):
+                    state["tokens"]["upgrade"] -= 1
+                    car["parts"][key] += 1
+                    save_state(state)
+                    flash(f"{p['icon']} **{nxt[0]}** installed with a free-upgrade token.\n\n💡 {nxt[1]}", sound="jackpot")
+                    st.rerun()
                 if c2.button(f"Install · {cost} 🪙", key=f"up_{key}", disabled=state["coins"] < cost):
                     car["parts"][key] += 1
                     bank(state, -cost, f"⚙️ {nxt[0]}")
@@ -1969,6 +2101,7 @@ with tab_set:
         st.subheader("You")
         pname = st.text_input("Driver name", value=s.get("player_name", "Driver"))
         sounds = st.toggle("Sound cues (win chime / fail buzzer)", value=s.get("sounds", True))
+        focus_lock = st.toggle("🔒 Block games while a focus session runs", value=s.get("focus_lock", True))
         st.subheader("Rules")
         grace = st.number_input("Grace period after deadline (minutes)", 0, 240, value=int(s["grace_minutes"]))
         strict = st.toggle("Strict proof — a file is always required", value=s["strict_proof"])
@@ -1989,7 +2122,7 @@ with tab_set:
         fprop = st.text_input("Done property name (checkbox / status / select — optional)",
                               value=s["notion_done_prop"])
         if st.form_submit_button("Save settings", type="primary"):
-            s.update({"player_name": pname.strip() or "Driver", "sounds": sounds, "grace_minutes": int(grace), "strict_proof": strict, "extension_hours": int(ext_h),
+            s.update({"player_name": pname.strip() or "Driver", "sounds": sounds, "focus_lock": focus_lock, "grace_minutes": int(grace), "strict_proof": strict, "extension_hours": int(ext_h),
                       "max_extensions": int(max_ext), "qualify_by": int(q_by), "rest_days": [wd.index(x) for x in rest],
                       "ai_steward": ai, "model": model.strip(),
                       "notion_db": db.strip(), "notion_date_prop": dprop.strip(),
@@ -2064,10 +2197,44 @@ with tab_set:
             save_state(state)
             st.rerun()
 
+    st.subheader("🔒 Lock enforcement")
+    lt = LK.topic(get_secret("NTFY_TOPIC"))
+    if lt:
+        st.caption(f"Lock state is broadcast to **{lt}** — the PC enforcer and the iPhone Shortcut read it "
+                   "(setup in the README). Current: " + LK.message(LK.status(state, now())))
+    else:
+        st.caption("Set NTFY_TOPIC to enable PC/phone locks.")
+    if _pw:
+        st.subheader("📱 Remember-me link")
+        st.caption("Open this link once on your phone, then Share → Add to Home Screen: no password from then on. "
+                   "Put it in the APP_URL secret (GitHub + Streamlit) so notifications open logged in too. "
+                   "Treat it like a password.")
+        st.code(f"{(get_secret('APP_URL') or '').split('?')[0]}?k={remember_key(_pw)}", language=None)
+
+    st.subheader("📄 Zotero reading list")
+    if zotero_cfg(state):
+        zc_ = zotero_cfg(state)
+        new_coll = st.text_input("Collection to pull papers from", value=zc_[2], key="zot_coll")
+        c1, c2 = st.columns(2)
+        if c1.button("Test Zotero"):
+            try:
+                ps = Z.to_read(*zc_[:2], new_coll)
+                st.success(f"{len(ps)} unread papers in “{new_coll}”. First up: {Z.label(ps[0]) if ps else '—'}")
+            except Exception as e:
+                st.error(str(e))
+        if c2.button("Save collection") and new_coll.strip():
+            s["zotero_collection"] = new_coll.strip()
+            save_state(state)
+            st.rerun()
+    else:
+        st.caption("Add ZOTERO_USER_ID and ZOTERO_API_KEY below (or in secrets). Get both at zotero.org/settings/keys — "
+                   "the user ID is shown at the top of that page.")
+
     st.subheader("Keys")
     st.caption("Best: put them in `.streamlit/secrets.toml` (or the Streamlit Cloud secrets box). "
                "Anything typed here lasts for this session only.")
-    for name in ("ANTHROPIC_API_KEY", "NOTION_TOKEN", "NOTION_PARENT_PAGE", "NTFY_TOPIC", "APP_URL"):
+    for name in ("ANTHROPIC_API_KEY", "NOTION_TOKEN", "NOTION_PARENT_PAGE", "NTFY_TOPIC", "APP_URL",
+                 "ZOTERO_USER_ID", "ZOTERO_API_KEY"):
         if get_secret(name) and not st.session_state.get(f"secret_{name}"):
             st.caption(f"{name}: ✅ set in secrets")
             continue
