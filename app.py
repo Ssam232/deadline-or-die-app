@@ -36,6 +36,7 @@ import events as EV
 import garage as G
 import daily
 import locks as LK
+import raceviz as RV
 import lounge as L
 import valuation as V
 import zotero as Z
@@ -1164,37 +1165,40 @@ def notion_import(state: dict) -> None:
         st.rerun()
 
 
+def track_rating(state: dict, track: dict) -> float:
+    """Like car_rating, but parts this track rewards count 30% more."""
+    car = state["car"]
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    eff = G.effective(car["parts"], mid)
+    focus = RV.TRACK_CHARACTER.get(track["name"], ([], ""))[0]
+    raw = CAR_BY_ID[mid]["base"] + sum(eff[k] * PARTS[k]["weight"] * (1.3 if k in focus else 1.0) for k in PARTS)
+    return raw * (0.55 + 0.45 * car["condition"] / 100)
+
+
 def simulate_race(state: dict, track: dict) -> None:
     car = state["car"]
-    you = {"name": f"#{car['number']} {car['name']} (you)", "you": True,
-           "rating": car_rating(state) + random.gauss(0, 5)}
-    heat = 3 * state["rival_heat"]  # your misses literally make them faster
-    rivals = [{"name": n, "you": False, "rating": random.uniform(*track["ai"]) + heat + random.gauss(0, 5)}
-              for n in random.sample(RIVALS, 5)]
+    cond_before = car["condition"]
+    heat_lvl = state["rival_heat"]
+    you = {"name": f"#{car['number']} {car['name']}", "you": True,
+           "rating": track_rating(state, track) + random.gauss(0, 5), "color": car["color"]}
+    heat = 3 * heat_lvl  # your misses literally make them faster
+    rivals = [{"name": n, "you": False, "rating": random.uniform(*track["ai"]) + heat + random.gauss(0, 5),
+               "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
     field = [you] + rivals
     for f in field:
         f["dist"], f["dnf"] = 0.0, False
     ticks = track["laps"] * 6
     dnf_risk = 0.004 if car["condition"] < 40 else 0.0
-    board = st.empty()
+    history, dnf_tick = [], None
     for i in range(ticks):
         for f in field:
             if f["dnf"]:
                 continue
             if f["you"] and random.random() < dnf_risk:
-                f["dnf"] = True
+                f["dnf"], dnf_tick = True, i
                 continue
             f["dist"] += max(0, f["rating"] + random.gauss(0, 9))
-        order = sorted(field, key=lambda f: (not f["dnf"], f["dist"]), reverse=True)
-        lead = max(order[0]["dist"], 1)
-        lines = [f"LAP {min(track['laps'], i // 6 + 1)}/{track['laps']}"]
-        for pos, f in enumerate(order, 1):
-            n = int(22 * f["dist"] / lead)
-            tag = "DNF" if f["dnf"] else f"P{pos}"
-            arrow = "◀" if f["you"] else " "
-            lines.append(f"{tag:>3} {'█' * n}{'░' * (22 - n)} {f['name'][:24]} {arrow}")
-        board.code("\n".join(lines), language=None)
-        time.sleep(RACE_TICK)
+        history.append([f["dist"] for f in field])
 
     order = sorted(field, key=lambda f: (not f["dnf"], f["dist"]), reverse=True)
     pos = next(i for i, f in enumerate(order, 1) if f["you"])
@@ -1210,6 +1214,16 @@ def simulate_race(state: dict, track: dict) -> None:
     save_state(state)
     winner = order[0]
     gap = (winner["dist"] - you["dist"]) / max(you["rating"], 1) * 1.7  # pseudo-seconds
+    names = [html.escape(f["name"]) for f in field]
+    ticker = RV.narrate(history, [f["name"] for f in field], 0, track["laps"], track["name"], dnf_tick, random.Random())
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    why = RV.explain("DNF" if you["dnf"] else pos, gap, track["name"], cond_before, heat_lvl,
+                     G.effective(car["parts"], mid), G.cap(mid), G.PART_INFO, G.installed, G.next_upgrade)
+    st.session_state["race_replay"] = {
+        "html": RV.replay_html(track["name"], history, names, [f["color"] for f in field], 0, track["laps"],
+                               ticker, dnf_tick),
+        "why": why, "title": f"{track['name']} — " + ("DNF" if you["dnf"] else f"P{pos}"),
+    }
     if you["dnf"]:
         flash(f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "error",
               sound="fail")
@@ -1217,12 +1231,9 @@ def simulate_race(state: dict, track: dict) -> None:
         flash(f"🏆 **WIN** at {track['name']}! +{payout} coins. Tomorrow Tom eats your dust.", celebrate=True,
               sound="jackpot")
     elif payout:
-        flash(f"P{pos} at {track['name']} — +{payout} coins. **{gap:.1f}s** off {winner['name']}. "
-              f"One more upgrade and that's yours.", sound="win")
+        flash(f"P{pos} at {track['name']} — +{payout} coins. **{gap:.1f}s** off {winner['name']}.", sound="win")
     else:
-        flash(f"P{pos} at {track['name']}, **{gap:.1f}s** off the win. "
-              + (f"Your misses gave the rivals +{heat} pace. " if heat else "")
-              + "Finish a task, upgrade, come back.", "warning", sound="fail")
+        flash(f"P{pos} at {track['name']}, **{gap:.1f}s** off the win. Replay + why below.", "warning", sound="fail")
     st.rerun()
 
 
@@ -2071,7 +2082,9 @@ with tab_race:
         pick = st.selectbox("Track", names, format_func=track_label)
         track = TRACKS[names.index(pick)]
         lo, hi = track["ai"]
-        st.markdown(f"Your car **{rating:.0f}** vs rivals **{lo}–{hi}** · Entry **{track['fee']} 🪙** · "
+        rating = track_rating(state, track)
+        st.caption("🏁 " + RV.TRACK_CHARACTER.get(track["name"], ([], ""))[1].capitalize() + ".")
+        st.markdown(f"Your car **{rating:.0f}** here vs rivals **{lo}–{hi}** · Entry **{track['fee']} 🪙** · "
                     f"Prizes 🥇{track['prize'][0]} 🥈{track['prize'][1]} 🥉{track['prize'][2]}")
         if car["condition"] < 40:
             st.warning("Car under 40% — real risk of a DNF.")
@@ -2082,6 +2095,13 @@ with tab_race:
         elif st.button("🚦 Lights out", type="primary"):
             bank(state, -track["fee"], f"🎟️ Entry: {track['name']}")
             simulate_race(state, track)
+
+        rp = st.session_state.get("race_replay")
+        if rp:
+            st.markdown(f"#### 📺 Replay · {rp['title']}")
+            (st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html)(
+                rp["html"], height=460)
+            st.markdown(rp["why"])
 
         if state["races"]:
             with st.expander("Race history"):
