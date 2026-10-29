@@ -31,8 +31,39 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-import board as B
-import carart
+
+
+def _drop_stale_local_modules() -> None:
+    """Streamlit Cloud re-runs app.py after a git pull but keeps the old copies of the other .py files in memory, so
+    a new app.py can call something an old module doesn't have yet. If any of our modules changed on disk since it
+    was imported (its .pyc still records the old source mtime), forget them all so the imports below load fresh."""
+    import sys
+    here = Path(__file__).resolve().parent
+    mods = {n: m for n, m in list(sys.modules.items())
+            if getattr(m, "__file__", None) and Path(m.__file__).resolve().parent == here and n != "__main__"}
+
+    def stale(m) -> bool:
+        try:
+            pyc = getattr(m, "__cached__", None)
+            if not pyc or not os.path.exists(pyc):
+                return False
+            with open(pyc, "rb") as fh:
+                head = fh.read(16)
+            if int.from_bytes(head[4:8], "little") != 0:  # hash-based pyc: no mtime to compare
+                return False
+            return int(os.stat(m.__file__).st_mtime) & 0xFFFFFFFF != int.from_bytes(head[8:12], "little")
+        except OSError:
+            return False
+
+    if any(stale(m) for m in mods.values()):
+        for n in mods:
+            sys.modules.pop(n, None)
+
+
+_drop_stale_local_modules()
+
+import board as B  # noqa: E402
+import carart  # noqa: E402
 import contracts as K
 import events as EV
 import garage as G
