@@ -1741,6 +1741,23 @@ def _dl_tap(state: dict, h: dict, d, delta: int) -> None:
         st.session_state["_dl_full"] = True  # celebrate on the whole page
 
 
+def _prayer_settings(state: dict, today, key: str) -> None:
+    """Calculation method + Asr school and today's timetable — only shown where a prayer daily is involved."""
+    ps_ = PR.settings_of(state)
+    c5, c6 = st.columns(2)
+    meth = c5.selectbox("Method", list(PR.METHODS), key=f"pr_method_{key}",
+                        index=list(PR.METHODS).index(ps_["method"]) if ps_["method"] in PR.METHODS else 0)
+    asr_ = c6.selectbox("Asr", list(PR.ASR), key=f"pr_asr_{key}",
+                        index=list(PR.ASR).index(ps_["asr_school"]) if ps_["asr_school"] in PR.ASR else 0,
+                        help="Standard (Shafi/Maliki/Hanbali) or Hanafi (later Asr).")
+    if (meth, asr_) != (ps_["method"], ps_["asr_school"]):
+        state["settings"].update(prayer_method=meth, prayer_asr=asr_)
+        save_state(state)
+    tt = PR.times_for(today, TZ, **PR.settings_of(state))
+    st.caption("Today in Calgary: " + " · ".join(f"{k} {v:%I:%M}".replace(" 0", " ") for k, v in tt.items())
+               + ". Reminders follow these windows; each +1 cancels that prayer's.")
+
+
 def _remind_picker(key: str, mode: str, cur, h: dict | None = None):
     """🔕 / 🔔 spread / ⏰ set times. Returns 'off', 'spread' or a list of 'HH:MM'."""
     c1, c2 = st.columns([1, 1.1], vertical_alignment="center")
@@ -1823,22 +1840,8 @@ def render_dailies(state: dict) -> None:
                 flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{DL.reward(h)} when done, −{DL.penalty(h)} if missed. "
                       "Starts counting today.")
                 st.rerun(scope="app")
-            if any(PR.is_prayer_daily(h) for h in DL.habits(state)) or "Pray" in (name or ""):
-                ps_ = PR.settings_of(state)
-                c5, c6 = st.columns(2)
-                meth = c5.selectbox("Prayer times method", list(PR.METHODS), key="pr_method",
-                                    index=list(PR.METHODS).index(ps_["method"]) if ps_["method"] in PR.METHODS else 0)
-                asr_ = c6.selectbox("Asr", list(PR.ASR), key="pr_asr",
-                                    index=list(PR.ASR).index(ps_["asr_school"]) if ps_["asr_school"] in PR.ASR else 0,
-                                    help="Standard (Shafi/Maliki/Hanbali) or Hanafi (later Asr).")
-                if (meth, asr_) != (ps_["method"], ps_["asr_school"]):
-                    state["settings"].update(prayer_method=meth, prayer_asr=asr_)
-                    save_state(state)
-                    st.rerun(scope="app")
-                tt = PR.times_for(today, TZ, **PR.settings_of(state))
-                st.caption("🕌 Today in Calgary: " + " · ".join(f"{k} {v:%I:%M}".replace(" 0", " ")
-                                                                for k, v in tt.items()) +
-                           ". Your phone nags as each window closes until you tap +1.")
+            if is_pr:
+                _prayer_settings(state, today, "new")
             live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
             if live:
                 st.caption("Removing a daily takes effect tomorrow — today still counts.")
@@ -1851,8 +1854,14 @@ def render_dailies(state: dict) -> None:
                         DL.remove(state, h["id"], today)
                         save_state(state)
                         st.rerun(scope="app")
+                    if h.get("end") == today.isoformat() and b.button("Undo", key=f"dl_un_{h['id']}",
+                                                                      use_container_width=True):
+                        h["end"] = None  # changed your mind before midnight: keep it
+                        save_state(state)
+                        st.rerun(scope="app")
                     if PR.is_prayer_daily(h):
-                        a.caption("🕌 Reminders follow the prayer windows.")
+                        with st.popover("🕌 Prayer times & method", use_container_width=True):
+                            _prayer_settings(state, today, h["id"])
                     elif not h.get("end"):
                         new_r = _remind_picker(f"dl_r_{h['id']}", DL.remind_mode(h), h.get("remind"), h)
                         if new_r != (h.get("remind") or "off"):
