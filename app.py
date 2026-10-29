@@ -2800,7 +2800,10 @@ for e in EV.active(now()):
 
 snd = st.session_state.pop("sound", None)
 if snd and state["settings"].get("sounds", True):
-    st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
+    with st.container(key="sfx"):  # plays, but the player bar stays out of sight
+        st.markdown("<style>.st-key-sfx{position:fixed!important;left:-9999px;top:0;width:1px;height:1px;"
+                    "overflow:hidden;opacity:0;pointer-events:none}</style>", unsafe_allow_html=True)
+        st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
 
 
 lvl = level_of(state["xp"])
