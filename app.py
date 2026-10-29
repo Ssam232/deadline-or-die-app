@@ -1855,7 +1855,8 @@ def render_qualify_form(state: dict) -> None:
     if not parsed and not picked:
         st.error("Pick at least one thing. One small thing counts.")
         return
-    if minutes < daily.min_mission_minutes(state):
+    if minutes < daily.min_mission_minutes(state) and not daily.peek_day(state, today).get("qualified"):
+        # the 30-min floor is for qualifying; once the day's locked in, additions are bonus and any size goes
         st.error(f"Too easy — {minutes} min. Today's mission needs at least {daily.min_mission_minutes(state)} "
                  "minutes of honest work. Add something, or put a time on it (e.g. “45m”).")
         return
