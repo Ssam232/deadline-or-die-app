@@ -144,7 +144,7 @@ python enforcer/enforcer.py --install   # runs silently at every login
 Settings → add `ZOTERO_USER_ID` + `ZOTERO_API_KEY` (zotero.org/settings/keys; give the key write access so finished papers get tagged `read`). Papers in your "To Read" collection show up as one-tap 45-min deep-work tasks, and in the 2 daily 🎯 suggestion pushes. Add the same two values as GitHub Actions secrets for the pushes.
 
 ## 📱 No password every time
-Log in once — the address bar gains `?k=…`. Add *that* page to your Home Screen, and put it in the `APP_URL` secret (Streamlit + GitHub) so notifications open logged in. Settings → 📱 Remember-me link shows it.
+Log in once per browser and it remembers the device (a year-long key in a cookie + local storage), so any link, a notification tap or the app waking from sleep goes straight in. A Home Screen web app counts as its own browser on iPhone, so log in there once too. Changing `APP_PASSWORD` logs every device out. Notifications sent by the app already carry the `?k=…` key; for the GitHub nagger's taps, put the Settings → 📱 Remember-me link in its `APP_URL` secret.
 
 ## ⏱️ Focus challenges & session loot
 **⏱️ Focus challenges:** 1–3 a day, e.g. *start a 60-min session in the next 2 hours → this session counts ⚡ double* — the task you focused on pays 2× coins & XP when you finish it (90-min challenges add a crate). They're a surprise: no schedule anywhere — your phone pings the moment a window opens (seeded from your private topic, so even the code can't spoil it). Plus every full 25+ min session rolls a small random drop (3/day). As you level up, penalties grow (up to 2×) and your daily mission must total 30 → 60 minutes.

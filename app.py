@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 import board as B
 import carart
@@ -380,7 +381,7 @@ def sync_alarms(state: dict) -> None:
         state["alarms"] = m
         return
     state["alarms"] = m
-    threading.Thread(target=AL.send, args=(topic, post, cancel, get_secret("APP_URL")), daemon=True).start()
+    threading.Thread(target=AL.send, args=(topic, post, cancel, app_link()), daemon=True).start()
     save_state(state)
 
 
@@ -1207,7 +1208,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     push(get_secret("NTFY_TOPIC"), "🏁 Checkered flag" if mode == "open" else "🩹 Redeemed", plain_msg.strip(),
          priority=4 if sound == "jackpot" else 3,
          tags=["checkered_flag", "moneybag"] if sound == "jackpot" else ["checkered_flag"],
-         click=get_secret("APP_URL"))
+         click=app_link())
     flash(msg, celebrate=(mode == "open"), sound=sound)
     st.rerun()
 
@@ -2655,19 +2656,60 @@ if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
     os.environ["NTFY_TOPIC"] = get_secret("NTFY_TOPIC")  # same secret seed as the nagger for surprise events
 
 # Password gate — set APP_PASSWORD in secrets so nobody else can see your tasks and proof.
+# Log in once per device: the key is kept in a cookie + localStorage (components/keeper), so links without ?k=,
+# notification taps and the app waking from sleep all skip the password.
 _pw = get_secret("APP_PASSWORD")
-if _pw and not st.session_state.get("_authed") and st.query_params.get("k") == remember_key(_pw):
-    st.session_state["_authed"] = True
-if _pw and not st.session_state.get("_authed"):
-    st.title("🏁 Deadline or Die")
-    entered = st.text_input("Password", type="password")
-    if entered:
-        if hashlib.sha256(entered.encode()).digest() == hashlib.sha256(_pw.encode()).digest():
+_KEEPER = components.declare_component("keeper", path=str(Path(__file__).parent / "components" / "keeper"))
+
+
+def _keeper(set_: str | None = None, clear: bool = False):
+    try:
+        return _KEEPER(set=set_, clear=clear, key="keeper", default=None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+if _pw:
+    _tok = remember_key(_pw)
+    if not st.session_state.get("_authed"):
+        try:
+            _ck = st.context.cookies.get("dod_k")
+        except Exception:  # noqa: BLE001
+            _ck = None
+        if st.query_params.get("k") == _tok or _ck == _tok:
             st.session_state["_authed"] = True
-            st.query_params["k"] = remember_key(_pw)  # bookmark / home-screen this URL = no more password
+            st.session_state["_persist"] = _ck != _tok  # came via the link: remember this device too
+    if not st.session_state.get("_authed"):
+        _held = _keeper()  # None until the browser answers (a moment after first paint), then "" or the key
+        if _held == _tok:
+            st.session_state["_authed"] = True
+            st.session_state["_persist"] = True
             st.rerun()
-        st.error("Wrong password.")
-    st.stop()
+        st.title("🏁 Deadline or Die")
+        if _held is None:
+            st.caption("Checking this device…")
+        entered = st.text_input("Password", type="password")
+        if entered:
+            if hashlib.sha256(entered.encode()).digest() == hashlib.sha256(_pw.encode()).digest():
+                st.session_state["_authed"] = True
+                st.session_state["_persist"] = True
+                st.rerun()
+            st.error("Wrong password.")
+        st.stop()
+    if st.session_state.get("_persist"):  # write the key into this browser, then stop asking
+        if _keeper(set_=_tok) == _tok:
+            st.session_state["_persist"] = False
+        st.markdown("<style>div[data-testid='stElementContainer']:has(iframe[title*='keeper'])"
+                    "{position:absolute;width:0;height:0;overflow:hidden}</style>", unsafe_allow_html=True)
+
+
+def app_link() -> str | None:
+    """APP_URL with the remember-me key, so taps on notifications land logged in."""
+    base = get_secret("APP_URL")
+    if not base or not _pw:
+        return base
+    return f"{base.split('?')[0]}?k={remember_key(_pw)}"
+
 
 state = load_state()
 st.markdown(theme_css(state), unsafe_allow_html=True)
@@ -3362,7 +3404,7 @@ with tab_set:
             ])
             if topic and st.button("Send a test buzz"):
                 ok = push(topic, "🏁 Deadline or Die", f"Test buzz, {PLAYER}. This is what a checkered flag feels like.",
-                          priority=4, tags=["checkered_flag"], click=get_secret("APP_URL"))
+                          priority=4, tags=["checkered_flag"], click=app_link())
                 if ok:
                     st.toast("📳 Buzz sent — check your phone.")
                 else:
