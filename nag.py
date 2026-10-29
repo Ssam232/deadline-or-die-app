@@ -286,13 +286,13 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         mem["tasks"][t["key"]] = {"stage": stg, "last": now.isoformat()}
 
     covered = {"🔁 LAST CALL on dailies", "🔁 Dailies still open", "⚠️ Zero finishes today", "🔴 ZERO-DAY WARNING",
-               "☠️ LAST CALL"}  # these are queued on ntfy at their exact times (alarms.py)
+               "☠️ LAST CALL", "🚦 LIGHTS OUT"}  # these are queued on ntfy at their exact times (alarms.py)
     for msg in daily_nags(save, mem, now, quiet):
         if msg[0] not in covered:
             send(*msg)
 
     if save:  # backup sync of the exact-time alarms (the app does this on every change)
-        mem["alarms"], made, fails = AL.sync(save, topic, now, mem.get("alarms", {}), click=app_url)
+        mem["alarms"], made, fails = AL.sync(save, topic, now, mem.get("alarms", {}), click=app_url, prof=prof)
         print(f"::notice title=alarms::{made} queued/cancelled, {fails} failed")
 
     day_mem = mem.setdefault("day", {})

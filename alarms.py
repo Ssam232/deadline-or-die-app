@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 
 import dailies as DL
 import daily
+import nudges as NU
 import prayers as PR
 from notify import SERVER
 
@@ -51,9 +52,10 @@ def _hm(dt: datetime) -> str:
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
-def _alarm(key, at, title, msg, prio, tags, wanted):
+def _alarm(key, at, title, msg, prio, tags, wanted, go=None):
+    """go=(task id or 'new', minutes) adds a ▶️ Start button that opens the app with that timer running."""
     return {"seq": _seq(*key), "at": at, "title": title, "message": msg, "priority": prio, "tags": tags,
-            "wanted": bool(wanted)}
+            "wanted": bool(wanted), "go": go}
 
 
 def _prayers(save: dict, d: date, now: datetime) -> list[dict]:
@@ -133,11 +135,11 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
     return out
 
 
-def plan(save: dict, now: datetime) -> list[dict]:
+def plan(save: dict, now: datetime, prof: dict | None = None) -> list[dict]:
     """Every alarm that could fire in the next ~2 days, wanted or not (unwanted ones get cancelled)."""
     if not save:
         return []
-    out = _tasks(save, now)
+    out = _tasks(save, now) + NU.build(save, now, prof, _alarm)
     for d in (now.date(), now.date() + timedelta(days=1)):
         out += _prayers(save, d, now) + _day(save, d, now)
     lo, hi = now + timedelta(seconds=MIN_LEAD), now + HORIZON
@@ -145,7 +147,8 @@ def plan(save: dict, now: datetime) -> list[dict]:
 
 
 def _sig(a: dict) -> str:
-    return hashlib.sha1(f"{a['at'].isoformat()}|{a['title']}|{a['message']}|{a['priority']}".encode()).hexdigest()[:12]
+    return hashlib.sha1(f"{a['at'].isoformat()}|{a['title']}|{a['message']}|{a['priority']}|{a.get('go')}"
+                        .encode()).hexdigest()[:12]
 
 
 def diff(alarms: list[dict], posted: dict, now: datetime) -> tuple[list[dict], list[dict], dict]:
@@ -182,6 +185,11 @@ def send(topic: str, post: list[dict], cancel: list[dict], click: str | None = N
         if click:
             body["click"] = click
             body["actions"] = [{"action": "view", "label": "Open Deadline or Die", "url": click, "clear": True}]
+            if a.get("go"):
+                tid, mins = a["go"]
+                go = f"{click}{'&' if '?' in click else '?'}go={tid}&m={int(mins)}"
+                body["actions"] = [{"action": "view", "label": f"▶️ Start {int(mins)} min", "url": go, "clear": True},
+                                   {"action": "view", "label": "Open app", "url": click, "clear": True}]
         return requests.post(base, json=body, timeout=10).status_code < 300
 
     def do_cancel(a):
@@ -203,12 +211,13 @@ def send(topic: str, post: list[dict], cancel: list[dict], click: str | None = N
     return bad
 
 
-def sync(save: dict, topic: str | None, now: datetime, posted: dict, click: str | None = None) -> tuple[dict, int, int]:
+def sync(save: dict, topic: str | None, now: datetime, posted: dict, click: str | None = None,
+         prof: dict | None = None) -> tuple[dict, int, int]:
     """Plan → diff → send. Returns (new posted-map, posts+cancels made, failures). Failed posts are forgotten so the
     next sync retries them."""
     if not topic:
         return posted or {}, 0, 0
-    post, cancel, m = diff(plan(save, now), posted, now)
+    post, cancel, m = diff(plan(save, now, prof), posted, now)
     bad = send(topic, post, cancel, click)
     for q in bad:  # forget them so the next sync retries
         m.pop(q, None)

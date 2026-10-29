@@ -43,6 +43,7 @@ import locks as LK
 import pomo as PM
 import prayers as PR
 import alarms as AL
+import nudges as NU
 import prep as P
 import quickparse as Q
 import raceviz as RV
@@ -365,6 +366,32 @@ def broadcast_lock(state: dict) -> None:
         state["_lock_msg"] = msg
 
 
+def start_from_link(state: dict) -> None:
+    """▶️ Start on a phone nudge opens ?go=<task id|new>&m=<min>: start that timer straight away, then tidy the URL."""
+    go, m = st.query_params.get("go"), st.query_params.get("m")
+    if not go:
+        return
+    for k in ("go", "m"):
+        st.query_params.pop(k, None)
+    if state.get("timer"):
+        flash("⏱️ A timer is already running — carry on.", "info")
+        return
+    try:
+        mins = max(5, min(240, int(m or 25)))
+    except ValueError:
+        mins = 25
+    cfg = state["settings"]
+    preset = PM.PRESETS.get(cfg.get("pomo", "off"), ("", None))[1]
+    work, brk = preset or ((cfg.get("pomo_work"), cfg.get("pomo_brk")) if cfg.get("pomo") == "custom" else (None, None))
+    t = next((x for x in state["tasks"] if x["id"] == go and x["status"] == "open"), None)
+    if not t:
+        t = _timer_task(state, "", mins, PM.wall_minutes(mins, work, brk))
+    state["timer"] = {"task_id": t["id"], "start": now().isoformat(), "planned": mins, "work": work, "brk": brk}
+    _mark_started(t)
+    save_state(state)
+    flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
+
+
 def sync_alarms(state: dict) -> None:
     """Top-of-run check (time passing changes the plan too): save only if the alarms changed."""
     if _refresh_alarms(state):
@@ -380,7 +407,7 @@ def _refresh_alarms(state: dict) -> bool:
     while AL.FAILED:  # last background send hit an error → retry those
         posted.pop(AL.FAILED.pop(), None)
     try:
-        post, cancel, m = AL.diff(AL.plan(state, now()), posted, now())
+        post, cancel, m = AL.diff(AL.plan(state, now(), globals().get("PROFILE")), posted, now())
     except Exception:  # noqa: BLE001 — alarms are best-effort, never break the app
         return False
     state["alarms"] = m
@@ -2835,6 +2862,7 @@ if crash_msgs or rust_msg or _excused or st.session_state.pop("_needs_save", Fal
     save_state(state)
     if crash_msgs:
         st.session_state["sound"] = "fail"
+start_from_link(state)
 sync_alarms(state)
 
 PLAYER = state["settings"].get("player_name") or "driver"
@@ -3512,6 +3540,33 @@ with tab_set:
                     st.toast("ntfy didn't accept it. Check the topic name.", icon="⚠️")
             st.caption("No push on iPhone? Remove and re-add the topic in the ntfy app, and check Settings → "
                        "Notifications → ntfy (banners on, delivery Immediate, not filtered by a Focus).")
+        with st.container(border=True):
+            st.markdown("#### 🚦 Focus nudges")
+            st.caption("Pushes in your work hours that name one task and carry a ▶️ Start button (opens the app with "
+                       "the timer running). They skip while a timer runs, stop once you hit your daily focus goal, "
+                       "and get louder if you ignore them.")
+            nc = NU.cfg(state)
+            ss = state["settings"]
+            every = st.segmented_control("How often", list(NU.EVERY_OPTS), default=nc["nudge_every"],
+                                         format_func=NU.EVERY_OPTS.get, key="nu_every")
+            c1, c2, c3 = st.columns(3)
+            hrs = list(range(6, 24))
+            lab = lambda h: datetime(2000, 1, 1, h).strftime("%I %p").lstrip("0")  # noqa: E731
+            a_ = c1.selectbox("From", hrs[:-1], index=hrs.index(nc["nudge_start"]), format_func=lab, key="nu_a")
+            b_ = c2.selectbox("Until", [h for h in hrs if h > a_], format_func=lab, key="nu_b",
+                              index=max(0, [h for h in hrs if h > a_].index(nc["nudge_end"]))
+                              if nc["nudge_end"] in [h for h in hrs if h > a_] else 0)
+            goal = c3.number_input("Daily focus goal (min)", 30, 600, int(nc["focus_goal"]), 15, key="nu_goal")
+            wk = st.toggle("Weekends too", value=bool(nc["nudge_weekends"]), key="nu_wk")
+            new = {"nudge_every": every if every is not None else nc["nudge_every"], "nudge_start": a_,
+                   "nudge_end": b_, "focus_goal": int(goal), "nudge_weekends": wk}
+            if any(ss.get(k, NU.DEFAULTS[k]) != v for k, v in new.items()):
+                ss.update(new)
+                save_state(state)
+            if PROFILE and PROFILE.get("ready"):
+                w0, w1 = PROFILE["window"]
+                st.caption(f"Your history says you work {lab(w0)}–{lab(w1)}, best around "
+                           + ", ".join(lab(h) for h in PROFILE["peak"]) + ". Peak-hour nudges hand you the meaty task.")
         if _pw:
             with st.container(border=True):
                 st.markdown("#### Open without a password")
