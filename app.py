@@ -2030,6 +2030,15 @@ def render_qualify_form(state: dict) -> None:
     with c2:
         due_t = due_picker(f"q_due{fk}")
     start_t = (start_dt or now()).time()
+    n_sel = len(picked) + len(pending)
+    go_top = False
+    if picked or pending:  # selected ≠ locked in: put the button right here, not below the fold
+        sel_min = (sum((opts[k][1].get("minutes") or 60) for k in picked if k.startswith("t:"))
+                   + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
+                   + sum(m_ for _, m_ in pending))
+        verb = "Add" if daily.peek_day(state, today).get("qualified") else "🚦 Lock in"
+        go_top = st.button(f"{verb} {n_sel} · {min_label(sel_min)}", type="primary", use_container_width=True,
+                           key=f"q_top{fk}", help="Selected isn't locked in until you tap this.")
     queue_slot = st.container()  # drawn after the form runs, so a new entry shows without a second redraw
     # one mini-form: type → tap a time → Enter (or Add). Nothing is taken until you add it, so tapping a time chip
     # never grabs half-typed text — and Lock it in is part of the form, so half-typed text gets locked in too.
@@ -2041,6 +2050,7 @@ def render_qualify_form(state: dict) -> None:
                                     label_visibility="collapsed")
         add_ = c3.form_submit_button("＋ Add", use_container_width=True, help="Or press Enter")
         go_ = st.form_submit_button("🚦 Lock it in", type="primary", use_container_width=True)
+    go_ = go_ or go_top
     if (add_ or go_) and (txt_ or "").strip():
         _q_put(txt_, TIME_CHIPS.get(min_ or "30m", 30), state)
         pending = st.session_state["q_pending"]
