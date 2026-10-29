@@ -366,6 +366,19 @@ def broadcast_lock(state: dict) -> None:
         state["_lock_msg"] = msg
 
 
+def remember_app_url(state: dict) -> None:
+    """Save this app's own address (no key) so the GitHub nagger's pushes open the app even without APP_URL."""
+    try:
+        from urllib.parse import urlsplit
+        u = urlsplit(st.context.url or "")
+        base = f"{u.scheme}://{u.netloc}/" if u.scheme in ("http", "https") and u.netloc else None
+    except Exception:  # noqa: BLE001
+        base = None
+    if base and "localhost" not in base and "127.0.0.1" not in base and state["settings"].get("app_url") != base:
+        state["settings"]["app_url"] = base
+        save_state(state)
+
+
 def start_from_link(state: dict) -> None:
     """▶️ Start on a phone nudge opens ?go=<task id|new>&m=<min>: start that timer straight away, then tidy the URL."""
     go, m = st.query_params.get("go"), st.query_params.get("m")
@@ -1851,10 +1864,8 @@ def render_qualify_form(state: dict) -> None:
     bc = board_cfg(state)
     if bc:
         try:
-            known = {B.clean_id(t.get("board_src") or t.get("board_page") or "") for t in state["tasks"]
-                     if t["status"] == "open" or (t.get("completed_at") or "")[:10] == today.isoformat()}
             for b in _board_range(*bc, today.isoformat(), BOARD_LOOKAHEAD + 1):
-                if B.clean_id(b["id"]) not in known:
+                if not B.already_have(b, state["tasks"], date.fromisoformat(b["date"]) if b.get("date") else today):
                     opts[f"b:{b['id']}"] = ("📅 " + _board_label(b, today), b)
         except Exception as e:
             st.caption(f"(Couldn't read your board: {e})")
@@ -2830,7 +2841,7 @@ if _pw:
 
 def app_link() -> str | None:
     """APP_URL with the remember-me key, so taps on notifications land logged in."""
-    base = get_secret("APP_URL")
+    base = get_secret("APP_URL") or ((globals().get("state") or {}).get("settings") or {}).get("app_url")
     if not base or not _pw:
         return base
     return f"{base.split('?')[0]}?k={remember_key(_pw)}"
@@ -2863,6 +2874,7 @@ if crash_msgs or rust_msg or _excused or st.session_state.pop("_needs_save", Fal
     if crash_msgs:
         st.session_state["sound"] = "fail"
 start_from_link(state)
+remember_app_url(state)
 sync_alarms(state)
 
 PLAYER = state["settings"].get("player_name") or "driver"

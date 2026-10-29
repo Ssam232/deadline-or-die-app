@@ -13,6 +13,8 @@ The board's columns are auto-detected, so it works with whatever setup you alrea
 """
 from __future__ import annotations
 
+import re
+
 from datetime import date, datetime, timedelta
 
 from notion_store import Notion, clean_id, plain, rt
@@ -260,3 +262,33 @@ def retract_pushed(n: Notion, tasks: list[dict]) -> list[str]:
         for k in ("board_page", "board_state", "board_pushed", "board_archived"):
             t.pop(k, None)
     return errs
+
+
+def _norm_title(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def already_have(item: dict, tasks: list[dict], d: date) -> bool:
+    """A board card you've already dealt with: linked to (or titled like) a task that's open or was finished that day."""
+    iid, nt = clean_id(item["id"]), _norm_title(item["title"])
+    for t in tasks:
+        live = t.get("status") == "open" or (t.get("completed_at") or "")[:10] == d.isoformat() \
+            or t.get("mission_day") == d.isoformat()
+        if not live:
+            continue
+        if iid and iid == clean_id(t.get("board_src") or t.get("board_page") or ""):
+            return True
+        if nt and nt == _norm_title(t.get("title", "").replace("Work on: ", "")):
+            return True
+    return False
+
+
+def passed(item: dict, now: datetime) -> bool:
+    """True if the card's time today has already gone by."""
+    if not item.get("when") or item.get("date") != now.date().isoformat():
+        return False
+    try:
+        t = datetime.strptime(item["when"].upper().replace(".", "").strip(), "%I:%M %p").time()
+    except ValueError:
+        return False
+    return datetime.combine(now.date(), t, now.tzinfo) < now

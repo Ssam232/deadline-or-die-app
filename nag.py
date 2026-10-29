@@ -223,9 +223,8 @@ def suggestion_candidates(n: Notion, save: dict, now: datetime) -> list[tuple[st
     if db:
         try:
             import board as B
-            linked = {B.clean_id(x.get("board_src") or x.get("board_page") or "") for x in save.get("tasks", [])
-                      if x.get("status") == "open"}
-            items = [i for i in B.pull_day(n, B.detect(n, db), now.date()) if B.clean_id(i["id"]) not in linked]
+            items = [i for i in B.pull_day(n, B.detect(n, db), now.date())
+                     if not B.already_have(i, save.get("tasks", []), now.date()) and not B.passed(i, now)]
             if items:
                 i = random.choice(items)
                 out.append(("📅 On your board today", f"{i['title']}{' · ' + i['when'] if i['when'] else ''} — "
@@ -250,6 +249,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     now = now or datetime.now(TZ)
     ids = ensure_workspace(n, parent)
     save = load_json(n, ids["save_page"]) or {}
+    app_url = app_url or save.get("settings", {}).get("app_url")  # tap a push → open the app
     prof = I.profile(save, now.date(), TZ) if save else None  # same history-before-today profile as the app
     EV.set_profile(prof)
     brief_at = I.brief_hour(prof, BRIEF_HOUR)
@@ -383,7 +383,7 @@ def main() -> int:
         print(f"Missing secrets: {', '.join(missing)}")
         return 1
     sent = run(Notion(os.environ["NOTION_TOKEN"]), os.environ["NOTION_PARENT_PAGE"], os.environ["NTFY_TOPIC"],
-               os.getenv("APP_URL") or None)
+               os.getenv("APP_URL") or None)  # (run() falls back to the address the app saved)
     print(f"Sent {len(sent)} push(es): {sent}")
     return 0
 
