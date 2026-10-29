@@ -366,23 +366,28 @@ def broadcast_lock(state: dict) -> None:
 
 
 def sync_alarms(state: dict) -> None:
-    """Queue/cancel exact-time phone alarms on ntfy (alarms.py). Only does HTTP when something changed."""
+    """Top-of-run check (time passing changes the plan too): save only if the alarms changed."""
+    if _refresh_alarms(state):
+        save_state(state)
+
+
+def _refresh_alarms(state: dict) -> bool:
+    """Queue/cancel exact-time phone alarms on ntfy (alarms.py) in the background. True if anything changed."""
     topic = get_secret("NTFY_TOPIC")
     if not topic:
-        return
+        return False
     posted = dict(state.get("alarms", {}))
     while AL.FAILED:  # last background send hit an error → retry those
         posted.pop(AL.FAILED.pop(), None)
     try:
         post, cancel, m = AL.diff(AL.plan(state, now()), posted, now())
     except Exception:  # noqa: BLE001 — alarms are best-effort, never break the app
-        return
-    if not (post or cancel):
-        state["alarms"] = m
-        return
+        return False
     state["alarms"] = m
+    if not (post or cancel):
+        return False
     threading.Thread(target=AL.send, args=(topic, post, cancel, app_link()), daemon=True).start()
-    save_state(state)
+    return True
 
 
 # ── saving: instant on screen, synced to Notion in the background ──
@@ -483,6 +488,7 @@ def _saver() -> _Saver:
 
 def save_state(state: dict) -> None:
     broadcast_lock(state)
+    _refresh_alarms(state)
     snapshot = json.dumps(state, default=str)
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1655,7 +1661,19 @@ def _prayer_line(state: dict, count: int) -> str:
     return "<div style='font-size:.85rem;color:#8b909c'>all of today's prayer windows are done</div>"
 
 
+def _dl_tap(state: dict, h: dict, d, delta: int) -> None:
+    """+1 / ↩ as a click callback: the dailies card redraws already updated, without rerunning the page."""
+    n_ = DL.tap(state, h["id"], d, delta)
+    save_state(state)
+    if delta > 0 and n_ >= h["target"]:
+        flash(f"🔁 **{h['name']}** {n_}/{h['target']} — claim it!", sound="win")
+        st.session_state["_dl_full"] = True  # celebrate on the whole page
+
+
+@st.fragment
 def render_dailies(state: dict) -> None:
+    if st.session_state.pop("_dl_full", False):
+        st.rerun(scope="app")
     today = now().date()
     rows = DL.today_status(state, today)
     with st.container(border=True):
@@ -1681,10 +1699,8 @@ def render_dailies(state: dict) -> None:
                             + (f" · 🔥{h['streak']}" if h.get("streak") else "") + "</small>"
                             + (_prayer_line(state, r["count"]) if PR.is_prayer_daily(h) else ""),
                             unsafe_allow_html=True)
-                if c2.button("↩", key=f"dl_undo_{h['id']}", help="Undo one", disabled=r["count"] == 0):
-                    DL.tap(state, h["id"], today, -1)
-                    save_state(state)
-                    st.rerun()
+                c2.button("↩", key=f"dl_undo_{h['id']}", help="Undo one", disabled=r["count"] == 0,
+                          on_click=_dl_tap, args=(state, h, today, -1))
                 if r["done"] and not r["claimed"]:
                     if c3.button(f"🏆 Claim +{DL.reward(h)}", key=f"dl_claim_{h['id']}", type="primary",
                                  use_container_width=True):
@@ -1692,15 +1708,12 @@ def render_dailies(state: dict) -> None:
                         save_state(state)
                         flash(f"🔁 **{h['name']}** done for today — +{DL.reward(h)} 🪙 · streak {h['streak']} 🔥",
                               sound="win")
-                        st.rerun()
+                        st.rerun(scope="app")
                 elif r["claimed"]:
                     c3.markdown("✅ claimed")
-                elif c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True):
-                    n_ = DL.tap(state, h["id"], today)
-                    save_state(state)
-                    if n_ >= h["target"]:
-                        flash(f"🔁 **{h['name']}** {n_}/{h['target']} — claim it!", sound="win")
-                    st.rerun()
+                else:
+                    c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True,
+                              on_click=_dl_tap, args=(state, h, today, 1))
         with st.expander("➕ Add / manage dailies" if rows else
                          "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)"):
             names = [p[0] for p in DL.PRESETS] + ["✏️ Custom…"]
@@ -1717,7 +1730,7 @@ def render_dailies(state: dict) -> None:
                 save_state(state)
                 flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{DL.reward(h)} when done, −{DL.penalty(h)} if missed. "
                       "Starts counting today.")
-                st.rerun()
+                st.rerun(scope="app")
             if any(PR.is_prayer_daily(h) for h in DL.habits(state)) or "Pray" in (name or ""):
                 ps_ = PR.settings_of(state)
                 c5, c6 = st.columns(2)
@@ -1729,7 +1742,7 @@ def render_dailies(state: dict) -> None:
                 if (meth, asr_) != (ps_["method"], ps_["asr_school"]):
                     state["settings"].update(prayer_method=meth, prayer_asr=asr_)
                     save_state(state)
-                    st.rerun()
+                    st.rerun(scope="app")
                 tt = PR.times_for(today, TZ, **PR.settings_of(state))
                 st.caption("🕌 Today in Calgary: " + " · ".join(f"{k} {v:%I:%M}".replace(" 0", " ")
                                                                 for k, v in tt.items()) +
@@ -1745,7 +1758,7 @@ def render_dailies(state: dict) -> None:
                     if not h.get("end") and b.button("Remove", key=f"dl_rm_{h['id']}", use_container_width=True):
                         DL.remove(state, h["id"], today)
                         save_state(state)
-                        st.rerun()
+                        st.rerun(scope="app")
 
 
 DUE_CHIPS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 59), "🎡": None}
@@ -1783,11 +1796,22 @@ def _q_add(fk: int, clear: bool = True) -> None:
     p_ = Q.parse(txt, now())
     chip = TIME_CHIPS.get(st.session_state.get(f"q_min{fk}") or "30m", 30)
     typed = re.search(r"\d+(?:\.\d+)?\s*(h|hr|hrs|hour|hours|m|min|mins|minutes)\b", txt, re.I)
-    st.session_state.setdefault("q_pending", []).append((txt, p_["minutes"] if typed else chip))
+    pend = st.session_state.setdefault("q_pending", [])
+    pend[:] = [x for x in pend if Q.parse(x[0], now())["title"].lower() != p_["title"].lower()]  # no dupes
+    pend.append((txt, p_["minutes"] if typed else chip))
+    st.session_state["q_last_chip"] = not typed  # a chip tap right after re-times this one
     if clear:  # only from the Enter callback; the lock-in path resets the whole form by bumping fk instead
         st.session_state[f"q_new{fk}"] = ""
 
 
+def _q_chip(fk: int) -> None:
+    """Time chip tapped with the box empty → it's meant for the task you just queued."""
+    pend = st.session_state.get("q_pending") or []
+    if pend and not (st.session_state.get(f"q_new{fk}") or "").strip() and st.session_state.get("q_last_chip"):
+        pend[-1] = (pend[-1][0], TIME_CHIPS.get(st.session_state.get(f"q_min{fk}") or "30m", 30))
+
+
+@st.fragment
 def render_qualify_form(state: dict) -> None:
     today = now().date()
     fk = st.session_state.setdefault("_qf_n", 0)  # bumped after a lock-in to reset every field
@@ -1825,7 +1849,8 @@ def render_qualify_form(state: dict) -> None:
     c1, c2 = st.columns([1, 1], vertical_alignment="bottom")
     c1.text_input("Add a task" if not opts else "Or add a task", key=f"q_new{fk}",
                   placeholder="e.g. Write 300 words of methods — Enter to add", on_change=_q_add, args=(fk,))
-    c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}", label_visibility="collapsed")
+    c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}", label_visibility="collapsed",
+                         on_change=_q_chip, args=(fk,))
     if pending:
         chips = [f"{Q.parse(t_, now())['title']} · {min_label(m_)}  ✕" for t_, m_ in pending]
         st.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
@@ -1914,7 +1939,7 @@ def render_qualify_form(state: dict) -> None:
         cursor += timedelta(minutes=(t.get("minutes") or 30) + 10)
     save_state(state)
     flash(msg + f" You start at **{start_t:%I:%M %p}** — the phone will check.".replace("**0", "**"), sound="win")
-    st.rerun()
+    st.rerun(scope="app")
 
 
 def render_task_row(state: dict, t: dict, scope: str = "") -> None:
@@ -2556,7 +2581,7 @@ CSS = """<style>
 @keyframes dodIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @keyframes dodPop{0%{transform:scale(1)}35%{transform:scale(1.12);text-shadow:0 0 18px var(--y)}100%{transform:scale(1)}}
 @keyframes dodGrow{from{width:var(--from)}}
-.dod-cell{animation:dodIn .5s cubic-bezier(.2,.7,.2,1) both}
+.dod-cluster.intro .dod-cell{animation:dodIn .5s cubic-bezier(.2,.7,.2,1) both}
 .dod-cell:nth-child(2){animation-delay:.05s}.dod-cell:nth-child(3){animation-delay:.1s}.dod-cell:nth-child(4){animation-delay:.15s}
 .dod-v{display:inline-block;transform-origin:left center}
 .dod-v.chg{animation:dodPop .7s cubic-bezier(.2,.7,.2,1) .25s both}
@@ -2565,6 +2590,7 @@ CSS = """<style>
 [data-testid^="stBaseButton"]:hover{filter:brightness(1.08)}
 [data-testid^="stBaseButton"]:active{transform:scale(.97)}
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
+[data-stale="true"]{opacity:1!important;transition:none!important}
 [data-baseweb="tab-panel"]{animation:dodIn .3s ease-out both}
 [data-testid="stProgressBarTrack"] div{transition:width .6s cubic-bezier(.2,.7,.2,1)}
 [data-baseweb="tab-highlight"]{transition:all .25s ease}
@@ -2640,8 +2666,10 @@ def render_cluster(state: dict) -> None:
     pct = 100 * into / span
     prev_pct = prev.get("xp_pct", pct)
     st.session_state["_cluster_prev"] = {**{k: v for k, v, _, _ in cells}, "xp_pct": pct}
+    intro = "" if st.session_state.get("_cluster_seen") else " intro"
+    st.session_state["_cluster_seen"] = True
     st.markdown(
-        "<div class='dod-cluster'>" + "".join(
+        f"<div class='dod-cluster{intro}'>" + "".join(
             f"<div class='dod-cell'><div class='dod-k'>{k}</div>"
             f"<div class='dod-v{' bad' if bad else ''}{' chg' if k in prev and prev[k] != v else ''}'>{v}</div>"
             f"<div class='dod-s'>{sub or '&nbsp;'}</div></div>" for k, v, sub, bad in cells)
