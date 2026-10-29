@@ -2127,6 +2127,7 @@ def _pomo_pick(state: dict, where=None) -> tuple[int | None, int | None]:
 
 
 NEW_SESSION = "__new__"
+TIMER_LENGTHS = [25, 30, 45, 50, 60, 90, 120]
 
 
 def _timer_task(state: dict, name: str, planned: int, wall: int) -> dict:
@@ -2151,8 +2152,13 @@ def render_timer(state: dict) -> None:
             c1, c2 = st.columns([1.6, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
-            planned = c2.selectbox("Minutes", [25, 50, 60, 90, 120], key="timer_len", label_visibility="collapsed",
-                                   format_func=lambda m: f"{m} min")
+            planned = c2.selectbox("Minutes", TIMER_LENGTHS + [0], key="timer_len", label_visibility="collapsed",
+                                   format_func=lambda m: f"{m} min" if m else "Custom…")
+            if not planned:
+                planned = int(c2.number_input("Custom minutes", 5, 240, int(state["settings"].get("timer_custom", 40)),
+                                              5, key="timer_custom", label_visibility="collapsed"))
+                if planned != state["settings"].get("timer_custom"):
+                    state["settings"]["timer_custom"] = planned
             new_name = ""
             if tid == NEW_SESSION:
                 new_name = st.text_input("What are you working on?", key="timer_new", max_chars=120,

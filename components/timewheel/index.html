@@ -43,6 +43,21 @@ function build(id, values) {
   el.querySelectorAll(".item").forEach(it => it.addEventListener("click", () => {
     el.scrollTo({top: +it.dataset.i * ROW, behavior: "smooth"});
   }));
+  // Mouse wheels: one notch = one step (browsers otherwise fling several rows and accelerate on fast spins).
+  // Trackpads send many small deltas, so they're summed until they're worth a step.
+  let acc = 0, last = 0, target = null, tt = null;
+  el.addEventListener("wheel", e => {
+    e.preventDefault();
+    const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * ROW * 3 : e.deltaY;
+    acc = Math.max(-60, Math.min(60, acc + dy));
+    const now = performance.now();
+    if (Math.abs(acc) < 40 || now - last < 90) return;
+    const dir = Math.sign(acc);
+    acc = 0; last = now;
+    target = Math.max(0, Math.min(values.length - 1, (target ?? idx(el)) + dir));
+    el.scrollTo({top: target * ROW, behavior: "smooth"});
+    clearTimeout(tt); tt = setTimeout(() => { target = null; }, 400);
+  }, {passive: false});
   let t = null;
   el.addEventListener("scroll", () => {
     mark(el);
