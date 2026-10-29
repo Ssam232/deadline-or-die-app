@@ -1,5 +1,8 @@
 """
-📣 The phone nagger. GitHub Actions runs this every 30 minutes.
+📣 The phone nagger. GitHub Actions runs this every 10 minutes (when GitHub feels like it).
+
+Exact-time alarms (prayers, deadline countdowns, qualifying, dailies/zero-day last calls) are queued on ntfy by
+alarms.py; this script re-syncs them as a backup and handles everything else.
 
 It reads your save from Notion and pushes to your phone through ntfy:
   ≤24h  ⏱️ heads-up                         (normal)
@@ -22,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 import daily
 import dailies as DL
-import prayers as PR
+import alarms as AL
 import events as EV
 import insights as I
 import locks as LK
@@ -142,7 +145,9 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
     out = []
     if not stt["qualified"]:
         left = (stt["deadline"] - now).total_seconds() / 60
-        if 0 < left <= 30 and not dm.get("q30"):
+        if 0 < left <= 60:
+            pass  # the 60/30/10-min countdown is queued on ntfy (alarms.py)
+        elif 0 < left <= 30 and not dm.get("q30"):
             dm["q30"] = dm["q60"] = True
             out.append((f"🚦 {int(left)} MIN TO QUALIFY",
                         f"No mission locked in. At {stt['deadline']:%I:%M %p} you lose {c['qualify_penalty']} coins "
@@ -274,15 +279,21 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                   and (now - last).total_seconds() / 60 >= REPEAT_EVERY[stg])
         if not (new_stage or repeat) or (quiet and stg < 4):
             continue
+        if 2 <= stg <= 4 and not t["unsynced"]:  # queued on ntfy as exact-time alarms (see alarms.py)
+            mem["tasks"][t["key"]] = {"stage": stg, "last": now.isoformat()}
+            continue
         send(*message(stg, t, mins, ctx, repeat))
         mem["tasks"][t["key"]] = {"stage": stg, "last": now.isoformat()}
 
+    covered = {"🔁 LAST CALL on dailies", "🔁 Dailies still open", "⚠️ Zero finishes today", "🔴 ZERO-DAY WARNING",
+               "☠️ LAST CALL"}  # these are queued on ntfy at their exact times (alarms.py)
     for msg in daily_nags(save, mem, now, quiet):
-        send(*msg)
-
-    if save and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):
-        for msg in PR.nags(save, mem, now, DL.count):  # prayer windows break quiet hours on purpose
+        if msg[0] not in covered:
             send(*msg)
+
+    if save:  # backup sync of the exact-time alarms (the app does this on every change)
+        mem["alarms"], made, fails = AL.sync(save, topic, now, mem.get("alarms", {}), click=app_url)
+        print(f"alarms: {made} queued/cancelled, {fails} failed")
 
     day_mem = mem.setdefault("day", {})
     if save and not quiet and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):

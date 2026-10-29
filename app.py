@@ -41,6 +41,7 @@ import dailies as DL
 import locks as LK
 import pomo as PM
 import prayers as PR
+import alarms as AL
 import prep as P
 import quickparse as Q
 import raceviz as RV
@@ -361,6 +362,26 @@ def broadcast_lock(state: dict) -> None:
     msg = LK.message(st_)
     if msg != state.get("_lock_msg") and LK.publish(get_secret("NTFY_TOPIC"), st_):
         state["_lock_msg"] = msg
+
+
+def sync_alarms(state: dict) -> None:
+    """Queue/cancel exact-time phone alarms on ntfy (alarms.py). Only does HTTP when something changed."""
+    topic = get_secret("NTFY_TOPIC")
+    if not topic:
+        return
+    posted = dict(state.get("alarms", {}))
+    while AL.FAILED:  # last background send hit an error → retry those
+        posted.pop(AL.FAILED.pop(), None)
+    try:
+        post, cancel, m = AL.diff(AL.plan(state, now()), posted, now())
+    except Exception:  # noqa: BLE001 — alarms are best-effort, never break the app
+        return
+    if not (post or cancel):
+        state["alarms"] = m
+        return
+    state["alarms"] = m
+    threading.Thread(target=AL.send, args=(topic, post, cancel, get_secret("APP_URL")), daemon=True).start()
+    save_state(state)
 
 
 # ── saving: instant on screen, synced to Notion in the background ──
@@ -2674,6 +2695,7 @@ if crash_msgs or rust_msg or _excused or st.session_state.pop("_needs_save", Fal
     save_state(state)
     if crash_msgs:
         st.session_state["sound"] = "fail"
+sync_alarms(state)
 
 PLAYER = state["settings"].get("player_name") or "driver"
 hour = now().hour

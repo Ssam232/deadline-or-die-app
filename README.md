@@ -8,7 +8,8 @@ Your phone won't let you forget.
 ```
 app.py              Streamlit app (the game)
 notion_store.py     Notion backend: save file + synced task table + proof uploads
-nag.py              Phone nagger (runs in GitHub Actions every 30 min)
+nag.py              Phone nagger (GitHub Actions, every 10 min when GitHub obliges)
+alarms.py           Exact-time alarms queued on ntfy (prayers, deadline countdowns, qualifying, last calls)
 notify.py           ntfy push helper
 .github/workflows/nag.yml
 ```
@@ -34,7 +35,7 @@ Android: in ntfy's notification settings, let max-priority alerts pop over and b
 ### 3. GitHub
 Push this folder to a **private** repo. Then **Settings → Secrets and variables → Actions → New repository secret** for each of:
 `NOTION_TOKEN`, `NOTION_PARENT_PAGE`, `NTFY_TOPIC`, `APP_URL`.
-**Actions** tab → *Nag* → **Run workflow** to test. After that it runs every 30 min on its own (well inside GitHub's free private-repo minutes).
+**Actions** tab → *Nag* → **Run workflow** to test. After that it runs on its own every 10 min, but GitHub often skips scheduled runs for hours. So anything time-critical doesn't depend on it: the app queues those alarms on ntfy's server for their exact minute and cancels them the moment they stop applying (see *Exact-time alarms*).
 
 ### 4. Streamlit Community Cloud
 1. **share.streamlit.io** → sign in with GitHub (allow private repo access) → **Create app** → pick the repo, branch `main`, file `app.py`.
@@ -88,7 +89,9 @@ Every time field is a scroll wheel (hour · minute · AM/PM, like an iPhone alar
 ## 🔁 Dailies (low gain, high penalty)
 Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5, 🦷 brushing ×2, or your own. Tap **+1** each time (↩ undoes). Hit the count → **🏆 Claim** a small reward and grow its 🔥 streak; every 7 days in a row pays a +15 bonus. Miss it → a **big penalty at midnight**. The game sets the values from how many times a day it has to happen: 1× +5/−45 · 2× +5/−40 · 3× +6/−35 · 5× +5/−25 · 8× +6/−20. They break even around a 90% hit rate (easing to ~76% for 8×), so consistent = slowly richer, sloppy = poorer. Missed dailies cost at most 60 in one day, and the day you add one is free. Dailies never touch your Notion boards. Rules: removing a daily only takes effect tomorrow (today still counts), pit-stop days skip them, and after a long absence at most 3 days are charged. Your phone nags at 8 PM and 10:30 PM if any are still open.
 
-**🕌 Prayer times.** A daily with "pray" in its name (the 🕌 Prayers preset) follows the real prayer windows, computed in the app (no API): Fajr → sunrise, Dhuhr → Asr, Asr → Maghrib, Maghrib → Isha, Isha → 11:30 PM. Its row shows the current prayer and when it ends, and the manage panel shows today's timetable plus the method (ISNA default) and Asr school (Standard / Hanafi). Each +1 counts as the next prayer in order, so 1/5 at Asr means you're behind. While the current one isn't logged, your phone escalates: a ping when the window opens, a loud one at 45 min left, then max priority every ~10 min in the last 20 min, and a "window closed" ping if it slips. These ignore quiet hours on purpose, and the nagger runs every 10 minutes for them.
+**⏰ Exact-time alarms.** Whenever something changes, the app works out every alarm for today and tomorrow and queues it on ntfy with a delivery time: deadline countdowns (6h, 2h, 1h, 30 min, 10 min; the early ones skip quiet hours), qualifying (60/30/10 min before cutoff), the zero-day ladder (6 PM, 8 PM, 9:30 PM), dailies last calls (8 PM, 10:30 PM) and prayers. Finish the task, lock in, log the prayer or finish your dailies and the queued alarms are cancelled before they buzz. The nagger re-syncs the same alarms as a backup, and a repeat queue just replaces the old one, so nothing double-buzzes.
+
+**🕌 Prayer times.** A daily with "pray" in its name (the 🕌 Prayers preset) follows the real prayer windows, computed in the app (no API): Fajr → sunrise, Dhuhr → Asr, Asr → Maghrib, Maghrib → Isha, Isha → 11:30 PM. Its row shows the current prayer and when it ends, and the manage panel shows today's timetable plus the method (ISNA default) and Asr school (Standard / Hanafi). Each +1 counts as the next prayer in order, so 1/5 at Asr means you're behind. Until it's logged, each prayer has alarms queued: when the window opens, 45 min left, then max priority at 20 and 10 min left, and a "window closed" ping. They fire on the minute, ignore quiet hours on purpose, and are cancelled as soon as you tap +1 (↩ brings them back).
 
 ## 💰 What tasks are worth
 Value = **honest minutes × category**: 🧠 Deep work ×1.5 · 📨 Academic admin ×1.0 · 💪 Health ×0.8 · 🧺 Life admin ×0.5 · 🪑 Showing up ×0.3.
