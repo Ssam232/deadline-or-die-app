@@ -1865,8 +1865,8 @@ DUE_CHIPS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 5
 
 def due_picker(key: str, default: str = "9 PM") -> dtime:
     """'Done by: 6 PM · 9 PM · Midnight · 🎡'. Chips already in the past are hidden."""
-    opts = [k for k, v in DUE_CHIPS.items() if v is None or datetime.combine(now().date(), v, TZ) > now()
-            + timedelta(minutes=20)]
+    opts = [k for k, v in DUE_CHIPS.items() if v is None or k == "Midnight"
+            or datetime.combine(now().date(), v, TZ) > now() + timedelta(minutes=20)]
     default = default if default in opts else opts[0]
     pick = st.pills("Done by", opts, default=default, key=f"{key}_chip", selection_mode="single") or default
     if DUE_CHIPS[pick] is None:
@@ -1983,9 +1983,8 @@ def render_qualify_form(state: dict) -> None:
     minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked if k.startswith("t:"))
                + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
                + sum(p_["minutes"] for p_ in parsed))
-    if parsed and dl <= now() + timedelta(minutes=5):
-        st.error("'Done by' has to be later today.")
-        return
+    if dl <= now() + timedelta(minutes=5):  # late at night (or a time that's gone by): same time tomorrow
+        dl += timedelta(days=1)
     if not parsed and not picked:
         st.error("Nothing to lock in yet. Type a task and press Enter (or Add), or pick one from your list.")
         return
@@ -2040,7 +2039,7 @@ def render_qualify_form(state: dict) -> None:
     st.session_state["_qf_n"] = fk + 1
     st.session_state["q_pending"] = []
     state["draft"] = None
-    cursor = max(datetime.combine(today, start_t, TZ), now().replace(second=0, microsecond=0))
+    cursor = max(start_dt or now(), now()).replace(second=0, microsecond=0)  # 11:45 PM + 1h = tomorrow, not today
     for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
         t = next(x for x in state["tasks"] if x["id"] == tid)
         if t.get("scheduled") and parse_dt(t["scheduled"]).date() >= today:
