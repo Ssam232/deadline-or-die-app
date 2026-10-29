@@ -1815,10 +1815,30 @@ def due_picker(key: str, default: str = "9 PM") -> dtime:
     return DUE_CHIPS[pick]
 
 
-def _q_rm(fk: int, n: int) -> None:
+def _q_keep(state: dict | None) -> None:
+    """Save the queued-but-not-locked tasks with the game, so a reload, a dropped connection or an app restart
+    doesn't eat them."""
+    if state is None:
+        return
+    items = [list(x) for x in st.session_state.get("q_pending", [])]
+    new = {"date": now().date().isoformat(), "items": items} if items else None
+    if state.get("draft") != new:
+        state["draft"] = new
+        save_state(state)
+
+
+def _q_restore(state: dict) -> None:
+    if "q_pending" not in st.session_state:
+        d = state.get("draft") or {}
+        st.session_state["q_pending"] = ([tuple(x) for x in d.get("items", [])]
+                                         if d.get("date") == now().date().isoformat() else [])
+
+
+def _q_rm(fk: int, n: int, state: dict | None = None) -> None:
     i = st.session_state.get(f"q_queue{fk}_{n}")
     if i is not None and i < len(st.session_state.get("q_pending", [])):
         st.session_state["q_pending"].pop(i)
+        _q_keep(state)
 
 
 def pending_has(txt: str) -> bool:
@@ -1828,7 +1848,7 @@ def pending_has(txt: str) -> bool:
 TIME_CHIPS = {"15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
 
 
-def _q_add(fk: int, clear: bool = True) -> None:
+def _q_add(fk: int, clear: bool = True, state: dict | None = None) -> None:
     """Enter in the task box: add it with the chosen time (a time typed in the text, like '45m', wins)."""
     txt = (st.session_state.get(f"q_new{fk}") or "").strip()
     if not txt:
@@ -1840,15 +1860,17 @@ def _q_add(fk: int, clear: bool = True) -> None:
     pend[:] = [x for x in pend if Q.parse(x[0], now())["title"].lower() != p_["title"].lower()]  # no dupes
     pend.append((txt, p_["minutes"] if typed else chip))
     st.session_state["q_last_chip"] = not typed  # a chip tap right after re-times this one
+    _q_keep(state)
     if clear:  # only from the Enter callback; the lock-in path resets the whole form by bumping fk instead
         st.session_state[f"q_new{fk}"] = ""
 
 
-def _q_chip(fk: int) -> None:
+def _q_chip(fk: int, state: dict | None = None) -> None:
     """Time chip tapped with the box empty → it's meant for the task you just queued."""
     pend = st.session_state.get("q_pending") or []
     if pend and not (st.session_state.get(f"q_new{fk}") or "").strip() and st.session_state.get("q_last_chip"):
         pend[-1] = (pend[-1][0], TIME_CHIPS.get(st.session_state.get(f"q_min{fk}") or "30m", 30))
+        _q_keep(state)
 
 
 @st.fragment
@@ -1883,16 +1905,17 @@ def render_qualify_form(state: dict) -> None:
                                 key=f"q_pick{fk}", placeholder="Your tasks, DECK 12 cards, papers…",
                                 help="✅ your tasks · 📅 DECK 12 (read-only; upcoming cards = an hour on them today) · "
                                      "📄 Zotero papers (45 min)")
-    pending = st.session_state.setdefault("q_pending", [])
+    _q_restore(state)
+    pending = st.session_state["q_pending"]
     c1, c2 = st.columns([1, 1], vertical_alignment="bottom")
     c1.text_input("Add a task" if not opts else "Or add a task", key=f"q_new{fk}",
-                  placeholder="e.g. Write 300 words of methods — Enter to add", on_change=_q_add, args=(fk,))
+                  placeholder="e.g. Write 300 words of methods — Enter to add", on_change=_q_add, args=(fk, True, state))
     c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}", label_visibility="collapsed",
-                         on_change=_q_chip, args=(fk,))
+                         on_change=_q_chip, args=(fk, state))
     if pending:
         chips = [f"{Q.parse(t_, now())['title']} · {min_label(m_)}  ✕" for t_, m_ in pending]
         st.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
-                 key=f"q_queue{fk}_{len(pending)}", on_change=_q_rm, args=(fk, len(pending)))
+                 key=f"q_queue{fk}_{len(pending)}", on_change=_q_rm, args=(fk, len(pending), state))
     c1, c2 = st.columns([1.15, 1])
     with c1:
         start_dt = start_picker(f"q_start{fk}", default="30m")
@@ -1968,6 +1991,7 @@ def render_qualify_form(state: dict) -> None:
     msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
     st.session_state["_qf_n"] = fk + 1
     st.session_state["q_pending"] = []
+    state["draft"] = None
     cursor = max(datetime.combine(today, start_t, TZ), now().replace(second=0, microsecond=0))
     for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
         t = next(x for x in state["tasks"] if x["id"] == tid)
