@@ -293,7 +293,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
 
     if save:  # backup sync of the exact-time alarms (the app does this on every change)
         mem["alarms"], made, fails = AL.sync(save, topic, now, mem.get("alarms", {}), click=app_url)
-        print(f"alarms: {made} queued/cancelled, {fails} failed")
+        print(f"::notice title=alarms::{made} queued/cancelled, {fails} failed")
 
     day_mem = mem.setdefault("day", {})
     if save and not quiet and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):
