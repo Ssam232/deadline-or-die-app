@@ -2258,54 +2258,98 @@ def _timer_ring(state: dict, tm: dict) -> None:
     acc = accent(state)[0]
     limit = PM.PAUSE_LIMIT_MIN
     _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
+    blocks = math.ceil(T / work) if work and brk else 1
+    ticks = "".join(f"{k * work / T:.4f}," for k in range(1, blocks)) if blocks > 1 else ""
     _embed(f"""
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@700&display=swap" rel="stylesheet">
 <style>
-body{{margin:0;font-family:system-ui,sans-serif;color:#ece8df}}
+body{{margin:0;font-family:system-ui,sans-serif;color:#ece8df;overflow:hidden}}
 .w{{display:flex;flex-direction:column;align-items:center}}
-.ring{{position:relative;width:148px;height:148px}}
-.c{{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}}
-#t{{font:700 34px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums;line-height:1}}
-#p{{font-size:12px;color:#8b909c;margin-top:4px}}
-#s{{font-size:12.5px;color:#8b909c;margin-top:6px;text-align:center}}
-#arc{{transition:stroke-dashoffset .9s linear,stroke .3s}}
-@media (prefers-reduced-motion:reduce){{#arc{{transition:none}}}}
+svg{{width:100%;max-width:330px;height:auto;display:block}}
+#t{{font:700 30px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums}}
+#p{{font-size:11px;fill:#8b909c;letter-spacing:.06em;text-transform:uppercase}}
+#s{{font-size:12.5px;color:#8b909c;margin-top:2px;text-align:center;min-height:16px}}
+#halo{{opacity:0}} .blink #halo{{animation:hz 1s steps(2,end) infinite}}
+@keyframes hz{{0%{{opacity:.9}}50%{{opacity:0}}}}
+.pit #crew{{animation:gun .35s linear infinite}} #crew{{opacity:0}} .pit #crew{{opacity:1}}
+@keyframes gun{{50%{{opacity:.25}}}}
+@media (prefers-reduced-motion:reduce){{.blink #halo,.pit #crew{{animation:none}}}}
 </style>
-<div class="w"><div class="ring">
-<svg width="148" height="148" viewBox="0 0 148 148">
- <circle cx="74" cy="74" r="64" fill="none" stroke="#262b36" stroke-width="9"/>
- <circle id="arc" cx="74" cy="74" r="64" fill="none" stroke="{acc}" stroke-width="9" stroke-linecap="round"
-   transform="rotate(-90 74 74)" stroke-dasharray="402.1" stroke-dashoffset="402.1"/>
-</svg><div class="c"><div id="t"></div><div id="p"></div></div></div><div id="s"></div></div>
+<div class="w" id="w">
+<svg viewBox="0 0 300 152" aria-label="Focus session progress">
+ <defs><pattern id="chk" width="4" height="4" patternUnits="userSpaceOnUse">
+   <rect width="2" height="2" fill="#ece8df"/><rect x="2" y="2" width="2" height="2" fill="#ece8df"/></pattern></defs>
+ <path id="track" d="M150,16 H228 A60,60 0 0 1 228,136 H72 A60,60 0 0 1 72,16 Z" fill="none" stroke="#262b36"
+   stroke-width="15" stroke-linejoin="round"/>
+ <path d="M150,16 H228 A60,60 0 0 1 228,136 H72 A60,60 0 0 1 72,16 Z" fill="none" stroke="#323846"
+   stroke-width="1" stroke-dasharray="5 7"/>
+ <path id="trail" d="M150,16 H228 A60,60 0 0 1 228,136 H72 A60,60 0 0 1 72,16 Z" fill="none" stroke="{acc}"
+   stroke-width="4" stroke-linecap="round" stroke-dasharray="0 9999" opacity=".9"/>
+ <g id="ticks"></g>
+ <rect x="147" y="8" width="6" height="16" fill="url(#chk)"/><rect x="147" y="8" width="6" height="16" fill="none"
+   stroke="#ece8df" stroke-width=".6"/>
+ <path d="M196,23 Q188,40 172,40" fill="none" stroke="#3a4050" stroke-width="1.2" stroke-dasharray="3 3"/>
+ <rect x="128" y="33" width="44" height="15" rx="3" fill="none" stroke="#3a4050" stroke-dasharray="3 2"/>
+ <text x="124" y="44" text-anchor="end" font-size="8" fill="#5b6070" font-weight="700">PIT</text>
+ <g id="crew"><circle cx="134" cy="40.5" r="1.6" fill="#2ec4b6"/><circle cx="166" cy="40.5" r="1.6" fill="#2ec4b6"/></g>
+ <text id="t" x="150" y="89" text-anchor="middle"></text>
+ <text id="p" x="150" y="106" text-anchor="middle"></text>
+ <g id="car"><circle id="halo" r="11" fill="#f5c518" opacity="0"/>
+  <rect x="-7.5" y="-7" width="4.5" height="2.4" rx=".8" fill="#0e1015"/><rect x="3.5" y="-7" width="4.5" height="2.4" rx=".8" fill="#0e1015"/>
+  <rect x="-7.5" y="4.6" width="4.5" height="2.4" rx=".8" fill="#0e1015"/><rect x="3.5" y="4.6" width="4.5" height="2.4" rx=".8" fill="#0e1015"/>
+  <rect id="body" x="-9.5" y="-5" width="19" height="10" rx="3.2" fill="{acc}"/>
+  <rect x="-10.5" y="-5.5" width="2.4" height="11" rx=".8" fill="#0e1015"/>
+  <rect x="-1.5" y="-3.2" width="5.5" height="6.4" rx="1.6" fill="#14171e"/>
+ </g>
+</svg><div id="s"></div></div>
 <script>
-const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},C=402.1,LIM={limit};
-let last=null,ac=null;
+const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},LIM={limit},ACC='{acc}';
+const TICKS=[{ticks}];
+const tr=document.getElementById('track'),L=tr.getTotalLength(),car=document.getElementById('car');
+const body=document.getElementById('body'),trail=document.getElementById('trail'),w=document.getElementById('w');
+TICKS.forEach(f=>{{const a=tr.getPointAtLength(L*f),b=tr.getPointAtLength(Math.min(L,L*f+.5));
+ const ang=Math.atan2(b.y-a.y,b.x-a.x)+Math.PI/2,dx=Math.cos(ang)*8,dy=Math.sin(ang)*8;
+ const l=document.createElementNS('http://www.w3.org/2000/svg','line');
+ l.setAttribute('x1',a.x-dx);l.setAttribute('y1',a.y-dy);l.setAttribute('x2',a.x+dx);l.setAttribute('y2',a.y+dy);
+ l.setAttribute('stroke','#2ec4b6');l.setAttribute('stroke-width','1.6');l.setAttribute('opacity','.7');
+ document.getElementById('ticks').appendChild(l);}});
+let last=null,ac=null,shown=-1;
 function beep(n){{try{{ac=ac||new (window.AudioContext||window.webkitAudioContext)();
  for(let i=0;i<n;i++){{const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=n>1?660:880;
  o.connect(g);g.connect(ac.destination);g.gain.value=.15;o.start(ac.currentTime+i*.25);o.stop(ac.currentTime+i*.25+.18);}}}}catch(e){{}}}}
 function mmss(ms){{const a=Math.floor(Math.abs(ms)/1000);return String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');}}
 function eff(now){{return Math.max(0,(now-S-PT-(PA?now-PA:0)+SK)/60000);}}
 function wdone(e){{if(!W||!B)return e;const c=W+B;return Math.floor(e/c)*W+Math.min(e%c,W);}}
-function f(){{
- const now=Date.now(),e=eff(now),wd=Math.min(wdone(e),T),arc=document.getElementById('arc');
- const t=document.getElementById('t'),p=document.getElementById('p'),s=document.getElementById('s');
+function place(f,pit){{
+ if(pit){{car.setAttribute('transform','translate(150,40.5)');return;}}
+ const d=L*Math.min(.9995,Math.max(0,f)),a=tr.getPointAtLength(d),b=tr.getPointAtLength(Math.min(L,d+1));
+ car.setAttribute('transform','translate('+a.x+','+a.y+') rotate('+(Math.atan2(b.y-a.y,b.x-a.x)*180/Math.PI)+')');}}
+function frame(){{
+ const now=Date.now(),e=eff(now),wd=Math.min(wdone(e),T),f=wd/T;
  let ph='work',left=(T-e)*60000;
  if(wd>=T)ph='done';
  else if(W&&B){{const c=W+B,r=e%c;if(r<W)left=Math.min(W-r,T-wd)*60000;else{{ph='break';left=(c-r)*60000;}}}}
- arc.style.strokeDashoffset=C*(1-Math.min(1,wd/T));
- const blocks=W&&B?Math.ceil(T/W):1,blk=W&&B?Math.min(blocks,Math.floor(e/(W+B))+1):1;
- if(PA){{t.textContent=mmss(left);t.style.color='#8b909c';arc.style.stroke='#5b6070';p.textContent='Paused';
-   s.textContent='Paused '+mmss(now-PA)+' · ends the session at '+LIM+':00';}}
- else if(ph==='done'){{t.textContent='+'+mmss((e-WALL)*60000);t.style.color='#ff6a5c';arc.style.stroke='#ff6a5c';
-   p.textContent='Done';s.textContent='🏁 Session complete. Stop & log it.';}}
- else if(ph==='break'){{t.textContent=mmss(left);t.style.color='#2ec4b6';arc.style.stroke='#2ec4b6';p.textContent='Break';
-   s.textContent='Stand up, water, no phone.';}}
- else{{t.textContent=mmss(left);t.style.color='{acc}';arc.style.stroke='{acc}';
-   p.textContent=blocks>1?('Work · block '+blk+' of '+blocks):'Work';
-   s.textContent=Math.round(wd)+' of '+T+' min done · phone face-down';}}
- const key=PA?'pause':ph;if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;}}
-f();setInterval(f,500);
-</script>""", height=184)  # our own static markup only — no user content goes in here
+ const pit=ph==='break'&&!PA;
+ place(ph==='done'?0:f,pit);
+ trail.setAttribute('stroke-dasharray',(L*Math.min(1,f))+' 9999');
+ w.className=PA?'w blink':pit?'w pit':'w';
+ const sec=Math.floor(now/1000);
+ if(sec!==shown){{shown=sec;
+  const t=document.getElementById('t'),p=document.getElementById('p'),s=document.getElementById('s');
+  const blk=W&&B?Math.min(TICKS.length+1,Math.floor(e/(W+B))+1):1,stints=TICKS.length+1;
+  if(PA){{t.textContent=mmss(left);t.style.fill='#8b909c';body.style.fill='#5b6070';trail.style.stroke='#5b6070';
+    p.textContent='🟡 Yellow flag';s.textContent='Paused '+mmss(now-PA)+' · retires the car at '+LIM+':00';}}
+  else if(ph==='done'){{t.textContent='+'+mmss((e-WALL)*60000);t.style.fill='#ff6a5c';body.style.fill=ACC;trail.style.stroke=ACC;
+    p.textContent='🏁 Chequered flag';s.textContent='Session complete. Stop & log it.';}}
+  else if(pit){{t.textContent=mmss(left);t.style.fill='#2ec4b6';body.style.fill=ACC;trail.style.stroke=ACC;
+    p.textContent='🔧 Pit stop';s.textContent='Tyres, water, stretch. No phone in the pit lane.';}}
+  else{{t.textContent=mmss(left);t.style.fill=ACC;body.style.fill=ACC;trail.style.stroke=ACC;
+    p.textContent=stints>1?('Stint '+blk+' of '+stints):'Green flag';
+    s.textContent=Math.round(wd)+' of '+T+' min · phone face-down';}}
+  const key=PA?'pause':ph;if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;}}
+ requestAnimationFrame(frame);}}
+frame();
+</script>""", height=196)  # our own static markup only — no user content goes in here
 
 
 def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -> None:
