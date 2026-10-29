@@ -1841,36 +1841,18 @@ def _q_rm(fk: int, n: int, state: dict | None = None) -> None:
         _q_keep(state)
 
 
-def pending_has(txt: str) -> bool:
-    return any(t == txt.strip() for t, _ in st.session_state.get("q_pending", []))
-
-
 TIME_CHIPS = {"15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
 
 
-def _q_add(fk: int, clear: bool = True, state: dict | None = None) -> None:
-    """Enter in the task box: add it with the chosen time (a time typed in the text, like '45m', wins)."""
-    txt = (st.session_state.get(f"q_new{fk}") or "").strip()
-    if not txt:
-        return
+def _q_put(txt: str, chip_min: int, state: dict | None) -> None:
+    """Queue a typed task with the chosen time (a time typed in the text, like '45m', wins). Same name = replaced."""
+    txt = txt.strip()
     p_ = Q.parse(txt, now())
-    chip = TIME_CHIPS.get(st.session_state.get(f"q_min{fk}") or "30m", 30)
     typed = re.search(r"\d+(?:\.\d+)?\s*(h|hr|hrs|hour|hours|m|min|mins|minutes)\b", txt, re.I)
     pend = st.session_state.setdefault("q_pending", [])
-    pend[:] = [x for x in pend if Q.parse(x[0], now())["title"].lower() != p_["title"].lower()]  # no dupes
-    pend.append((txt, p_["minutes"] if typed else chip))
-    st.session_state["q_last_chip"] = not typed  # a chip tap right after re-times this one
+    pend[:] = [x for x in pend if Q.parse(x[0], now())["title"].lower() != p_["title"].lower()]
+    pend.append((txt, p_["minutes"] if typed else chip_min))
     _q_keep(state)
-    if clear:  # only from the Enter callback; the lock-in path resets the whole form by bumping fk instead
-        st.session_state[f"q_new{fk}"] = ""
-
-
-def _q_chip(fk: int, state: dict | None = None) -> None:
-    """Time chip tapped with the box empty → it's meant for the task you just queued."""
-    pend = st.session_state.get("q_pending") or []
-    if pend and not (st.session_state.get(f"q_new{fk}") or "").strip() and st.session_state.get("q_last_chip"):
-        pend[-1] = (pend[-1][0], TIME_CHIPS.get(st.session_state.get(f"q_min{fk}") or "30m", 30))
-        _q_keep(state)
 
 
 @st.fragment
@@ -1907,26 +1889,33 @@ def render_qualify_form(state: dict) -> None:
                                      "📄 Zotero papers (45 min)")
     _q_restore(state)
     pending = st.session_state["q_pending"]
-    c1, c2 = st.columns([1, 1], vertical_alignment="bottom")
-    c1.text_input("Add a task" if not opts else "Or add a task", key=f"q_new{fk}",
-                  placeholder="e.g. Write 300 words of methods — Enter to add", on_change=_q_add, args=(fk, True, state))
-    c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}", label_visibility="collapsed",
-                         on_change=_q_chip, args=(fk, state))
-    if pending:
-        chips = [f"{Q.parse(t_, now())['title']} · {min_label(m_)}  ✕" for t_, m_ in pending]
-        st.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
-                 key=f"q_queue{fk}_{len(pending)}", on_change=_q_rm, args=(fk, len(pending), state))
     c1, c2 = st.columns([1.15, 1])
     with c1:
         start_dt = start_picker(f"q_start{fk}", default="30m")
     with c2:
         due_t = due_picker(f"q_due{fk}")
     start_t = (start_dt or now()).time()
-    if not st.button("🚦 Lock it in", type="primary", use_container_width=True, key=f"q_go{fk}"):
+    queue_slot = st.container()  # drawn after the form runs, so a new entry shows without a second redraw
+    # one mini-form: type → tap a time → Enter (or Add). Nothing is taken until you add it, so tapping a time chip
+    # never grabs half-typed text — and Lock it in is part of the form, so half-typed text gets locked in too.
+    with st.form(f"q_form{fk}", clear_on_submit=True, border=False, enter_to_submit=True):
+        c1, c2, c3 = st.columns([0.8, 1.05, 0.3], vertical_alignment="bottom")
+        txt_ = c1.text_input("Add a task" if not opts else "Or add a task", key=f"q_new{fk}",
+                             placeholder="e.g. Write 300 words of methods — Enter to add")
+        min_ = c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}",
+                                    label_visibility="collapsed")
+        add_ = c3.form_submit_button("＋ Add", use_container_width=True, help="Or press Enter")
+        go_ = st.form_submit_button("🚦 Lock it in", type="primary", use_container_width=True)
+    if (add_ or go_) and (txt_ or "").strip():
+        _q_put(txt_, TIME_CHIPS.get(min_ or "30m", 30), state)
+        pending = st.session_state["q_pending"]
+    if pending:
+        chips = [f"{Q.parse(t_, now())['title']} · {min_label(m_)}  ✕" for t_, m_ in pending]
+        queue_slot.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
+                         key=f"q_queue{fk}_{len(pending)}", on_change=_q_rm, args=(fk, len(pending), state))
+    if not go_:
         return
     dl = datetime.combine(today, due_t, TZ)
-    if (st.session_state.get(f"q_new{fk}") or "").strip() and not pending_has(st.session_state[f"q_new{fk}"]):
-        _q_add(fk, clear=False)  # typed but didn't press Enter
     parsed = []
     for ttl, mins_ in pending:
         p_ = Q.parse(ttl, now())
@@ -1939,7 +1928,7 @@ def render_qualify_form(state: dict) -> None:
         st.error("'Done by' has to be later today.")
         return
     if not parsed and not picked:
-        st.error("Pick at least one thing. One small thing counts.")
+        st.error("Nothing to lock in yet. Type a task and press Enter (or Add), or pick one from your list.")
         return
     if minutes < daily.min_mission_minutes(state) and not daily.peek_day(state, today).get("qualified"):
         # the 30-min floor is for qualifying; once the day's locked in, additions are bonus and any size goes
@@ -2722,6 +2711,7 @@ CSS = """<style>
 [data-testid^="stBaseButton"]:active{transform:scale(.97)}
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
+[data-testid="InputInstructions"]{display:none}
 [data-baseweb="tab-panel"]{animation:dodIn .3s ease-out both}
 [data-testid="stProgressBarTrack"] div{transition:width .6s cubic-bezier(.2,.7,.2,1)}
 [data-baseweb="tab-highlight"]{transition:all .25s ease}
