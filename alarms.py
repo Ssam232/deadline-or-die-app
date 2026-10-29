@@ -82,6 +82,28 @@ def _prayers(save: dict, d: date, now: datetime) -> list[dict]:
     return out
 
 
+def _daily_reminders(save: dict, d: date, now: datetime) -> list[dict]:
+    """🔔 per-daily reminders. The i-th fires only if you've logged fewer than i+1 by then; +1 cancels it."""
+    out, rest = [], "tasks" in save and daily.is_rest(save, d)
+    for h in DL.habits(save):
+        if PR.is_prayer_daily(h) or not DL.active_on(h, d) or (h.get("end") and h["end"] < d.isoformat()):
+            continue
+        times = DL.remind_times(h)
+        if not times:
+            continue
+        count, n = DL.count(save, h["id"], d), int(h["target"])
+        for i, hm in enumerate(times):
+            hh, mm = (int(x) for x in hm.split(":"))
+            at = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm)
+            k = min(i + 1, n)
+            last = i == len(times) - 1
+            msg = (("Last one for today — " if last else "") + f"#{k} of {n} should be done by now. Tap +1 when it is."
+                   if n > 1 else "Not done yet today. Tap +1 when it is.")
+            out.append(_alarm(("rem", h["id"], d, hm), at, h["name"], msg, 4 if last else 3, ["bell"],
+                              not rest and count < k))
+    return out
+
+
 def _tasks(save: dict, now: datetime) -> list[dict]:
     out = []
     for t in save.get("tasks", []):
@@ -141,7 +163,7 @@ def plan(save: dict, now: datetime, prof: dict | None = None) -> list[dict]:
         return []
     out = _tasks(save, now) + NU.build(save, now, prof, _alarm)
     for d in (now.date(), now.date() + timedelta(days=1)):
-        out += _prayers(save, d, now) + _day(save, d, now)
+        out += _prayers(save, d, now) + _day(save, d, now) + _daily_reminders(save, d, now)
     lo, hi = now + timedelta(seconds=MIN_LEAD), now + HORIZON
     return [a for a in out if lo <= a["at"] <= hi]
 

@@ -20,6 +20,8 @@ MAX_CHARGED_DAYS missed days are charged.
 """
 from __future__ import annotations
 
+import re
+
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -190,3 +192,46 @@ def hit_rate(save: dict, today: date, days: int = 28) -> float | None:
                 tot += 1
                 hit += count(save, h["id"], d) >= h["target"]
     return hit / tot if tot else None
+
+
+# ── 🔔 reminders: "off", "spread" (evenly through the day) or a list of "HH:MM" ──
+REMIND_OPTS = {"off": "🔕 No reminders", "spread": "🔔 Spread out", "times": "⏰ Set times"}
+
+
+def remind_mode(h: dict) -> str:
+    r = h.get("remind")
+    return "times" if isinstance(r, list) else (r if r in REMIND_OPTS else "off")
+
+
+def remind_times(h: dict) -> list[str]:
+    """When each of the day's reminders goes off ('HH:MM'). Reminder i only fires if you're still under i+1."""
+    r = h.get("remind")
+    if isinstance(r, list):
+        return sorted(x for x in r if re.fullmatch(r"\d{2}:\d{2}", x))[:20]
+    if r != "spread":
+        return []
+    n = int(h.get("target", 1))
+    if n == 1:
+        return ["19:00"]
+    if n == 2:
+        return ["08:30", "21:30"]
+    a, b = 9 * 60, 21 * 60  # 9 AM → 9 PM
+    return [f"{(a + round(i * (b - a) / (n - 1))) // 60:02d}:{(a + round(i * (b - a) / (n - 1))) % 60:02d}"
+            for i in range(n)]
+
+
+def parse_times(txt: str) -> list[str]:
+    """'8, 1pm, 21:30' → ['08:00', '13:00', '21:30']."""
+    out = []
+    for part in re.split(r"[,;/ ]+", txt or ""):
+        m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", part.strip(), re.I)
+        if not m:
+            continue
+        h, mi, ap = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+        if ap == "pm" and h < 12:
+            h += 12
+        elif ap == "am" and h == 12:
+            h = 0
+        if h < 24 and mi < 60:
+            out.append(f"{h:02d}:{mi:02d}")
+    return sorted(set(out))

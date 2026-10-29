@@ -38,23 +38,26 @@ def parse(text: str, now: datetime) -> dict:
         t = t.replace(m.group(0), " ")
 
     day = now.date()
-    when_given = bool(re.search(r"\b(tomorrow|tmrw|today|tonight|eod|by|at|before|mon|monday|tue|tues|tuesday|wed|"
-                                r"wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)\b", t, re.I)
-                      or "@" in t)
+    # a day word is a due date — unless it's possessive ("tomorrow's outfit") or what the task is *for*
+    # ("prep for tomorrow", "notes about Monday"): then it's part of the title.
+    keep = r"(?<!\bfor )(?<!\bof )(?<!\babout )(?<!\buntil )(?<!\bfrom )"
+    not_poss = r"(?![''’]s\b)"
+    day_given = False
     for word, delta in (("tomorrow", 1), ("tmrw", 1), ("today", 0), ("tonight", 0)):
-        mm = re.search(rf"\b{word}\b", t, re.I)
+        mm = re.search(rf"{keep}\b{word}\b{not_poss}", t, re.I)
         if mm:
-            day = now.date() + timedelta(days=delta)
-            t = t.replace(mm.group(0), " ")
+            day, day_given = now.date() + timedelta(days=delta), True
+            t = t[:mm.start()] + " " + t[mm.end():]
             if word == "tonight":
                 t += " by 9pm "
             break
     else:
-        mm = re.search(r"\b(?:on\s+)?(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)[a-z]*\b", t, re.I)
+        mm = re.search(rf"{keep}\b(?:on\s+)?(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)"
+                       rf"(?:day|sday|nesday|rsday|urday)?\b{not_poss}", t, re.I)
         if mm:
             target = WEEKDAYS.index(mm.group(1)[:3].lower())
-            day = now.date() + timedelta(days=(target - now.weekday()) % 7 or 7)
-            t = t.replace(mm.group(0), " ")
+            day, day_given = now.date() + timedelta(days=(target - now.weekday()) % 7 or 7), True
+            t = t[:mm.start()] + " " + t[mm.end():]
 
     at = dtime(23, 59)
     at_time = False
@@ -70,9 +73,12 @@ def parse(text: str, now: datetime) -> dict:
             h += 12
         at = dtime(min(h, 23), min(mi, 59))
         t = t.replace(mm.group(0), " ")
+        day_given = True
     elif re.search(r"\beod\b", t, re.I):
         at = dtime(17, 0)
         t = re.sub(r"\beod\b", " ", t, flags=re.I)
+        day_given = True
+    when_given = day_given or "@" in t
 
     due = datetime.combine(day, at, now.tzinfo)
     if due <= now + timedelta(minutes=10):  # "by 3pm" when it's already 4pm → tomorrow

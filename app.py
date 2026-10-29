@@ -1710,6 +1710,21 @@ def _dl_tap(state: dict, h: dict, d, delta: int) -> None:
         st.session_state["_dl_full"] = True  # celebrate on the whole page
 
 
+def _remind_picker(key: str, mode: str, cur, h: dict | None = None):
+    """🔕 / 🔔 spread / ⏰ set times. Returns 'off', 'spread' or a list of 'HH:MM'."""
+    c1, c2 = st.columns([1, 1.1], vertical_alignment="center")
+    m = c1.selectbox("Reminders", list(DL.REMIND_OPTS), index=list(DL.REMIND_OPTS).index(mode),
+                     format_func=DL.REMIND_OPTS.get, key=f"{key}_m", label_visibility="collapsed")
+    if m == "times":
+        txt = c2.text_input("Times", value=", ".join(cur) if isinstance(cur, list) else "8:00, 13:00, 21:00",
+                            key=f"{key}_t", label_visibility="collapsed", placeholder="8:00, 1pm, 21:30")
+        return DL.parse_times(txt) or ["20:00"]
+    if m == "spread" and h:
+        c2.caption("⏰ " + ", ".join(datetime.strptime(x, "%H:%M").strftime("%I:%M").lstrip("0")
+                                    for x in DL.remind_times({**h, "remind": "spread"})))
+    return m
+
+
 @st.fragment
 def render_dailies(state: dict) -> None:
     if st.session_state.pop("_dl_full", False):
@@ -1765,8 +1780,14 @@ def render_dailies(state: dict) -> None:
                        "Set by the game: once-a-day dailies pay least and cost most.")
             days = st.multiselect("Days", list(range(7)), default=list(range(7)), format_func=lambda i: DL.WEEKDAYS[i],
                                   key="dl_days")
+            is_pr = PR.is_prayer_daily({"name": name or ""})
+            rem = None
+            if not is_pr:
+                rem = _remind_picker("dl_new", "spread", None)
             if st.button("➕ Add daily", type="primary", disabled=not (name or "").strip()):
                 h = DL.add(state, name, target, days, today)
+                if rem is not None:
+                    h["remind"] = rem
                 save_state(state)
                 flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{DL.reward(h)} when done, −{DL.penalty(h)} if missed. "
                       "Starts counting today.")
@@ -1799,6 +1820,13 @@ def render_dailies(state: dict) -> None:
                         DL.remove(state, h["id"], today)
                         save_state(state)
                         st.rerun(scope="app")
+                    if PR.is_prayer_daily(h):
+                        a.caption("🕌 Reminders follow the prayer windows.")
+                    elif not h.get("end"):
+                        new_r = _remind_picker(f"dl_r_{h['id']}", DL.remind_mode(h), h.get("remind"), h)
+                        if new_r != (h.get("remind") or "off"):
+                            h["remind"] = new_r
+                            save_state(state)
 
 
 DUE_CHIPS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 59), "🎡": None}
