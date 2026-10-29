@@ -17,7 +17,7 @@ import re
 
 from datetime import date, datetime, timedelta
 
-from notion_store import Notion, clean_id, plain, rt
+from notion_store import Notion, clean_id, notion_dt, plain, rt
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 DONE_WORDS = {"done", "complete", "completed", "finished", "✅"}
@@ -122,8 +122,7 @@ def _item(p: dict, m: dict, d: date | None, skip_ids, tz=None) -> dict | None:
     if m["date"]:
         start = ((pr.get(m["date"]) or {}).get("date") or {}).get("start") or ""
         if len(start) > 10:
-            dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
-            dt = dt.astimezone(tz) if tz else dt
+            dt = notion_dt(start, tz)
             when, d = dt.strftime("%I:%M %p").lstrip("0"), dt.date()
         elif start:
             d = date.fromisoformat(start[:10])

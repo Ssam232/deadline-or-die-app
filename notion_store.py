@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
@@ -391,12 +391,24 @@ def pull_rows(n: Notion, db_id: str) -> list[dict]:
     return [parse_row(p) for p in n.query(db_id)]
 
 
+def notion_dt(start: str, tz) -> datetime:
+    """A Notion date-time → aware datetime in `tz`, as the clock time you see in Notion.
+
+    Notion always sends an offset, but a time with no time zone of its own (typed into Notion without one, or made by
+    a calendar sync) often comes back tagged UTC: "3:00 PM" arrives as 15:00+00:00. Converting that would move a
+    3 PM event to 9 AM in Calgary, so a UTC-tagged time is read as wall-clock time here. Real offsets convert normally.
+    """
+    d = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    if d.tzinfo is None or d.utcoffset() == timedelta(0):
+        return d.replace(tzinfo=tz) if tz else d
+    return d.astimezone(tz) if tz else d
+
+
 def due_to_dt(due: str, tz) -> datetime:
     """Notion date → aware datetime. Date-only means 11:59 PM that day."""
     if len(due) == 10:
         return datetime.fromisoformat(due + "T23:59:00").replace(tzinfo=tz)
-    d = datetime.fromisoformat(due.replace("Z", "+00:00"))
-    return d if d.tzinfo else d.replace(tzinfo=tz)
+    return notion_dt(due, tz)
 
 
 # ─────────────── proof uploads ───────────────
