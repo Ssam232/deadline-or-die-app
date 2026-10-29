@@ -1817,56 +1817,97 @@ def render_dailies(state: dict) -> None:
                 else:
                     c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True,
                               on_click=_dl_tap, args=(state, h, today, 1))
-        with st.expander("➕ Add / manage dailies" if rows else
+        with st.expander("⚙️ Manage dailies" if rows else
                          "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)"):
-            names = [p[0] for p in DL.PRESETS] + ["✏️ Custom…"]
-            c1, c2 = st.columns([3, 1])
-            pick = c1.selectbox("Daily", names, key="dl_pick")
-            name = st.text_input("Name", key="dl_name", placeholder="e.g. 🌙 Journal") if pick == names[-1] else pick
-            target = c2.number_input("Times / day", 1, 20, dict(DL.PRESETS).get(pick, 1), key=f"dl_target_{pick}")
-            st.caption(f"Worth **+{DL.reward(target)}** 🪙 when done · **−{DL.penalty(target)}** 🪙 if missed at midnight. "
-                       "Set by the game: once-a-day dailies pay least and cost most.")
-            days = st.multiselect("Days", list(range(7)), default=list(range(7)), format_func=lambda i: DL.WEEKDAYS[i],
-                                  key="dl_days")
-            is_pr = PR.is_prayer_daily({"name": name or ""})
-            rem = None
-            if not is_pr:
-                rem = _remind_picker("dl_new", "spread", None)
-            if st.button("➕ Add daily", type="primary", disabled=not (name or "").strip()):
-                h = DL.add(state, name, target, days, today)
-                if rem is not None:
-                    h["remind"] = rem
-                save_state(state)
-                flash(f"🔁 **{h['name']}** ×{h['target']}/day added — +{DL.reward(h)} when done, −{DL.penalty(h)} if missed. "
-                      "Starts counting today.")
-                st.rerun(scope="app")
-            if is_pr:
-                _prayer_settings(state, today, "new")
             live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
-            if live:
-                st.caption("Removing a daily takes effect tomorrow — today still counts.")
+            views = ["Your dailies", "＋ Add new"]
+            if "_dl_view_next" in st.session_state:
+                st.session_state["dl_view"] = st.session_state.pop("_dl_view_next")
+            view = st.segmented_control("View", views, default=views[0] if live else views[1], key="dl_view",
+                                        label_visibility="collapsed") or (views[0] if live else views[1])
+            if view == views[1]:
+                _daily_add_form(state, today)
+            elif not live:
+                st.caption("No dailies yet — add one.")
+            else:
                 for h in live:
-                    a, b = st.columns([5, 2], vertical_alignment="center")
-                    a.markdown(f"{h['name']} ×{h['target']} · +{DL.reward(h)} / −{DL.penalty(h)} · "
-                               f"{'every day' if len(h['days']) == 7 else ', '.join(DL.WEEKDAYS[i] for i in h['days'])}"
-                               + (" · *ends tonight*" if h.get("end") == today.isoformat() else ""))
-                    if not h.get("end") and b.button("Remove", key=f"dl_rm_{h['id']}", use_container_width=True):
-                        DL.remove(state, h["id"], today)
-                        save_state(state)
-                        st.rerun(scope="app")
-                    if h.get("end") == today.isoformat() and b.button("Undo", key=f"dl_un_{h['id']}",
-                                                                      use_container_width=True):
-                        h["end"] = None  # changed your mind before midnight: keep it
-                        save_state(state)
-                        st.rerun(scope="app")
-                    if PR.is_prayer_daily(h):
-                        with st.popover("🕌 Prayer times & method", use_container_width=True):
-                            _prayer_settings(state, today, h["id"])
-                    elif not h.get("end"):
-                        new_r = _remind_picker(f"dl_r_{h['id']}", DL.remind_mode(h), h.get("remind"), h)
-                        if new_r != (h.get("remind") or "off"):
-                            h["remind"] = new_r
-                            save_state(state)
+                    _daily_card(state, h, today)
+                st.caption("Removing a daily takes effect tomorrow, so today still counts.")
+
+
+def _daily_card(state: dict, h: dict, today) -> None:
+    """One daily: name, what it's worth, when it runs, and its reminders. Remove lives behind ⋯ (no fat-finger)."""
+    ended = h.get("end") == today.isoformat()
+    days = "every day" if len(h["days"]) == 7 else " ".join(DL.WEEKDAYS[i] for i in h["days"])
+    is_pr = PR.is_prayer_daily(h)
+    times = DL.remind_times(h)
+    if is_pr:
+        bell = "🔔 prayer windows"
+    elif times:
+        bell = "🔔 " + ", ".join(datetime.strptime(x, "%H:%M").strftime("%I:%M%p").lstrip("0").lower() for x in times[:4]) \
+            + (f" +{len(times) - 4}" if len(times) > 4 else "")
+    else:
+        bell = "🔕 no reminders"
+    with st.container(border=True):
+        c1, c2 = st.container(key=f"dlh_{h['id']}").columns([6, 1], vertical_alignment="center")
+        c1.markdown(f"**{html.escape(h['name'])}** &nbsp;<span class='m'>×{h['target']} a day</span>"
+                    + ("&nbsp; <span style='color:#ff6a5c'>ends tonight</span>" if ended else ""),
+                    unsafe_allow_html=True)
+        with c2.popover("⋯", use_container_width=True):
+            if ended:
+                st.caption("Removed: it stops after tonight.")
+                if st.button("↩ Keep it", key=f"dl_un_{h['id']}", use_container_width=True):
+                    h["end"] = None  # changed your mind before midnight
+                    save_state(state)
+                    st.rerun(scope="app")
+            else:
+                st.caption("Stops tomorrow; today still counts.")
+                if st.button("🗑 Remove", key=f"dl_rm_{h['id']}", use_container_width=True):
+                    DL.remove(state, h["id"], today)
+                    save_state(state)
+                    st.rerun(scope="app")
+        st.caption(f"+{DL.reward(h)} 🪙 done · −{DL.penalty(h)} 🪙 missed · {days} · {bell}")
+        if ended:
+            return
+        if is_pr:
+            with st.popover("🕌 Prayer times & method", use_container_width=True):
+                _prayer_settings(state, today, h["id"])
+        else:
+            new_r = _remind_picker(f"dl_r_{h['id']}", DL.remind_mode(h), h.get("remind"))
+            if new_r != (h.get("remind") or "off"):
+                h["remind"] = new_r
+                save_state(state)
+
+
+def _daily_add_form(state: dict, today) -> None:
+    names = [p[0] for p in DL.PRESETS] + ["✏️ Custom…"]
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+    pick = c1.selectbox("Daily", names, key="dl_pick")
+    target = c2.number_input("Times a day", 1, 20, dict(DL.PRESETS).get(pick, 1), key=f"dl_target_{pick}")
+    name = st.text_input("Name", key="dl_name", placeholder="e.g. 🌙 Journal") if pick == names[-1] else pick
+    days = st.pills("Days", list(range(7)), selection_mode="multi", default=list(range(7)),
+                    format_func=lambda i: DL.WEEKDAYS[i], key="dl_days") or list(range(7))
+    is_pr = PR.is_prayer_daily({"name": name or ""})
+    rem = None
+    if is_pr:
+        st.caption("🕌 Reminders follow the real prayer windows.")
+        _prayer_settings(state, today, "new")
+    else:
+        st.markdown("<div style='font-size:.85rem;color:#8b909c;margin:4px 0 -6px'>Reminders</div>",
+                    unsafe_allow_html=True)
+        rem = _remind_picker("dl_new", "spread", None)
+    st.markdown(f"<div class='dod-row' style='border:0;padding:6px 0'><div>Worth <b>+{DL.reward(target)}</b> 🪙 when "
+                f"done · <b>−{DL.penalty(target)}</b> 🪙 if missed at midnight <span class='m'>· set by the game: the "
+                f"fewer times a day, the less it pays and the more it costs</span></div></div>", unsafe_allow_html=True)
+    if st.button("➕ Add daily", type="primary", disabled=not (name or "").strip(), use_container_width=True):
+        h = DL.add(state, name, target, days, today)
+        if rem is not None:
+            h["remind"] = rem
+        st.session_state["_dl_view_next"] = "Your dailies"
+        save_state(state)
+        flash(f"🔁 **{h['name']}** ×{h['target']}/day added: +{DL.reward(h)} when done, −{DL.penalty(h)} if missed. "
+              "Starts counting today.")
+        st.rerun(scope="app")
 
 
 DUE_CHIPS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 59), "🎡": None}
@@ -2779,6 +2820,9 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+[class*="st-key-dlh_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem}
+[class*="st-key-dlh_"] [data-testid="stColumn"]{min-width:0!important}
+[class*="st-key-dlh_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
 [data-baseweb="tab-panel"]{animation:dodIn .3s ease-out both}
 [data-testid="stProgressBarTrack"] div{transition:width .6s cubic-bezier(.2,.7,.2,1)}
 [data-baseweb="tab-highlight"]{transition:all .25s ease}
