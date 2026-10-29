@@ -2126,6 +2126,19 @@ def _pomo_pick(state: dict, where=None) -> tuple[int | None, int | None]:
     return (int(work), int(brk)) if work and brk else (None, None)
 
 
+NEW_SESSION = "__new__"
+
+
+def _timer_task(state: dict, name: str, planned: int, wall: int) -> dict:
+    """A task made on the spot from the timer: due tonight (or an hour after the session, if that's later)."""
+    eod = datetime.combine(now().date(), dtime(23, 59), TZ)
+    dl = max(eod, now() + timedelta(minutes=wall + 60))
+    t = make_task((name or "").strip() or "Focus session", "Started from the focus timer.", dl, None, "",
+                  source="timer", minutes=planned)
+    state["tasks"].append(t)
+    return t
+
+
 def render_timer(state: dict) -> None:
     tm = state.get("timer")
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
@@ -2133,15 +2146,19 @@ def render_timer(state: dict) -> None:
     with st.container(border=True):
         if not tm:
             st.markdown("#### ⏱️ Focus timer")
-            if not open_t:
-                st.caption("Add a task first — the timer is a receipt for real work.")
-                return
             labels = {t["id"]: t["title"] for t in open_t}
+            labels[NEW_SESSION] = "✏️ New task…"
             c1, c2 = st.columns([1.6, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
             planned = c2.selectbox("Minutes", [25, 50, 60, 90, 120], key="timer_len", label_visibility="collapsed",
                                    format_func=lambda m: f"{m} min")
+            new_name = ""
+            if tid == NEW_SESSION:
+                new_name = st.text_input("What are you working on?", key="timer_new", max_chars=120,
+                                         placeholder="e.g. Poster figures · blank = just a focus session",
+                                         label_visibility="collapsed")
+                st.caption("Becomes a task due tonight. Run the timer and it's your proof — finish it after.")
             c3, c4 = st.columns([1.6, 1])
             work, brk = _pomo_pick(state, c3)
             if c4.button("🎲 Pick for me", use_container_width=True, key="pick_next",
@@ -2159,6 +2176,8 @@ def render_timer(state: dict) -> None:
             wall = PM.wall_minutes(planned, work, brk)
             if st.button(f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
                          type="primary", use_container_width=True):
+                if tid == NEW_SESSION:
+                    tid = _timer_task(state, new_name, planned, PM.wall_minutes(planned, work, brk))["id"]
                 state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned,
                                   "work": work, "brk": brk}
                 _mark_started(next(x for x in state["tasks"] if x["id"] == tid))

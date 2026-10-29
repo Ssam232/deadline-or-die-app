@@ -99,6 +99,7 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 
 ## ⏱️ Focus timer · 📜 Weekly contracts · 🎰 Paddock Lounge
 - Timer: pick a task, 25/50/60/90/120 min of work, log it. Counts toward contracts and the +15% verified bonus.
+- Start a timer on any open task, or pick **✏️ New task…** and type what you're doing (blank = "Focus session"): it becomes a task due tonight and the timer is its proof.
 - Running timer: a little circuit. Your car laps it as you work (the trail is time done, teal marks are pit windows between stints), pulls into the 🔧 pit box on breaks, stops under a 🟡 yellow flag with hazards blinking when paused, and parks on the 🏁 line when the session is complete (overtime counts up in red). **⏸️ Pause** costs 2, 4, 6… coins per pause, paused time doesn't count, and a pause over 20 min ends the session (logging what you did). **☕ Skip break** jumps to the next work block.
 - 🍅 Breaks: pick **25/5 pomodoro**, **50/10**, or a custom *break at N min* interval (remembered). The clock turns blue on breaks and beeps at each switch; only work minutes are logged, so breaks never pad the receipt.
 - Contracts: 3 rotating weekly challenges, big payouts.
