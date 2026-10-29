@@ -1563,6 +1563,23 @@ BOARD_LOOKAHEAD = 7       # qualifying shows today + this many days of board car
 EVENT_LOOKAHEAD = 60      # the event planner looks this far ahead
 
 
+def _rel_day(dt: datetime, today: date) -> str:
+    """'tonight' · '2 PM' · 'tmrw 9 AM' · 'Mon' — the shortest way to say when."""
+    hm = dt.strftime("%I:%M %p").lstrip("0").replace(":00", "")
+    if dt.date() == today:
+        return "tonight" if dt.hour >= 23 else hm
+    if dt.date() == today + timedelta(days=1):
+        return "tmrw" if dt.hour >= 23 else f"tmrw {hm}"
+    return f"{dt:%a}" if dt.hour >= 23 else f"{dt:%a} {hm}"
+
+
+def _board_chip(b: dict, today: date) -> str:
+    d = date.fromisoformat(b["date"]) if b.get("date") else today
+    day = "today" if d == today else "tmrw" if d == today + timedelta(days=1) else f"{d:%a %b} {d.day}"
+    when = (b.get("when") or "").replace(":00", "")
+    return f"{b['title']} · {day}" + (f" {when}" if when else "") + (" · 🔁" if b.get("recurring") else "")
+
+
 def _board_label(b: dict, today: date) -> str:
     d = date.fromisoformat(b["date"]) if b.get("date") else today
     day = "Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else f"{d:%a %b %d}"
@@ -1968,34 +1985,43 @@ def _q_put(txt: str, chip_min: int, state: dict | None) -> None:
 def render_qualify_form(state: dict) -> None:
     today = now().date()
     fk = st.session_state.setdefault("_qf_n", 0)  # bumped after a lock-in to reset every field
-    # ── one picker for everything you already have: your tasks, DECK 12 cards, Zotero papers ──
-    opts, default = {}, []
+    # ── pick from what you already have: tap to select. Grouped by where it came from, short labels. ──
+    opts, groups = {}, {"t": [], "b": [], "z": []}
+    default_t = []
     for t in sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"]):
-        opts[f"t:{t['id']}"] = (f"✅ {t['title']} · {parse_dt(t['deadline']):%a %I:%M %p}".replace(" 0", " "), t)
+        k = f"t:{t['id']}"
+        opts[k] = (f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(parse_dt(t['deadline']), today)}", t)
+        groups["t"].append(k)
         if parse_dt(t["deadline"]).date() <= today:
-            default.append(f"t:{t['id']}")
+            default_t.append(k)
     bc = board_cfg(state)
     if bc:
         try:
             for b in _board_range(*bc, today.isoformat(), BOARD_LOOKAHEAD + 1):
                 if not B.already_have(b, state["tasks"], date.fromisoformat(b["date"]) if b.get("date") else today):
-                    opts[f"b:{b['id']}"] = ("📅 " + _board_label(b, today), b)
+                    k = f"b:{b['id']}"
+                    opts[k] = (_board_chip(b, today), b)
+                    groups["b"].append(k)
+            groups["b"] = groups["b"][:10]
         except Exception as e:
             st.caption(f"(Couldn't read your board: {e})")
     zc = zotero_cfg(state)
     if zc:
         try:
             known_z = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
-            for p_ in [p_ for p_ in _zotero_list(*zc) if p_["key"] not in known_z][:8]:
-                opts[f"z:{p_['key']}"] = ("📄 " + Z.label(p_), p_)
+            for p_ in [p_ for p_ in _zotero_list(*zc) if p_["key"] not in known_z][:6]:
+                k = f"z:{p_['key']}"
+                lab = Z.label(p_)
+                opts[k] = ((lab[:52] + "…" if len(lab) > 53 else lab) + " · 45m", p_)
+                groups["z"].append(k)
         except Exception as e:
             st.caption(f"(Couldn't read Zotero: {e})")
     picked = []
-    if opts:
-        picked = st.multiselect("Pick from your list", list(opts), default=default, format_func=lambda k: opts[k][0],
-                                key=f"q_pick{fk}", placeholder="Your tasks, DECK 12 cards, papers…",
-                                help="✅ your tasks · 📅 DECK 12 (read-only; upcoming cards = an hour on them today) · "
-                                     "📄 Zotero papers (45 min)")
+    heads = {"t": "✅ Your tasks", "b": "📅 On your board (prep / work on it)", "z": "📄 Reading list"}
+    for g, keys in groups.items():
+        if keys:
+            picked += st.pills(heads[g], keys, selection_mode="multi", key=f"q_pick_{g}{fk}",
+                               default=default_t if g == "t" else None, format_func=lambda k: opts[k][0]) or []
     _q_restore(state)
     pending = st.session_state["q_pending"]
     c1, c2 = st.columns([1.15, 1])
@@ -2009,7 +2035,7 @@ def render_qualify_form(state: dict) -> None:
     # never grabs half-typed text — and Lock it in is part of the form, so half-typed text gets locked in too.
     with st.form(f"q_form{fk}", clear_on_submit=True, border=False, enter_to_submit=True):
         c1, c2, c3 = st.columns([0.8, 1.05, 0.3], vertical_alignment="bottom")
-        txt_ = c1.text_input("Add a task" if not opts else "Or add a task", key=f"q_new{fk}",
+        txt_ = c1.text_input("Add a task" if not opts else "Or add a new one", key=f"q_new{fk}",
                              placeholder="e.g. Write 300 words of methods — Enter to add")
         min_ = c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}",
                                     label_visibility="collapsed")
