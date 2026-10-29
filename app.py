@@ -415,6 +415,22 @@ def _hm_left(mins: int) -> str:
     return f"{h}h {m:02d}m" if h and m else f"{h}h" if h else f"{m}m"
 
 
+def rebalance_pit_checks(state: dict) -> bool:
+    """One-time: open, unstarted quick items (inbox, emails, calls, booking…) become 🔧 pit checks at honest times."""
+    if state["settings"].get("honest_v1"):
+        return False
+    state["settings"]["honest_v1"] = True
+    for t in state["tasks"]:
+        if t.get("status") != "open" or (t.get("focus_min") or 0) > 0 or V.guess_category(t["title"]) != "pit":
+            continue
+        cat, mins = V.honest(t["title"], "pit", t.get("minutes"), chosen=True)
+        if (cat, mins) != (t.get("category"), t.get("minutes")):
+            v = V.value(cat, mins)
+            t.update(category=cat, minutes=mins, difficulty=V.size_label(mins), reward=v["reward"],
+                     penalty=v["penalty"], xp=v["xp"])
+    return True
+
+
 def _start_timer(state: dict, t: dict, mins: int) -> None:
     """Start a focus timer on `t` with your saved break setting."""
     cfg = state["settings"]
@@ -660,7 +676,14 @@ def sync_from_notion(state: dict) -> tuple[list[tuple[str, str]], bool]:
 
 # ─────────────────────────── helpers ───────────────────────────
 def now() -> datetime:
-    return datetime.now(TZ)
+    """Local time. Tests can pin the clock to a time of day with DOD_TEST_CLOCK=HH:MM (today's date, real minutes
+    keep ticking) so results don't depend on whether they run before or after the 11 AM qualifying cutoff."""
+    real = datetime.now(TZ)
+    pin = os.getenv("DOD_TEST_CLOCK")
+    if pin:
+        h, m = (int(x) for x in pin.split(":"))
+        return real.replace(hour=h, minute=m)
+    return real
 
 
 def parse_dt(s: str) -> datetime:
@@ -779,8 +802,10 @@ def flash(msg: str, kind: str = "success", celebrate: bool = False, sound: str |
 
 def make_task(title, details, deadline: datetime, difficulty=None, consequence="", goal_id=None,
               source="manual", notion=None, category=None, minutes=None) -> dict:
+    chosen = bool(minutes)
     minutes = int(minutes or V.minutes_for_size(difficulty))
     category = category if category in V.CATEGORIES else V.guess_category(title)
+    category, minutes = V.honest(title, category, minutes, chosen=chosen)  # no inflated pit checks
     d = V.value(category, minutes)
     difficulty = V.size_label(minutes)
     t = {
@@ -1982,17 +2007,22 @@ def _q_rm(fk: int, n: int, state: dict | None = None) -> None:
         _q_keep(state)
 
 
-TIME_CHIPS = {"15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
+TIME_CHIPS = {"10m": 10, "15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
 
 
-def _q_put(txt: str, chip_min: int, state: dict | None) -> None:
-    """Queue a typed task with the chosen time (a time typed in the text, like '45m', wins). Same name = replaced."""
+def _q_put(txt: str, chip_min: int | None, state: dict | None) -> None:
+    """Queue a typed task with the chosen time (a time typed in the text, like '45m', wins; no chip = our honest
+    estimate, e.g. 10 min for inbox/email). Same name = replaced."""
     txt = txt.strip()
     p_ = Q.parse(txt, now())
     typed = re.search(r"\d+(?:\.\d+)?\s*(h|hr|hrs|hour|hours|m|min|mins|minutes)\b", txt, re.I)
     pend = st.session_state.setdefault("q_pending", [])
     pend[:] = [x for x in pend if Q.parse(x[0], now())["title"].lower() != p_["title"].lower()]
-    pend.append((txt, p_["minutes"] if typed else chip_min))
+    if typed or not chip_min:
+        mins = p_["minutes"]
+    else:
+        mins = V.honest(p_["title"], p_["category"], chip_min, chosen=True)[1]
+    pend.append((txt, mins))
     _q_keep(state)
 
 
@@ -2061,16 +2091,18 @@ def render_qualify_form(state: dict) -> None:
         c1, c2, c3 = st.columns([0.8, 1.05, 0.3], vertical_alignment="bottom")
         txt_ = c1.text_input("Add a task" if not opts else "Or add a new one", key=f"q_new{fk}",
                              placeholder="e.g. Write 300 words of methods — Enter to add")
-        min_ = c2.segmented_control("Time", list(TIME_CHIPS), default="30m", key=f"q_min{fk}",
-                                    label_visibility="collapsed")
+        min_ = c2.segmented_control("Time", list(TIME_CHIPS), default=None, key=f"q_min{fk}",
+                                    label_visibility="collapsed",
+                                    help="Leave it unpicked for an honest estimate (inbox/email = 10 min)")
         add_ = c3.form_submit_button("＋ Add", use_container_width=True, help="Or press Enter")
         go_ = st.form_submit_button("🚦 Lock it in", type="primary", use_container_width=True)
     go_ = go_ or go_top
     if (add_ or go_) and (txt_ or "").strip():
-        _q_put(txt_, TIME_CHIPS.get(min_ or "30m", 30), state)
+        _q_put(txt_, TIME_CHIPS.get(min_) if min_ else None, state)
         pending = st.session_state["q_pending"]
     if pending:
-        chips = [f"{Q.parse(t_, now())['title']} · {min_label(m_)}  ✕" for t_, m_ in pending]
+        chips = [("🔧 " if Q.parse(t_, now())["category"] == "pit" else "") + f"{Q.parse(t_, now())['title']} · "
+                 f"{min_label(m_)}  ✕" for t_, m_ in pending]
         queue_slot.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
                          key=f"q_queue{fk}_{len(pending)}", on_change=_q_rm, args=(fk, len(pending), state))
     if not go_:
@@ -2081,9 +2113,10 @@ def render_qualify_form(state: dict) -> None:
         p_ = Q.parse(ttl, now())
         p_["minutes"] = mins_
         parsed.append(p_)
-    minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked if k.startswith("t:"))
+    minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked
+                   if k.startswith("t:") and V.counts_for_qualifying(opts[k][1]))
                + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
-               + sum(p_["minutes"] for p_ in parsed))
+               + sum(p_["minutes"] for p_ in parsed if V.counts_for_qualifying(p_)))  # 🔧 pit checks don't count
     if dl <= now() + timedelta(minutes=5):  # late at night (or a time that's gone by): same time tomorrow
         dl += timedelta(days=1)
     if not parsed and not picked:
@@ -2091,8 +2124,9 @@ def render_qualify_form(state: dict) -> None:
         return
     if minutes < daily.min_mission_minutes(state) and not daily.peek_day(state, today).get("qualified"):
         # the 30-min floor is for qualifying; once the day's locked in, additions are bonus and any size goes
-        st.error(f"Too easy — {minutes} min. Today's mission needs at least {daily.min_mission_minutes(state)} "
-                 "minutes of honest work. Add something, or put a time on it (e.g. “45m”).")
+        st.error(f"Too easy — {minutes} min of real work. Today's mission needs at least "
+                 f"{daily.min_mission_minutes(state)}. 🔧 Pit checks (inbox, emails, calls…) don't count toward it. "
+                 "Add something meatier, or put a time on it (e.g. “45m”).")
         return
     late_dl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
     ids = []
@@ -3088,6 +3122,8 @@ if crash_msgs or rust_msg or _excused or st.session_state.pop("_needs_save", Fal
     save_state(state)
     if crash_msgs:
         st.session_state["sound"] = "fail"
+if rebalance_pit_checks(state):
+    save_state(state)
 start_from_link(state)
 remember_app_url(state)
 sync_alarms(state)

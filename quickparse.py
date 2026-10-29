@@ -86,8 +86,9 @@ def parse(text: str, now: datetime) -> dict:
     title = re.sub(r"\s+", " ", t).strip(" ,.-") or "Untitled task"
     title = title[0].upper() + title[1:]
     cat = V.guess_category(title)
-    mins = minutes or {"show": 60, "life": 30, "health": 60, "admin": 30, "deep": 45}[cat]
+    mins = minutes or {"show": 60, "life": 30, "health": 60, "pit": V.PIT_DEFAULT, "admin": 30, "deep": 45}[cat]
     mins = min(V.MINUTES, key=lambda x: abs(x - mins))  # snap to the honest-time buckets
+    cat, mins = V.honest(title, cat, mins, chosen=bool(minutes))  # pit checks: 10 min, inbox never > 10
     out = {"title": title, "minutes": mins, "due": due, "category": cat, "at": None, "when_given": when_given}
     if at_time:  # happens at that time → due when it's over
         out["at"], out["due"] = due, due + timedelta(minutes=mins)
@@ -115,5 +116,5 @@ def pick_next(tasks: list[dict], now: datetime, deep_hour: bool = False) -> dict
 
 
 def session_length(task: dict) -> int:
-    m = task.get("minutes") or 50
-    return min([25, 50, 60, 90], key=lambda x: abs(x - m))
+    """Timer length for a task = the task's own honest estimate (no rounding up to a 25-min block)."""
+    return max(5, min(240, int(task.get("minutes") or 25)))
