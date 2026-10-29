@@ -410,6 +410,21 @@ def remember_app_url(state: dict) -> None:
         save_state(state)
 
 
+def _hm_left(mins: int) -> str:
+    h, m = divmod(int(mins), 60)
+    return f"{h}h {m:02d}m" if h and m else f"{h}h" if h else f"{m}m"
+
+
+def _start_timer(state: dict, t: dict, mins: int) -> None:
+    """Start a focus timer on `t` with your saved break setting."""
+    cfg = state["settings"]
+    preset = PM.PRESETS.get(cfg.get("pomo", "off"), ("", None))[1]
+    work, brk = preset or ((cfg.get("pomo_work"), cfg.get("pomo_brk")) if cfg.get("pomo") == "custom" else (None, None))
+    state["timer"] = {"task_id": t["id"], "start": now().isoformat(), "planned": int(mins), "work": work, "brk": brk}
+    _mark_started(t)
+    save_state(state)
+
+
 def start_from_link(state: dict) -> None:
     """▶️ Start on a phone nudge opens ?go=<task id|new>&m=<min>: start that timer straight away, then tidy the URL."""
     go, m = st.query_params.get("go"), st.query_params.get("m")
@@ -2224,23 +2239,41 @@ def render_today(state: dict) -> None:
                     st.rerun()
             return
         m, done = stt["mission"], stt["mission_done"]
-        st.markdown(f"### 🏁 Today's mission · {len(done)}/{len(m)}")
-        st.progress(len(done) / len(m) if m else 0.0)
-        bits = [f"📅 day streak **{stt['day_streak']}**" + (" (+1 when you finish one today)" if not stt["done_today"] else " ✅")]
+        open_m = [t for t in m if t["status"] == "open"]
+        left_min = sum(t.get("minutes") or 30 for t in open_m)
+        segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
+                       "</i>" for t in m)
+        pills = [f"🔥 Day streak <b>{stt['day_streak']}</b>" + ("" if stt["done_today"] else " · +1 on your first finish")]
         if stt["start_at"]:
-            bits.append(f"you said you'd start at **{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}**")
-        st.caption(" · ".join(bits))
+            pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
+        pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
+        st.markdown(
+            f"<div class='dod-mh'><div class='dod-mt'>🏁 Today's mission</div><div class='dod-mb'>{len(done)}/{len(m)}"
+            + (f" · {_hm_left(left_min)} to go" if open_m else " · done") + "</div></div>"
+            f"<div class='dod-seg'>{segs}</div>"
+            "<div class='dod-pills'>" + "".join(f"<span>{x}</span>" for x in pills) + "</div>", unsafe_allow_html=True)
+        tm = state.get("timer")
         for t in m:
             if t["status"] in ("done", "redeemed"):
-                st.markdown(f"✅ ~~{t['title']}~~")
+                st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>{html.escape(t['title'])}</s>"
+                            f" <span class='m'>+{t.get('reward', 0)} earned</span></div></div>", unsafe_allow_html=True)
             elif t["status"] == "open":
                 dl = parse_dt(t["deadline"])
                 fm_ = t.get("focus_min") or 0
-                with st.expander(f"📸 {t['title']} · {fmt_left(dl - n_)} left"
-                                 + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else "")):
+                c1, c2 = st.container(key=f"mrow_{t['id']}").columns([6, 1], vertical_alignment="top")
+                with c1.expander(f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())} · "
+                                 f"+{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else "")):
                     render_proof_form(state, t, "open", scope="today_")
+                running = bool(tm) and tm.get("task_id") == t["id"]
+                if c2.button("⏱️" if running else "▶", key=f"mgo_{t['id']}", use_container_width=True,
+                             disabled=bool(tm), help="Running" if running else "Start a focus timer on this"):
+                    mins = Q.session_length(t)
+                    _start_timer(state, t, mins)
+                    flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
+                    st.rerun()
             else:
-                st.markdown(f"💀 {t['title']}")
+                st.markdown(f"<div class='dod-mrow bad'><span class='dod-dot'></span><div>{html.escape(t['title'])}"
+                            f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
         if m and len(done) == len(m):
             st.success("Mission complete. Anything else today is pure bonus. 🏆")
         elif not stt["done_today"] and n_.hour >= 18:
@@ -2856,6 +2889,27 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+.dod-mh{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:.1rem 0 .5rem}
+.dod-mt{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.55rem;line-height:1.1}
+.dod-mb{color:var(--muted);font-size:.9rem;white-space:nowrap}
+.dod-seg{display:flex;gap:5px;margin:0 0 .7rem}
+.dod-seg i{flex:1;height:7px;border-radius:4px;background:#262b36;transition:background .4s}
+.dod-seg i.ok{background:var(--y)} .dod-seg i.bad{background:var(--r)}
+.dod-pills{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 .8rem}
+.dod-pills span{font-size:.8rem;color:var(--muted);background:#141821;border:1px solid var(--line);border-radius:999px;
+  padding:3px 10px}
+.dod-pills b{color:#ece8df;font-weight:600}
+.dod-mrow{display:flex;gap:10px;align-items:center;padding:9px 14px;margin:0 0 .5rem;border:1px solid var(--line);
+  border-radius:12px;background:#141821}
+.dod-mrow .m{color:var(--muted);font-size:.85rem;margin-left:6px}
+.dod-mrow.ok .dod-dot{background:var(--t)} .dod-mrow.ok s{color:var(--muted)}
+.dod-mrow.bad .dod-dot{background:var(--r)} .dod-mrow.bad{border-color:#4a1f22}
+[class*="st-key-mrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem}
+[class*="st-key-mrow_"] [data-testid="stColumn"]{min-width:0!important}
+[class*="st-key-mrow_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
+[class*="st-key-mgo_"] button{color:var(--y);border-color:var(--y)!important;font-size:1.05rem}
+[class*="st-key-mgo_"] button:disabled{color:var(--muted);border-color:var(--line)!important}
+@media (max-width:640px){.dod-mt{font-size:1.2rem}.dod-mb{font-size:.8rem}}
 [class*="st-key-dlh_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem}
 [class*="st-key-dlh_"] [data-testid="stColumn"]{min-width:0!important}
 [class*="st-key-dlh_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
