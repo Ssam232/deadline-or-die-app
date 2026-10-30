@@ -2912,6 +2912,20 @@ def _timer_controls(state: dict) -> None:
         tm["skipped"] = tm.get("skipped", 0.0) + left * 60
         save_state(state)
         st.rerun()
+    wd_now = PM.work_done(eff, work, brk)
+    near_end = tm["planned"] - wd_now <= FLOW_WINDOW
+    if not paused and ph != "break" and near_end and tm.get("ext", 0) < FLOW_MAX_EXT:
+        if st.button(f"🌊 In the zone? +{FLOW_STEP} min", use_container_width=True, key="tm_ext",
+                     help=f"Keep going while it flows. Extra minutes pay a small flow bonus (+1 per {FLOW_COIN_PER} "
+                          f"min) and the whole thing logs as one block, so a 50 + 15 counts as your 1-hour block."):
+            tm["planned"] += FLOW_STEP
+            tm["ext"] = tm.get("ext", 0) + FLOW_STEP
+            if ph == "done":  # finished already: the extension starts from now, not from the old finish line
+                tm["skipped"] = tm.get("skipped", 0.0) - max(0.0, (eff - PM.wall_minutes(
+                    tm["planned"] - FLOW_STEP, work, brk)) * 60)
+            save_state(state)
+            st.toast(f"Flow mode: +{FLOW_STEP} min. Ride it.", icon="🌊")
+            st.rerun()
     c3, c4 = st.columns([3, 1])
     if c3.button("⏹️ Stop & log", type="secondary" if paused else "primary", use_container_width=True, key="tm_stop"):
         mins = min(PM.work_done(eff, work, brk), tm["planned"] + 15)
@@ -2927,6 +2941,25 @@ def _timer_controls(state: dict) -> None:
         st.rerun()
 
 
+TRACK_SHAPES = [  # all start/finish at (150,16) heading right, clockwise, leaving the middle clear for the clock
+    ("Bow River Oval", "M150,16 H228 A60,60 0 0 1 228,136 H72 A60,60 0 0 1 72,16 Z"),
+    ("Foothills Chicane", "M150,16 H240 Q276,16 276,52 V100 Q276,136 240,136 H185 C175,136 172,124 162,124 H138 "
+                          "C128,124 125,136 115,136 H60 Q24,136 24,100 V52 Q24,16 60,16 Z"),
+    ("Rockies Ring", "M150,16 H220 C262,16 284,40 276,72 C270,98 250,104 250,120 C250,134 236,138 222,138 H70 "
+                     "C40,138 22,118 26,92 L34,46 C38,26 52,16 76,16 Z"),
+    ("Kananaskis Esses", "M150,16 C170,16 176,28 196,28 C216,28 222,16 242,16 Q280,16 280,56 V100 Q280,138 242,138 "
+                         "H58 Q20,138 20,100 V56 Q20,16 58,16 Z"),
+    ("Glenmore Bowl", "M150,16 C230,16 286,40 286,78 C286,116 230,138 150,138 C70,138 14,116 14,78 C14,40 70,16 150,16 Z"),
+    ("Nose Hill Hairpin", "M150,16 H236 Q278,16 278,58 Q278,92 248,92 Q230,92 230,112 Q230,138 204,138 H66 "
+                          "Q22,138 22,96 V58 Q22,16 64,16 Z"),
+]
+
+
+def track_for(tm: dict) -> tuple[str, str]:
+    """Same session → same track (stable across refreshes); new session → probably a new one."""
+    return TRACK_SHAPES[int(hashlib.md5(tm["start"].encode()).hexdigest(), 16) % len(TRACK_SHAPES)]
+
+
 def _timer_ring(state: dict, tm: dict) -> None:
     """Progress ring + countdown. Pure client-side clock; only our own numbers go into the markup."""
     work, brk, T = tm.get("work") or 0, tm.get("brk") or 0, tm["planned"]
@@ -2940,6 +2973,8 @@ def _timer_ring(state: dict, tm: dict) -> None:
     _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
     blocks = math.ceil(T / work) if work and brk else 1
     ticks = "".join(f"{k * work / T:.4f}," for k in range(1, blocks)) if blocks > 1 else ""
+    track_name, track_d = track_for(tm)
+    ext = int(tm.get("ext", 0))
     _embed(f"""
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@700&display=swap" rel="stylesheet">
 <style>
@@ -2959,11 +2994,11 @@ svg{{width:100%;max-width:330px;height:auto;display:block}}
 <svg viewBox="0 0 300 152" aria-label="Focus session progress">
  <defs><pattern id="chk" width="4" height="4" patternUnits="userSpaceOnUse">
    <rect width="2" height="2" fill="#ece8df"/><rect x="2" y="2" width="2" height="2" fill="#ece8df"/></pattern></defs>
- <path id="track" d="M150,16 H228 A60,60 0 0 1 228,136 H72 A60,60 0 0 1 72,16 Z" fill="none" stroke="#262b36"
+ <path id="track" d="{track_d}" fill="none" stroke="#262b36"
    stroke-width="15" stroke-linejoin="round"/>
- <path d="M150,16 H228 A60,60 0 0 1 228,136 H72 A60,60 0 0 1 72,16 Z" fill="none" stroke="#323846"
+ <path d="{track_d}" fill="none" stroke="#323846"
    stroke-width="1" stroke-dasharray="5 7"/>
- <path id="trail" d="M150,16 H228 A60,60 0 0 1 228,136 H72 A60,60 0 0 1 72,16 Z" fill="none" stroke="{acc}"
+ <path id="trail" d="{track_d}" fill="none" stroke="{acc}"
    stroke-width="4" stroke-linecap="round" stroke-dasharray="0 9999" opacity=".9"/>
  <g id="ticks"></g>
  <rect x="147" y="8" width="6" height="16" fill="url(#chk)"/><rect x="147" y="8" width="6" height="16" fill="none"
@@ -2972,6 +3007,7 @@ svg{{width:100%;max-width:330px;height:auto;display:block}}
  <rect x="128" y="33" width="44" height="15" rx="3" fill="none" stroke="#3a4050" stroke-dasharray="3 2"/>
  <text x="124" y="44" text-anchor="end" font-size="8" fill="#5b6070" font-weight="700">PIT</text>
  <g id="crew"><circle cx="134" cy="40.5" r="1.6" fill="#2ec4b6"/><circle cx="166" cy="40.5" r="1.6" fill="#2ec4b6"/></g>
+ <text x="3" y="8" font-size="7.5" fill="#5b6070" letter-spacing=".08em">{track_name.upper()}</text>
  <text id="t" x="150" y="89" text-anchor="middle"></text>
  <text id="p" x="150" y="106" text-anchor="middle"></text>
  <g id="car"><circle id="halo" r="11" fill="#f5c518" opacity="0"/>
@@ -2984,7 +3020,7 @@ svg{{width:100%;max-width:330px;height:auto;display:block}}
 </svg><div id="s"></div></div>
 <script>
 const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},LIM={limit},ACC='{acc}';
-const TICKS=[{ticks}];
+const TICKS=[{ticks}],EXT={ext};
 const tr=document.getElementById('track'),L=tr.getTotalLength(),car=document.getElementById('car');
 const body=document.getElementById('body'),trail=document.getElementById('trail'),w=document.getElementById('w');
 TICKS.forEach(f=>{{const a=tr.getPointAtLength(L*f),b=tr.getPointAtLength(Math.min(L,L*f+.5));
@@ -3024,12 +3060,28 @@ function frame(){{
   else if(pit){{t.textContent=mmss(left);t.style.fill='#2ec4b6';body.style.fill=ACC;trail.style.stroke=ACC;
     p.textContent='🔧 Pit stop';s.textContent='Tyres, water, stretch. No phone in the pit lane.';}}
   else{{t.textContent=mmss(left);t.style.fill=ACC;body.style.fill=ACC;trail.style.stroke=ACC;
-    p.textContent=stints>1?('Stint '+blk+' of '+stints):'Green flag';
+    p.textContent=EXT>0?('🌊 Flow · +'+EXT+' min'):stints>1?('Stint '+blk+' of '+stints):'Green flag';
     s.textContent=Math.round(wd)+' of '+T+' min · phone face-down';}}
   const key=PA?'pause':ph;if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;}}
  requestAnimationFrame(frame);}}
 frame();
 </script>""", height=196)  # our own static markup only — no user content goes in here
+
+
+FLOW_STEP = 15          # minutes per "keep going"
+FLOW_MAX_EXT = 60       # at most an extra hour per session
+FLOW_WINDOW = 10        # the button shows in the last 10 min of work, or once the session is done
+FLOW_COIN_PER = 3       # +1 coin per 3 flow minutes actually worked (15 min → +5)
+FLOW_BONUS_CAP = 20
+
+
+def flow_bonus(tm: dict, mins: float) -> tuple[int, float]:
+    """(coins, flow minutes): minutes worked past the ORIGINAL plan, only when you chose to extend."""
+    ext = tm.get("ext", 0)
+    if not ext:
+        return 0, 0.0
+    flow = max(0.0, min(mins, tm["planned"]) - (tm["planned"] - ext))
+    return min(FLOW_BONUS_CAP, int(flow // FLOW_COIN_PER)), flow
 
 
 def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -> None:
@@ -3078,6 +3130,12 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
     if fm_ >= need_ and t.get("status") == "open":
         drop_msg = (drop_msg + "\n\n" if drop_msg else "") + (
             f"✅ {fm_:.0f} min logged on *{t['title']}* — that counts as proof. Open it and submit to collect.")
+    fb, fmin = flow_bonus(tm, mins)
+    if fb:
+        bank(state, fb, f"🌊 Flow bonus ({int(fmin)} extra min)")
+        state["focus_log"][-1]["flow"] = round(fmin, 1)
+        save_state(state)
+        drop_msg = (drop_msg + "\n\n" if drop_msg else "") + f"🌊 **Flow bonus +{fb}** for {int(fmin)} extra minutes."
     flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
           + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),
           sound=snd, celebrate=bool(drop_msg))
