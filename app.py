@@ -289,6 +289,17 @@ def _workspace(token: str, parent: str) -> dict:
     return ensure_workspace(Notion(token), parent)
 
 
+@st.cache_data(ttl=2400, show_spinner=False)
+def _proof_url(token: str, page_id: str) -> str | None:
+    """The proof file attached to a task's Notion page (Notion's file links last about an hour)."""
+    try:
+        pg = Notion(token).req("GET", f"/pages/{page_id}")
+        f = ((pg.get("properties", {}).get("Proof file") or {}).get("files") or [None])[0]
+        return (f.get("file") or f.get("external") or {}).get("url") if f else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _board_map(token: str, db: str) -> dict:
     return B.detect(Notion(token), db)
@@ -1993,18 +2004,22 @@ def _q_keep(state: dict | None) -> None:
         save_state(state)
 
 
+def _qi(x) -> list:
+    """A queued task as [text, minutes, category, set_by_you]. Old drafts were (text, minutes)."""
+    x = list(x)
+    if len(x) < 3:
+        x.append(Q.parse(x[0], now())["category"])
+    if len(x) < 4:
+        x.append(False)
+    return x
+
+
 def _q_restore(state: dict) -> None:
     if "q_pending" not in st.session_state:
         d = state.get("draft") or {}
-        st.session_state["q_pending"] = ([tuple(x) for x in d.get("items", [])]
+        st.session_state["q_pending"] = ([_qi(x) for x in d.get("items", [])]
                                          if d.get("date") == now().date().isoformat() else [])
-
-
-def _q_rm(fk: int, n: int, state: dict | None = None) -> None:
-    i = st.session_state.get(f"q_queue{fk}_{n}")
-    if i is not None and i < len(st.session_state.get("q_pending", [])):
-        st.session_state["q_pending"].pop(i)
-        _q_keep(state)
+    st.session_state["q_pending"] = [_qi(x) for x in st.session_state["q_pending"]]
 
 
 TIME_CHIPS = {"10m": 10, "15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
@@ -2018,12 +2033,58 @@ def _q_put(txt: str, chip_min: int | None, state: dict | None) -> None:
     typed = re.search(r"\d+(?:\.\d+)?\s*(h|hr|hrs|hour|hours|m|min|mins|minutes)\b", txt, re.I)
     pend = st.session_state.setdefault("q_pending", [])
     pend[:] = [x for x in pend if Q.parse(x[0], now())["title"].lower() != p_["title"].lower()]
-    if typed or not chip_min:
-        mins = p_["minutes"]
-    else:
-        mins = V.honest(p_["title"], p_["category"], chip_min, chosen=True)[1]
-    pend.append((txt, mins))
+    cat, mins = p_["category"], p_["minutes"]
+    if chip_min and not typed:
+        cat, mins = V.honest(p_["title"], p_["category"], chip_min, chosen=True)
+    pend.append([txt, mins, cat, bool(typed or chip_min)])  # no time given → our guess, shown as a suggestion
     _q_keep(state)
+
+
+def _q_edit(i: int, key: str, state: dict | None) -> None:
+    """Change a queued task's type or time from its suggestion chip."""
+    pend = st.session_state.get("q_pending") or []
+    if i >= len(pend):
+        return
+    it = _qi(pend[i])
+    cat = st.session_state.get(f"{key}_c") or it[2]
+    mins = TIME_CHIPS.get(st.session_state.get(f"{key}_m") or "", it[1])
+    it[2], it[1] = V.honest(Q.parse(it[0], now())["title"], cat, mins, chosen=True)
+    it[3] = True
+    pend[i] = it
+    _q_keep(state)
+
+
+def _q_drop(i: int, state: dict | None) -> None:
+    pend = st.session_state.get("q_pending") or []
+    if i < len(pend):
+        pend.pop(i)
+        _q_keep(state)
+
+
+def _render_queue(where, pending: list, fk: int, state: dict) -> None:
+    """Queued tasks: title · a chip with our guess (type + time) you can tap to change · ✕."""
+    if not pending:
+        return
+    with where:
+        st.markdown("<div style='font-size:.85rem;color:#8b909c;margin:2px 0 4px'>Queued · <b>?</b> = our guess, "
+                    "tap to change the type or time</div>", unsafe_allow_html=True)
+        for i, x in enumerate(pending):
+            txt, mins, cat, sure = _qi(x)
+            title = Q.parse(txt, now())["title"]
+            key = f"q_it{fk}_{i}_{hashlib.md5(txt.encode()).hexdigest()[:6]}"
+            icon = V.CATEGORIES.get(cat, {}).get("label", "✅ x").split(" ")[0]
+            short = {"pit": "Pit", "admin": "Admin", "deep": "Deep", "health": "Health", "life": "Life",
+                     "show": "Show"}.get(cat, cat)
+            c1, c2, c3 = st.container(key=f"qrow_{key}").columns([2, 1.6, 0.4], vertical_alignment="center")
+            c1.markdown(f"**{html.escape(title)}**")
+            with c2.popover(f"{icon} {short} · {mins}m" + ("" if sure else " ?"), use_container_width=True):
+                st.pills("Type", list(V.CATEGORIES), default=cat, format_func=lambda k: V.CATEGORIES[k]["label"],
+                         key=f"{key}_c", on_change=_q_edit, args=(i, key, state))
+                cur = next((k for k, v in TIME_CHIPS.items() if v == mins), None)
+                st.pills("Time", list(TIME_CHIPS), default=cur, key=f"{key}_m", on_change=_q_edit,
+                         args=(i, key, state))
+                st.caption("🔧 Pit checks cap at 15 min (inbox/email at 10) and don't count toward qualifying.")
+            c3.button("✕", key=f"{key}_x", on_click=_q_drop, args=(i, state), help="Remove")
 
 
 @st.fragment
@@ -2080,7 +2141,7 @@ def render_qualify_form(state: dict) -> None:
     if picked or pending:  # selected ≠ locked in: put the button right here, not below the fold
         sel_min = (sum((opts[k][1].get("minutes") or 60) for k in picked if k.startswith("t:"))
                    + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
-                   + sum(m_ for _, m_ in pending))
+                   + sum(_qi(x)[1] for x in pending))
         verb = "Add" if daily.peek_day(state, today).get("qualified") else "🚦 Lock in"
         go_top = st.button(f"{verb} {n_sel} · {min_label(sel_min)}", type="primary", use_container_width=True,
                            key=f"q_top{fk}", help="Selected isn't locked in until you tap this.")
@@ -2100,18 +2161,15 @@ def render_qualify_form(state: dict) -> None:
     if (add_ or go_) and (txt_ or "").strip():
         _q_put(txt_, TIME_CHIPS.get(min_) if min_ else None, state)
         pending = st.session_state["q_pending"]
-    if pending:
-        chips = [("🔧 " if Q.parse(t_, now())["category"] == "pit" else "") + f"{Q.parse(t_, now())['title']} · "
-                 f"{min_label(m_)}  ✕" for t_, m_ in pending]
-        queue_slot.pills("Queued · tap one to remove", list(range(len(pending))), format_func=lambda i: chips[i],
-                         key=f"q_queue{fk}_{len(pending)}", on_change=_q_rm, args=(fk, len(pending), state))
+    _render_queue(queue_slot, pending, fk, state)
     if not go_:
         return
     dl = datetime.combine(today, due_t, TZ)
     parsed = []
-    for ttl, mins_ in pending:
+    for x in pending:
+        ttl, mins_, cat_, _ = _qi(x)
         p_ = Q.parse(ttl, now())
-        p_["minutes"] = mins_
+        p_["minutes"], p_["category"] = mins_, cat_
         parsed.append(p_)
     minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked
                    if k.startswith("t:") and V.counts_for_qualifying(opts[k][1]))
@@ -2315,6 +2373,93 @@ def render_today(state: dict) -> None:
                        "Do the smallest one now.")
         with st.expander("➕ Add to today's mission"):
             render_qualify_form(state)
+
+
+IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+SCRAP_PERIODS = ["This week", "Last week", "This month", "All"]
+
+
+def _scrap_tasks(state: dict, period: str) -> list[dict]:
+    today = now().date()
+    wk = today - timedelta(days=today.weekday())
+    lo, hi = {"This week": (wk, today), "Last week": (wk - timedelta(days=7), wk - timedelta(days=1)),
+              "This month": (today.replace(day=1), today)}.get(period, (date.min, date.max))
+    out = []
+    for t in state["tasks"]:
+        if t.get("status") in ("done", "redeemed") and t.get("completed_at"):
+            d = parse_dt(t["completed_at"]).date()
+            if lo <= d <= hi:
+                out.append(t)
+    return sorted(out, key=lambda t: t["completed_at"], reverse=True)
+
+
+def _recap_text(ts: list[dict], period: str) -> str:
+    by = {}
+    for t in ts:
+        by.setdefault(t.get("category") or "admin", []).append(t)
+    lines = [f"{period}: {len(ts)} things done · {sum(t.get('minutes') or 0 for t in ts) / 60:.1f} h"]
+    for cat in V.CATEGORIES:
+        if by.get(cat):
+            lines.append(f"\n{V.CATEGORIES[cat]['label']}")
+            for t in sorted(by[cat], key=lambda t: t["completed_at"]):
+                note = re.sub(r"^\s*(⏱️)?\s*[\d.]+ min on the focus timer\.\s*", "", t.get("proof_note") or "")
+                note = note.strip().split("\n")[0][:90]
+                lines.append(f"• {t['title']} ({parse_dt(t['completed_at']):%a}, {min_label(t.get('minutes') or 0)})"
+                             + (f" — {note}" if note and not note.lower().startswith(t['title'].lower()) else ""))
+    return "\n".join(lines)
+
+
+def render_scrapbook(state: dict) -> None:
+    """📸 Everything you've proven, by week: the photo, what you wrote, the link, the time. Plus a recap to paste."""
+    per = st.segmented_control("Period", SCRAP_PERIODS, default="This week", key="sb_per",
+                               label_visibility="collapsed") or "This week"
+    ts = _scrap_tasks(state, per)
+    if not ts:
+        st.caption("Nothing finished in this period yet. Every proof you submit lands here.")
+        return
+    mins = sum(t.get("minutes") or 0 for t in ts)
+    timed = sum(t.get("focus_min") or 0 for t in ts)
+    st.markdown(f"<div class='dod-pills'><span>✅ <b>{len(ts)}</b> done</span><span>🕒 <b>{mins / 60:.1f} h</b> of work"
+                f"</span><span>⏱️ <b>{timed / 60:.1f} h</b> on the timer</span><span>🪙 <b>+{sum(t.get('reward', 0) for t in ts)}"
+                f"</b></span></div>", unsafe_allow_html=True)
+    with st.expander("📋 Recap to paste (supervisor meeting, journal, thesis log)"):
+        st.code(_recap_text(ts, per), language=None)
+    cfg = notion_cfg()
+    cols = st.columns(3)
+    fetched = 0
+    for i, t in enumerate(ts[:36]):
+        with cols[i % 3].container(border=True, key=f"scrap_{t['id']}"):
+            img = None
+            pf = t.get("proof_file") or ""
+            if pf.lower().endswith(IMG_EXT) and Path(pf).exists():
+                img = pf
+            elif pf.lower().endswith(IMG_EXT) and cfg and t.get("sync_page") and fetched < 12:
+                fetched += 1
+                img = _proof_url(cfg[0], t["sync_page"])
+            if img:
+                try:
+                    st.image(img, width="stretch")
+                except Exception:  # noqa: BLE001
+                    img = None
+            if not img:
+                icon = V.CATEGORIES.get(t.get("category") or "", {}).get("label", "✅ ").split(" ")[0]
+                st.markdown(f"<div class='dod-scrap-tile'>{icon}</div>", unsafe_allow_html=True)
+            d = parse_dt(t["completed_at"])
+            badges = []
+            if t.get("proof_timer") or (t.get("focus_min") or 0) >= 1:
+                badges.append(f"⏱️ {int(t.get('proof_timer') or t.get('focus_min'))}m")
+            if t.get("status") == "redeemed":
+                badges.append("🩹 late")
+            st.markdown(f"**{html.escape(t['title'])}**  \n<span class='m' style='color:#8b909c;font-size:.85rem'>"
+                        f"{d:%a %b} {d.day} · {min_label(t.get('minutes') or 0)} · +{t.get('reward', 0)}"
+                        + (" · " + " · ".join(badges) if badges else "") + "</span>", unsafe_allow_html=True)
+            note = re.sub(r"^\s*(⏱️)?\s*[\d.]+ min on the focus timer\.\s*", "", t.get("proof_note") or "").strip()
+            if note:
+                st.caption(note[:180] + ("…" if len(note) > 180 else ""))
+            if t.get("proof_link"):
+                st.markdown(f"[↗ Open the proof]({t['proof_link']})")
+    if len(ts) > 36:
+        st.caption(f"…and {len(ts) - 36} more. Narrow the period to see them.")
 
 
 def focus_today(state: dict) -> int:
@@ -2923,6 +3068,9 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+[class*="st-key-scrap_"] img{max-height:210px;object-fit:cover;width:100%;border-radius:10px}
+.dod-scrap-tile{height:96px;border-radius:10px;background:linear-gradient(135deg,#1b1f27,#141821);display:flex;
+  align-items:center;justify-content:center;font-size:2.4rem;margin-bottom:.4rem;border:1px solid var(--line)}
 .dod-mh{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:.1rem 0 .5rem}
 .dod-mt{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.55rem;line-height:1.1}
 .dod-mb{color:var(--muted);font-size:.9rem;white-space:nowrap}
@@ -2941,6 +3089,11 @@ CSS = """<style>
 [class*="st-key-mrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem}
 [class*="st-key-mrow_"] [data-testid="stColumn"]{min-width:0!important}
 [class*="st-key-mrow_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
+[class*="st-key-qrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
+[class*="st-key-qrow_"] [data-testid="stColumn"]{min-width:0!important}
+[class*="st-key-qrow_"] [data-testid="stColumn"]:first-child p{margin:0;overflow:hidden;text-overflow:ellipsis}
+[class*="st-key-qrow_"] [data-testid="stColumn"]:last-child{flex:0 0 2.6rem!important;width:2.6rem!important}
+[class*="st-key-qrow_"] [data-testid="stColumn"]:nth-child(2){flex:0 0 8.4rem!important;width:8.4rem!important}
 [class*="st-key-mgo_"] button{color:var(--y);border-color:var(--y)!important;font-size:1.05rem}
 [class*="st-key-mgo_"] button:disabled{color:var(--muted);border-color:var(--line)!important}
 @media (max-width:640px){.dod-mt{font-size:1.2rem}.dod-mb{font-size:.8rem}}
@@ -3386,6 +3539,11 @@ def _hlabel(h: int) -> str:
 
 with tab_stats:
   if tab_stats.open is not False:
+    stats_view = st.segmented_control("Stats view", ["📊 Numbers", "📸 Scrapbook"], default="📊 Numbers",
+                                      key="stats_view", label_visibility="collapsed") or "📊 Numbers"
+    if stats_view == "📸 Scrapbook":
+        render_scrapbook(state)
+  if tab_stats.open is not False and stats_view != "📸 Scrapbook":
     import altair as alt
     full = I.history(state, now().date() + timedelta(days=1), TZ)  # last 28 days, today included
     k = st.columns(4)
