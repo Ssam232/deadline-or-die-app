@@ -145,3 +145,22 @@ def fmt_hours(hours: list[int]) -> str:
     def f(h):
         return datetime(2000, 1, 1, h).strftime("%I %p").lstrip("0")
     return ", ".join(f"{f(h)}–{f((h + 1) % 24)}" for h in hours) or "—"
+
+
+def focus_grid(save: dict, lo: date, hi: date, tz) -> dict:
+    """Timer minutes between lo and hi (inclusive) by date and by (date, hour). Timer sessions only."""
+    by_day: dict[date, float] = defaultdict(float)
+    by_dh: dict[tuple[date, int], float] = defaultdict(float)
+    for x in save.get("focus_log", []):
+        s = _dt(x.get("start"), tz)
+        if not s:
+            continue
+        t, left = s, float(x.get("min", 0))
+        while left > 0.01:
+            chunk = min(left, 60 - t.minute - t.second / 60)
+            if lo <= t.date() <= hi:
+                by_day[t.date()] += chunk
+                by_dh[(t.date(), t.hour)] += chunk
+            t = (t + timedelta(minutes=chunk)).replace(second=0, microsecond=0)
+            left -= chunk
+    return {"day": dict(by_day), "dh": dict(by_dh)}

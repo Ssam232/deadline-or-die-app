@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time as dtime, timedelta
 
+import shield as SH
+
 DAILY_DEFAULTS = {
     "qualify_by": 11,          # hour (local) the mission must be locked in by
     "qualify_penalty": 20,
@@ -187,20 +189,27 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
                 save["day_streak"] = save.get("day_streak", 0) + 1
                 save["best_day_streak"] = max(save.get("best_day_streak", 0), save["day_streak"])
                 e["settled"] = "ok"
+                if SH.earn_shield(save):
+                    msgs.append(f"🛡️ {save['day_streak']}-day streak → you earned a **streak shield** "
+                                f"({save['shields']}/{SH.SHIELD_MAX}). It saves the streak from one zero day.")
             elif charged >= MAX_CHARGED_ZERO_DAYS:
                 e["settled"] = "forgiven"
                 forgiven += 1
             else:
                 charged += 1
-                lost = save.get("day_streak", 0)
-                save["day_streak"] = 0
+                shielded = SH.use_shield(save)
+                lost = 0 if shielded else save.get("day_streak", 0)
+                if not shielded:
+                    save["day_streak"] = 0
                 bank(save, -c["zero_day_penalty"], f"💀 Zero day: {d:%a %b %d}")
                 save["car"]["condition"] = max(0, save["car"]["condition"] - c["zero_day_damage"])
                 save["rival_heat"] = save.get("rival_heat", 0) + 1
                 e["settled"] = "zero"
                 msgs.append(f"### 💀 ZERO DAY — {d:%A %b %d}\nNothing finished. −{c['zero_day_penalty']} coins, "
                             f"−{c['zero_day_damage']}% car, rivals faster."
-                            + (f" Your **{lost}-day streak is dead.**" if lost else ""))
+                            + (f" Your **{lost}-day streak is dead.**" if lost else "")
+                            + (f" 🛡️ A **streak shield** saved your {save.get('day_streak', 0)}-day streak "
+                               f"({save.get('shields', 0)} left)." if shielded else ""))
         d += timedelta(days=1)
     if forgiven:
         msgs.append(f"👋 Welcome back. {forgiven} more empty day(s) were forgiven — the comeback starts with "

@@ -345,6 +345,12 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             elif not stt["qualified"]:
                 body += f"\n\n🚦 Qualifying closes {stt['deadline']:%I:%M %p} — lock in today's mission."
             body += f"\n📅 Day streak: {stt['day_streak']}"
+            import shield as SH
+            _off = SH.comeback_offer(save, now)
+            if _off:
+                body += f"\n🔥 Comeback day: your first finish wins back +{_off} of yesterday."
+            if SH.held_total(save):
+                body += f"\n🛡️ {SH.held_total(save)} held — finish one task and it's cancelled."
             body += "\n⏱️ Focus challenges can drop any time today. Keep your phone close."
             for g in save.get("goals", []):
                 if not g.get("event_kind") or g.get("claimed"):

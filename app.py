@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 from datetime import date, datetime, time as dtime, timedelta
+from collections import defaultdict
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -75,6 +76,7 @@ import locks as LK
 import pomo as PM
 import prayers as PR
 import alarms as AL
+import shield as SH
 import tracks as TR
 import journal as J
 import nudges as NU
@@ -756,6 +758,18 @@ def xp_for_level(lvl: int) -> int:
 
 
 def bank(state: dict, delta: int, reason: str) -> None:
+    if delta < 0 and SH.is_penalty(reason):  # 🛡️ damage limiter: over the 24 h cap → held, not gone
+        want = -int(delta)
+        charged = SH.absorb(state, want, reason, now())
+        if charged < want:
+            note = f"🛡️ Damage capped: {want - charged} held from {reason[:48]}. Finish one task in {SH.HOLD_HOURS} h and it's cancelled."
+            try:
+                st.session_state.setdefault("flash", []).append(("info", note))
+            except Exception:  # noqa: BLE001
+                pass
+        delta = -charged
+        if not charged:
+            return
     state["coins"] += int(delta)
     state["ledger"].insert(0, {"ts": now().isoformat(), "delta": int(delta), "reason": reason})
     del state["ledger"][300:]
@@ -1270,6 +1284,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     if mode == "open":
         reward, why = compute_reward(state, t, at)
         bank(state, reward, f"🏁 Done: {t['title']}")
+        shield_msgs = SH.on_finish(state, at, reward, bank)
         g_ = t.pop("_guard", 1.0)
         xp_gain = max(1, round(t["xp"] * (min(1.0, g_) if g_ < 1.5 else 2)))
         state["xp"] += xp_gain
@@ -1285,7 +1300,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
             mine = [x for x in state["tasks"] if x.get("goal_id") == t.get("goal_id")]
             msg += f"\n\n🎯 One lap closer to **{g}** ({sum(x['status'] == 'done' for x in mine)}/{len(mine)})."
         crate = open_crate(state, t)
-        msg += f"\n\n{crate}"
+        msg += f"\n\n{crate}" + "".join(f"\n\n{m_}" for m_ in shield_msgs)
         claims = state.setdefault("event_claims", [])
         for e in EV.active(at):
             if e["type"] == "bounty" and t.get("category") == "deep" and e["id"] not in claims:
@@ -1299,6 +1314,8 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     else:
         refund = t["penalty"] // 2
         bank(state, refund, f"🩹 Redeemed: {t['title']}")
+        for m_ in SH.on_finish(state, at, refund, bank):
+            st.session_state.setdefault("flash", []).append(("success", m_))
         state["xp"] += t["xp"] // 2
         t["status"], t["earned"] = "redeemed", refund
         for p in state["penalty_box"]:
@@ -2322,6 +2339,7 @@ def render_today(state: dict) -> None:
     c = daily.cfg(state)
     with st.container(border=True, key="live_card"):
         render_coming_up(state)
+        _shield_strip(state, n_)
         if stt["bailout"]:
             b_ = stt["bailout"]
             st.markdown("### 🪂 Bailed out")
@@ -2419,6 +2437,25 @@ def render_today(state: dict) -> None:
 # ── 📓 journal: morning check-in, evening questionnaire, weekly recap ──
 def _scale_pills(label: str, opts: dict, key: str, default=None):
     return st.pills(label, list(opts), default=default, key=key, format_func=lambda k: opts[k])
+
+
+def _shield_strip(state: dict, n_: datetime) -> None:
+    """🛡️ What the damage limiter is holding / offering right now (only shows when something's on the table)."""
+    bits = []
+    held = SH.held_total(state)
+    if held:
+        until = min(parse_dt(h["until"]) for h in state["held"])
+        bits.append(f"<span class='hot'>🛡️ <b>{held}</b> held · finish one task by {until:%a %I:%M %p}".replace(" 0", " ")
+                    + " and it's cancelled</span>")
+    offer = SH.comeback_offer(state, n_)
+    if offer:
+        bits.append(f"<span class='hot'>🔥 Comeback: your first finish today wins back <b>+{offer}</b></span>")
+    if state.get("coins", 0) < 0:
+        bits.append("<span>🔧 In debt: finishes pay <b>+25%</b> until you're out</span>")
+    if state.get("shields"):
+        bits.append(f"<span>🛡️ Streak shields <b>{state['shields']}</b>/{SH.SHIELD_MAX}</span>")
+    if bits:
+        st.markdown("<div class='dod-pills dod-shield'>" + "".join(bits) + "</div>", unsafe_allow_html=True)
 
 
 def _bail_button(state: dict, stt: dict) -> None:
@@ -3452,6 +3489,7 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+.dod-shield span.hot{border-color:var(--y);color:#ece8df;background:rgba(245,197,24,.08)}
 .st-key-audio_session{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
 .dod-ci{margin:-.2rem 0 .1rem}.dod-ci .m{color:var(--muted);font-size:.85rem;margin-left:4px}
 .st-key-checkin [data-testid="stButtonGroup"] button,.st-key-closeday [data-testid="stButtonGroup"] button,
@@ -3690,6 +3728,7 @@ crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
 crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
+crash_msgs += SH.settle(state, now(), bank)
 rust_msg = process_rust(state)
 if _excused:
     crash_msgs = [m for m in crash_msgs if "MISSED QUALIFYING" not in m]
@@ -3957,6 +3996,107 @@ with tab_goals:
 VIZ = {"normal": "#3987e5", "dead": "#d95926", "peak": "#199e70", "low": "#1d2735", "grid": "#2b2e36"}
 
 
+PERIODS = ["Week", "Month", "Year"]
+
+
+def _period(kind: str, back: int, today: date) -> tuple[date, date, str]:
+    if kind == "Week":
+        lo = today - timedelta(days=today.weekday()) - timedelta(weeks=back)
+        hi = lo + timedelta(days=6)
+        return lo, hi, ("This week" if back == 0 else "Last week" if back == 1 else f"Week of {lo:%b} {lo.day}")
+    if kind == "Month":
+        y, m = today.year, today.month - back
+        while m < 1:
+            y, m = y - 1, m + 12
+        lo = date(y, m, 1)
+        hi = (date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
+        return lo, hi, f"{lo:%B %Y}"
+    lo, hi = date(today.year - back, 1, 1), date(today.year - back, 12, 31)
+    return lo, hi, str(lo.year)
+
+
+def render_focus_periods(state: dict) -> None:
+    """⏱️ When you actually work: timer sessions only, by week / month / year, with the previous period to compare."""
+    import altair as alt
+    acc = accent(state)[0]
+    light = _mix(acc, "#ffffff", .55)
+    today = now().date()
+    c1, c2, c3, c4 = st.columns([2.4, .45, .45, 2], vertical_alignment="center")
+    kind = c1.segmented_control("Period", PERIODS, default="Week", key="fx_kind",
+                                label_visibility="collapsed") or "Week"
+    if st.session_state.get("_fx_kind") != kind:
+        st.session_state["_fx_kind"], st.session_state["fx_back"] = kind, 0
+    back = st.session_state.get("fx_back", 0)
+    if c2.button("‹", key="fx_prev", use_container_width=True, help="Earlier"):
+        st.session_state["fx_back"] = back = back + 1
+    if c3.button("›", key="fx_next", use_container_width=True, disabled=back == 0, help="Later"):
+        st.session_state["fx_back"] = back = max(0, back - 1)
+    lo, hi, label = _period(kind, back, today)
+    plo, phi, _ = _period(kind, back + 1, today)
+    c4.markdown(f"**{label}**")
+    g = I.focus_grid(state, lo, hi, TZ)
+    prev = sum(I.focus_grid(state, plo, phi, TZ)["day"].values())
+    total = sum(g["day"].values())
+    days_in = [lo + timedelta(days=i) for i in range((min(hi, today) - lo).days + 1)] if lo <= today else []
+    active = [d for d in days_in if g["day"].get(d, 0) >= 1]
+    best = max(active, key=lambda d: g["day"][d]) if active else None
+    delta = (f"<span>{'▲' if total >= prev else '▼'} <b>{abs(total - prev) / 60:.1f} h</b> vs previous</span>"
+             if prev or total else "")
+    st.markdown("<div class='dod-pills'>"
+                f"<span>⏱️ <b>{total / 60:.1f} h</b> focused</span>"
+                f"<span>📅 <b>{len(active)}</b>/{len(days_in) or 0} days</span>"
+                + (f"<span>Avg <b>{total / len(active) / 60:.1f} h</b> on days you worked</span>" if active else "")
+                + (f"<span>🏆 Best <b>{best:%a %b} {best.day}</b> · {g['day'][best] / 60:.1f} h</span>" if best else "")
+                + delta + "</div>", unsafe_allow_html=True)
+    if not total:
+        st.caption("No timer sessions in this period. Only the ⏱️ focus timer counts here: claiming a task or "
+                   "ticking a daily isn't working time.")
+        return
+    # 1) over time
+    if kind == "Year":
+        rows = [{"When": date(lo.year, m, 1).strftime("%b"), "i": m,
+                 "Hours": round(sum(v for d, v in g["day"].items() if d.month == m) / 60, 1)} for m in range(1, 13)]
+    else:
+        rows = [{"When": (f"{d:%a}" if kind == "Week" else str(d.day)), "i": i,
+                 "Hours": round(g["day"].get(d, 0) / 60, 2), "now": d == today}
+                for i, d in enumerate(lo + timedelta(days=k) for k in range((hi - lo).days + 1))]
+    df = pd.DataFrame(rows)
+    st.markdown("**Focus over time**" + (" · hours per month" if kind == "Year" else " · hours per day"))
+    _chart(alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=acc, **({} if kind == "Month" else {"size": 26})).encode(
+        x=alt.X("When:N", sort=alt.SortField("i"), title=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Hours:Q", title="Hours"), tooltip=["When", "Hours"]).properties(height=190))
+    # 2) time of day
+    span = max(1, len(active))
+    hrs = pd.DataFrame([{"Hour": _hlabel(h), "h": h,
+                         "Min/day": round(sum(v for (d, hh), v in g["dh"].items() if hh == h) / span, 1)}
+                        for h in range(5, 24)])
+    top = hrs.sort_values("Min/day", ascending=False).iloc[0]
+    st.markdown(f"**When in the day** · average minutes per working day at each hour · peak **{top['Hour']}**")
+    _chart(alt.Chart(hrs).mark_bar(cornerRadiusEnd=3, color=acc).encode(
+        x=alt.X("Hour:N", sort=alt.SortField("h"), title=None),
+        y=alt.Y("Min/day:Q", title="Min / day"), tooltip=["Hour", "Min/day"]).properties(height=170))
+    # 3) weekday × hour
+    wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    if kind == "Week":
+        cells = [{"Day": f"{lo + timedelta(days=i):%a}", "d": i, "Hour": _hlabel(h), "h": h,
+                  "Minutes": round(g["dh"].get((lo + timedelta(days=i), h), 0))} for i in range(7) for h in range(5, 24)]
+        ttl = "**Day × hour** · minutes"
+    else:
+        agg = defaultdict(float)
+        for (d, h), v in g["dh"].items():
+            agg[(d.weekday(), h)] += v
+        cells = [{"Day": wd[i], "d": i, "Hour": _hlabel(h), "h": h, "Minutes": round(agg.get((i, h), 0))}
+                 for i in range(7) for h in range(5, 24)]
+        ttl = "**Weekday × hour** · total minutes in the period"
+    st.markdown(ttl)
+    _chart(alt.Chart(pd.DataFrame(cells)).mark_rect(cornerRadius=3, stroke="#0e1117", strokeWidth=2).encode(
+        x=alt.X("Hour:N", sort=alt.SortField("h"), title=None),
+        y=alt.Y("Day:N", sort=alt.SortField("d"), title=None),
+        color=alt.Color("Minutes:Q", scale=alt.Scale(range=[VIZ["low"], acc, light], interpolate="rgb"),
+                        legend=alt.Legend(title="Min")),
+        tooltip=["Day", "Hour", "Minutes"]).properties(height=220))
+
+
 def _mix(hex_: str, other: str, t: float) -> str:
     a = [int(hex_[i:i + 2], 16) for i in (1, 3, 5)]
     b = [int(other[i:i + 2], 16) for i in (1, 3, 5)]
@@ -4020,33 +4160,7 @@ with tab_stats:
                 x=alt.X("Week of:N", sort=None, title=None), y=alt.Y("Finished:Q", title="Tasks"),
                 tooltip=["Week of", "Finished"]).properties(height=200))
 
-        st.markdown("**When you actually work** · minutes per hour of day, 28 days")
-        zone = {h_: "Peak" for h_ in PROFILE["peak"]} | {h_: "Dead zone" for h_ in PROFILE["dead"]}
-        hrs = pd.DataFrame([{"Hour": _hlabel(h_), "h": h_, "Minutes": round(full["hour_min"][h_]),
-                             "Zone": zone.get(h_, "Normal") if PROFILE["ready"] else "Normal"} for h_ in range(6, 24)])
-        zscale = alt.Scale(domain=["Normal", "Peak", "Dead zone"], range=[VIZ["normal"], VIZ["peak"], VIZ["dead"]])
-        xh = alt.X("Hour:N", sort=[_hlabel(h_) for h_ in range(6, 24)], title=None)
-        band = alt.Chart(hrs[hrs["Zone"] == "Dead zone"]).mark_rect(opacity=0.22, cornerRadius=3).encode(
-            x=xh, color=alt.Color("Zone:N", scale=zscale, legend=None),
-            tooltip=[alt.Tooltip("Hour"), alt.Tooltip("Minutes"), alt.Tooltip("Zone")])
-        bars = alt.Chart(hrs).mark_bar(cornerRadiusEnd=4).encode(
-            x=xh, y=alt.Y("Minutes:Q", title="Minutes"),
-            color=alt.Color("Zone:N", scale=zscale, legend=alt.Legend(orient="top", title=None)),
-            tooltip=["Hour", "Minutes", "Zone"])
-        _chart((band + bars).properties(height=220))
-        if PROFILE["ready"]:
-            st.caption("🟠 shaded = dead zones (inside your working day, almost no work) — where the surprises aim.")
-
-        st.markdown("**Your week** · minutes by day and hour")
-        days_ = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        hm_ = pd.DataFrame([{"Day": days_[d_], "d": d_, "Hour": _hlabel(h_), "h": h_,
-                             "Minutes": round(full["wd_hour"][d_][h_])} for d_ in range(7) for h_ in range(6, 24)])
-        _chart(alt.Chart(hm_).mark_rect(cornerRadius=3, stroke="#0e1117", strokeWidth=2).encode(
-            x=alt.X("Hour:N", sort=alt.SortField("h"), title=None),
-            y=alt.Y("Day:N", sort=days_, title=None),
-            color=alt.Color("Minutes:Q", scale=alt.Scale(range=[VIZ["low"], VIZ["normal"], VIZ["light"]]),
-                            legend=alt.Legend(title="Min")),
-            tooltip=["Day", "Hour", "Minutes"]).properties(height=230))
+        render_focus_periods(state)
 
     st.subheader("🧠 How the engine uses this")
     if not PROFILE["ready"]:
