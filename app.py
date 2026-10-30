@@ -1943,7 +1943,7 @@ def render_dailies(state: dict) -> None:
                     c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True,
                               on_click=_dl_tap, args=(state, h, today, 1))
         with st.expander("⚙️ Manage dailies" if rows else
-                         "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)"):
+                         "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)", key="exp_dl_manage"):
             live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
             views = ["Your dailies", "＋ Add new"]
             if "_dl_view_next" in st.session_state:
@@ -2310,7 +2310,7 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
     dl = parse_dt(t["deadline"])
     fm_ = t.get("focus_min") or 0
     with st.expander(f"{chip(dl)} {t['title']} · {fmt_left(dl - now())} · +{t['reward']}"
-                     + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else "")):
+                     + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else ""), key=f"exp_{scope}{t['id']}"):
         g = goal_title(state, t.get("goal_id"))
         st.markdown(
             f"**Due** {dl:%a %b %d, %I:%M %p} · **{t['difficulty']}** · +{t['reward']} 🪙 / −{t['penalty']} 🪙"
@@ -2436,7 +2436,7 @@ def render_today(state: dict) -> None:
                 fm_ = t.get("focus_min") or 0
                 c1, c2 = st.container(key=f"mrow_{t['id']}").columns([6, 1], vertical_alignment="top")
                 with c1.expander(f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())} · "
-                                 f"+{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else "")):
+                                 f"+{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}"):
                     render_proof_form(state, t, "open", scope="today_")
                 running = bool(tm) and tm.get("task_id") == t["id"]
                 if c2.button("⏱️" if running else "▶", key=f"mgo_{t['id']}", use_container_width=True,
@@ -2739,7 +2739,7 @@ def render_journal(state: dict) -> None:
         done = J.done_on(state, d_, TZ)
         head = (f"{d_:%a %b} {d_.day} · " + (f"{J.MOODS[am['mood']]}" if am else "·") + " → "
                 + (f"{J.MOODS[pm['mood']]}" if pm else "·") + f" · ⏱️ {J.focus_on(state, d_) / 60:.1f} h · ✅ {len(done)}")
-        with st.expander(head):
+        with st.expander(head, key=f"exp_jr_{d_.isoformat()}"):
             if d_ == today and pm:
                 _journal_form(state, d_, f"je_{d_.isoformat()}")
                 continue
@@ -3418,7 +3418,7 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
                       and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
         for t in redeemable:
             left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-            with st.expander(f"🩹 {t['title']} · {fmt_left(left)} to redeem for half back"):
+            with st.expander(f"🩹 {t['title']} · {fmt_left(left)} to redeem for half back", key=f"exp_tb_{t['id']}"):
                 render_proof_form(state, t, "redeem", scope="tb_")
 
 
@@ -4039,12 +4039,12 @@ with tab_tasks:
         st.caption(f"Missed — but finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
         for t in redeemable:
             left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-            with st.expander(f"💀 {t['title']} · {fmt_left(left)} to redeem"):
+            with st.expander(f"💀 {t['title']} · {fmt_left(left)} to redeem", key=f"exp_rd_{t['id']}"):
                 render_proof_form(state, t, "redeem")
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
     if done:
-        with st.expander(f"🏆 Completed ({len(done)})"):
+        with st.expander(f"🏆 Completed ({len(done)})", key="exp_completed"):
             for t in sorted(done, key=lambda t: t["completed_at"], reverse=True)[:30]:
                 icon = "🏁" if t["status"] == "done" else "🩹"
                 st.markdown(f"{icon} **{t['title']}** · +{t.get('earned', 0)} 🪙 "
