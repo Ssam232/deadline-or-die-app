@@ -2728,14 +2728,56 @@ def _add_quick(state: dict, title: str, minutes: int, due: datetime, category: s
     return t
 
 
-def _tpl_add(state: dict, key: str) -> None:
+def _tpl_pick(key: str) -> None:
+    """A preset fills the editor — nothing is added until you confirm."""
     label = st.session_state.get(f"{key}_tpls")
     if not label:
         return
     _, mins, cat = next(x for x in Q.TEMPLATES if x[0] == label)
-    t = _add_quick(state, label.split(" ", 1)[1], mins, datetime.combine(now().date(), dtime(23, 59), TZ), cat)
+    st.session_state[f"{key}_draft"] = {"title": label.split(" ", 1)[1], "minutes": mins, "cat": cat,
+                                        "due": datetime.combine(now().date(), dtime(23, 59), TZ).isoformat(), "at": None,
+                                        "v": st.session_state.get(f"{key}_draft", {}).get("v", 0) + 1}
     st.session_state[f"{key}_tpls"] = None
-    flash(f"⚡ Added **{t['title']}** → +{t['reward']}" + (" · in today's mission" if t.get("mission_day") else ""))
+
+
+SHORT_CAT = {"pit": "🔧 Pit", "admin": "📨 Admin", "deep": "🧠 Deep", "health": "💪 Health", "life": "🧺 Life",
+             "show": "🪑 Show"}
+DUE_OPTS = {"Tonight": 0, "Tomorrow": 1, "In 2 days": 2, "In a week": 7}
+
+
+def _draft_editor(state: dict, key: str) -> None:
+    """Edit a quick task before it's added: name, time, type, when it's due."""
+    d = st.session_state[f"{key}_draft"]
+    k = f"{key}_e{d['v']}"
+    due0 = parse_dt(d["due"])
+    with st.container(border=True, key=f"{key}_editor"):
+        title = st.text_input("Task", value=d["title"], key=f"{k}_t", max_chars=120)
+        cur = next((c for c, v in TIME_CHIPS.items() if v == d["minutes"]), None)
+        tchips = list(TIME_CHIPS) if cur else [f"{d['minutes']}m"] + list(TIME_CHIPS)
+        tm = st.pills("Time", tchips, default=cur or tchips[0], key=f"{k}_m") or (cur or tchips[0])
+        cat = st.pills("Type", list(SHORT_CAT), default=d["cat"], format_func=SHORT_CAT.get, key=f"{k}_c") or d["cat"]
+        typed_due = due0.date() != now().date() or due0.time() != dtime(23, 59)
+        dopts = ([f"As typed · {due0:%a %I:%M %p}".replace(" 0", " ")] if typed_due else []) + list(DUE_OPTS)
+        dsel = st.pills("Due", dopts, default=dopts[0], key=f"{k}_d") or dopts[0]
+        mins = TIME_CHIPS.get(tm) or int(tm.rstrip("m"))
+        cat, mins = V.honest(title, cat, mins, chosen=True)
+        due = due0 if dsel.startswith("As typed") else datetime.combine(
+            now().date() + timedelta(days=DUE_OPTS[dsel]), dtime(23, 59), TZ)
+        v = V.value(cat, mins)
+        st.caption(f"{V.CATEGORIES[cat]['label']} · {min_label(mins)} → **+{v['reward']}** / −{v['penalty']}"
+                   + (" · 🔧 pit checks cap at 15 min (inbox 10)" if cat == "pit" else ""))
+        c1, c2 = st.columns([3, 1])
+        if c1.button("✅ Add task", type="primary", use_container_width=True, key=f"{k}_ok",
+                     disabled=not (title or "").strip()):
+            at = parse_dt(d["at"]) if d.get("at") else None
+            t = _add_quick(state, title.strip(), mins, due, cat, at=at)
+            st.session_state.pop(f"{key}_draft", None)
+            flash(f"⚡ Added **{t['title']}** · {min_label(t['minutes'])} → +{t['reward']} · due "
+                  f"{due:%a %I:%M %p}".replace(" 0", " ") + (" · in today's mission" if t.get("mission_day") else ""))
+            st.rerun()
+        if c2.button("✕", use_container_width=True, key=f"{k}_x", help="Discard"):
+            st.session_state.pop(f"{key}_draft", None)
+            st.rerun()
 
 
 def render_quick_add(state: dict, key: str = "qa", boxed: bool = True) -> None:
@@ -2745,14 +2787,15 @@ def render_quick_add(state: dict, key: str = "qa", boxed: bool = True) -> None:
             text = c1.text_input("⚡ Quick add", label_visibility="collapsed",
                                  placeholder="⚡ Quick add — “email walter 15m by 3pm”, “gym at 6pm”, “read in 1h”")
             go = c2.form_submit_button("Add", type="primary", use_container_width=True)
-        if go and text.strip():
+        if go and text.strip():  # parse it, then let you check / change it before it's added
             p = Q.parse(text, now())
-            t = _add_quick(state, p["title"], p["minutes"], p["due"], p["category"], at=p["at"])
-            flash(f"⚡ Added **{t['title']}** · {V.CATEGORIES[t['category']]['label']} · {min_label(t['minutes'])} → "
-                  f"**+{t['reward']}** · due {p['due']:%a %I:%M %p}" + (" · added to today's mission" if t.get("mission_day") else ""))
-            st.rerun()
-        st.pills("One tap", [x[0] for x in Q.TEMPLATES], key=f"{key}_tpls", selection_mode="single",
-                 label_visibility="collapsed", on_change=_tpl_add, args=(state, key))
+            st.session_state[f"{key}_draft"] = {"title": p["title"], "minutes": p["minutes"], "cat": p["category"],
+                                                "due": p["due"].isoformat(), "at": p["at"].isoformat() if p["at"] else None,
+                                                "v": st.session_state.get(f"{key}_draft", {}).get("v", 0) + 1}
+        if st.session_state.get(f"{key}_draft"):
+            _draft_editor(state, key)
+        st.pills("Presets", [x[0] for x in Q.TEMPLATES], key=f"{key}_tpls", selection_mode="single",
+                 label_visibility="collapsed", on_change=_tpl_pick, args=(key,))
 
 
 def _mark_started(t: dict) -> None:
@@ -3010,8 +3053,39 @@ svg{{width:100%;max-width:340px;height:auto;display:block}}
  <g id="car"><circle id="halo" r="10" fill="#f5c518"/>{sprite}</g>
 </svg><div id="flag"><i></i><b></b></div><div id="s"></div></div>
 <script>
+// sounds mix with your music instead of pausing it (iOS 17+ audio session; harmless elsewhere)
+try{{if(navigator.audioSession)navigator.audioSession.type='ambient';
+ if(parent.navigator.audioSession)parent.navigator.audioSession.type='ambient';}}catch(e){{}}
 const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},LIM={limit},ACC='{acc}';
 const TICKS=[{ticks}],EXT={ext};
+function finish(){{  // whole-page "you're done" you can catch from across the room: once per session
+ let P;try{{P=parent.document;}}catch(e){{return;}}
+ const key='dodfin:'+S;try{{if(parent.sessionStorage.getItem(key))return;parent.sessionStorage.setItem(key,'1');}}catch(e){{}}
+ if(P.getElementById('dod-fin'))return;
+ const st=P.createElement('style');st.id='dod-fin-css';st.textContent=`
+#dod-fin{{position:fixed;inset:0;z-index:999999;pointer-events:none;overflow:hidden}}
+#dod-fin .fr{{position:absolute;inset:0;padding:14px;box-sizing:border-box;
+  background:repeating-conic-gradient(#f2efe8 0 25%,#111318 0 50%) 0 0/14px 14px;
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);
+  animation:dfp .55s ease-in-out 0s 12 alternate}}
+#dod-fin .gl{{position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 45%,${{'{acc}'}}55 100%);animation:dfp .55s ease-in-out 0s 12 alternate}}
+#dod-fin .fl{{position:absolute;top:22%;left:-40vw;width:min(70vw,520px);height:min(44vw,330px);transform-origin:left center;
+  background:repeating-conic-gradient(#f2efe8 0 25%,#111318 0 50%) 0 0/ 12% 18%;border-left:8px solid #c9ccd2;
+  box-shadow:0 20px 50px rgba(0,0,0,.5);animation:dfs 3.2s cubic-bezier(.45,.05,.35,1) .2s forwards,dfw .3s ease-in-out infinite alternate}}
+@keyframes dfp{{from{{opacity:.15}}to{{opacity:1}}}}
+@keyframes dfs{{0%{{left:-75vw}}100%{{left:110vw}}}}
+@keyframes dfw{{from{{transform:perspective(600px) rotateY(-12deg) skewY(-4deg)}}to{{transform:perspective(600px) rotateY(10deg) skewY(4deg)}}}}
+@media (prefers-reduced-motion:reduce){{#dod-fin .fl{{display:none}}#dod-fin .fr,#dod-fin .gl{{animation:none}}}}`;
+ P.head.appendChild(st);
+ const o=P.createElement('div');o.id='dod-fin';o.innerHTML='<div class="gl"></div><div class="fr"></div><div class="fl"></div>';
+ P.body.appendChild(o);setTimeout(()=>{{o.remove();st.remove();}},7800);
+ // tab title blinks until you come back to it
+ const t0=P.title;let on=true;const iv=setInterval(()=>{{P.title=on?'🏁 SESSION DONE':t0;on=!on;}},900);
+ const stop=()=>{{clearInterval(iv);P.title=t0;}};
+ parent.addEventListener('focus',stop,{{once:true}});P.addEventListener('pointerdown',stop,{{once:true}});
+ setTimeout(stop,10*60*1000);
+ try{{if(parent.navigator.vibrate)parent.navigator.vibrate([400,150,400,150,800]);}}catch(e){{}}}}
 const tr=document.getElementById('track'),L=tr.getTotalLength(),car=document.getElementById('car');
 const trail=document.getElementById('trail'),w=document.getElementById('w'),NS='http://www.w3.org/2000/svg';
 function at(f){{const d=L*Math.min(.9999,Math.max(0,f)),a=tr.getPointAtLength(d),b=tr.getPointAtLength(Math.min(L,d+1));
@@ -3065,7 +3139,8 @@ function frame(){{
   else{{t.textContent=mmss(left);t.style.fill=ACC;trail.style.stroke=ACC;
     p.textContent=EXT>0?('🌊 Flow · +'+EXT+' min'):stints>1?('Stint '+blk+' of '+stints):'Green flag';
     s.textContent=Math.round(wd)+' of '+T+' min · phone face-down';}}
-  const key=PA?'pause':ph;if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;}}
+  const key=PA?'pause':ph;if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;
+  if(ph==='done'&&!PA)finish();}}
  requestAnimationFrame(frame);}}
 frame();
 </script>""", height=232)  # our own static markup only — no user content goes in here
@@ -3377,6 +3452,7 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+.st-key-audio_session{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
 .dod-ci{margin:-.2rem 0 .1rem}.dod-ci .m{color:var(--muted);font-size:.85rem;margin-left:4px}
 .st-key-checkin [data-testid="stButtonGroup"] button,.st-key-closeday [data-testid="stButtonGroup"] button,
 [class*="st-key-jf_"] [data-testid="stButtonGroup"] button{font-size:1.15rem;min-width:2.6rem}
@@ -3527,6 +3603,9 @@ def render_cluster(state: dict) -> None:
 # ─────────────────────────── app ───────────────────────────
 st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
+with st.container(key="audio_session"):  # iOS: app sounds mix with your music instead of pausing it
+    st.iframe("<script>try{for(const w of [window,parent])if(w.navigator.audioSession)"
+              "w.navigator.audioSession.type='ambient';}catch(e){}</script>", height=1)
 if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
     os.environ["NTFY_TOPIC"] = get_secret("NTFY_TOPIC")  # same secret seed as the nagger for surprise events
 

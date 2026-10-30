@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 import dailies as DL
 import daily
 import journal as J
+import pomo as PM
 import nudges as NU
 import prayers as PR
 from notify import SERVER
@@ -178,11 +179,46 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
     return out
 
 
+TIMER_SLOTS = 6  # pomodoro transitions queued ahead (break / back to work)
+
+
+def _timer(save: dict, now: datetime) -> list[dict]:
+    """⏱️ Buzz the phone when a running focus session ends, and at each pomodoro break / back-to-work, so you
+    notice without looking at the screen or wearing headphones. Fixed slots: re-posting moves them; no running timer
+    (or a pause) cancels them."""
+    tm = save.get("timer")
+    task = next((t for t in save.get("tasks", []) if tm and t.get("id") == tm.get("task_id")), None)
+    title = (task or {}).get("title", "your session")
+    park = now + timedelta(hours=40)  # where idle slots "live" so they stay inside the planning window
+    end_a = _alarm(("timer", "end"), park, "🏁 Session done", "", 4, ["checkered_flag"], False)
+    slots = [_alarm(("timer", "t", i), park, "☕ Break", "", 3, ["coffee"], False) for i in range(TIMER_SLOTS)]
+    if not tm or tm.get("paused_at"):
+        return [end_a] + slots
+    work, brk = tm.get("work"), tm.get("brk")
+    eff = PM.effective_elapsed(tm, now.timestamp())  # minutes on the clock so far
+    wall = PM.wall_minutes(tm["planned"], work, brk)
+    end = now + timedelta(minutes=wall - eff)
+    if end > now:
+        end_a.update(at=end, wanted=True, message=f"{title}: {tm['planned']} min done. Stop & log it — that's proof.")
+    if work and brk:
+        c, i, k = work + brk, 0, 0
+        while i < TIMER_SLOTS and k < 40:
+            for off, ttl, msg in ((k * c + work, "☕ Break time", f"{work} min in. Stand up, water, no phone."),
+                                  ((k + 1) * c, "🟢 Back to work", "Break's over. Phone face-down, back to it.")):
+                at = now + timedelta(minutes=off - eff)
+                if now < at < end - timedelta(minutes=1) and i < TIMER_SLOTS:
+                    slots[i].update(at=at, wanted=True, title=ttl, message=f"{title}: {msg}",
+                                    tags=["coffee" if "Break" in ttl else "green_circle"])
+                    i += 1
+            k += 1
+    return [end_a] + slots
+
+
 def plan(save: dict, now: datetime, prof: dict | None = None) -> list[dict]:
     """Every alarm that could fire in the next ~2 days, wanted or not (unwanted ones get cancelled)."""
     if not save:
         return []
-    out = _tasks(save, now) + NU.build(save, now, prof, _alarm)
+    out = _tasks(save, now) + NU.build(save, now, prof, _alarm) + _timer(save, now)
     for d in (now.date(), now.date() + timedelta(days=1)):
         out += _prayers(save, d, now) + _day(save, d, now) + _daily_reminders(save, d, now)
     lo, hi = now + timedelta(seconds=MIN_LEAD), now + HORIZON

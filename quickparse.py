@@ -15,7 +15,7 @@ import valuation as V
 
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 TEMPLATES = [
-    ("📨 Clear inbox", 15, "admin"), ("🧠 Write 300 words", 45, "deep"), ("📄 Read a paper", 45, "deep"),
+    ("📨 Clear inbox", 10, "pit"), ("🧠 Write 300 words", 45, "deep"), ("📄 Read a paper", 45, "deep"),
     ("📊 Analyze data", 60, "deep"), ("💪 Gym session", 60, "health"), ("🧺 Life admin errand", 30, "life"),
 ]
 
