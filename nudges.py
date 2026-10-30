@@ -140,6 +140,13 @@ def build(save: dict, now: datetime, prof: dict | None, mk) -> list[dict]:
                 title = "⚠️ Zero finishes today" if zero and d == now.date() else "🔥 Keep the car moving"
                 msg = (f"Midnight costs {pen} coins if nothing gets done. {task} is {L} min." if zero
                        else f"Momentum is the whole game. {task}, {L} min.")
+            coins = save.get("coins", 0)
+            if coins < 0 and kind in (1, 4):  # ⬛ in debt: name the number and the exact way out
+                est = round(int(pick.get("reward", 0)) * 1.25) if pick else 0
+                title = f"⬛ Black flag · {coins} coins"
+                msg = (f"{task} pays ~+{est} with recovery fuel → "
+                       + ("back in the green." if coins + est >= 0 else f"{coins + est}.") + f" {L} min. Start it."
+                       if est else f"Racing and the Lounge stay locked until you're out. {L} min on {task}.")
             ignored = sum(1 for p in slots(save, d, tz)[:i] if p < at and wanted(p))
             prio = 3 if ignored == 0 else 4 if ignored < 3 or done > 0 else 5
             out.append(mk(("nudge", d, i), at, title, msg, prio, ["racing_car"], wanted(at),

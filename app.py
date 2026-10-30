@@ -773,6 +773,30 @@ def bank(state: dict, delta: int, reason: str) -> None:
     state["coins"] += int(delta)
     state["ledger"].insert(0, {"ts": now().isoformat(), "delta": int(delta), "reason": reason})
     del state["ledger"][300:]
+    _debt_episode(state)
+
+
+def _debt_episode(state: dict) -> None:
+    """⬛ Open / close a debt episode: when it started and how deep it got, so the climb out is visible."""
+    c = state["coins"]
+    if c < 0:
+        if not state.get("debt_since"):
+            state["debt_since"], state["debt_peak"] = now().isoformat(), c
+        else:
+            state["debt_peak"] = min(state.get("debt_peak", c), c)
+    elif state.get("debt_since"):
+        since, peak = parse_dt(state.pop("debt_since")), state.pop("debt_peak", 0)
+        state["debts_cleared"] = state.get("debts_cleared", 0) + 1
+        try:
+            flash(f"🟢 Back in the green. Black flag lifted after {_span(now() - since)} (you were down to {peak}).",
+                  celebrate=True, sound="win")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _span(d: timedelta) -> str:
+    h = int(d.total_seconds() // 3600)
+    return f"{h // 24} d {h % 24} h" if h >= 24 else f"{h} h" if h else f"{max(1, int(d.total_seconds() // 60))} min"
 
 
 def car_rating(state: dict) -> float:
@@ -2439,6 +2463,75 @@ def _scale_pills(label: str, opts: dict, key: str, default=None):
     return st.pills(label, list(opts), default=default, key=key, format_func=lambda k: opts[k])
 
 
+DEBT_LOCKS = "🏎️ racing · 🎰 the Lounge · ⏳ extensions · 🔧 upgrades, cars & paint · 🎲 bets"
+
+
+def debt_way_out(state: dict, n_: datetime) -> tuple[dict | None, int, int | None]:
+    """(next task, what it pays with recovery fuel, finishes needed to clear the debt or None if open tasks can't)."""
+    owed = -state["coins"]
+    tasks = [t for t in state["tasks"] if t["status"] == "open"]
+    first = Q.pick_next(tasks, n_, deep_hour=I.in_peak(globals().get("PROFILE"), n_.hour)) if tasks else None
+    order = ([first] if first else []) + sorted((t for t in tasks if t is not first), key=lambda t: t["deadline"])
+    pay = lambda t: int(t.get("reward", 0)) + max(1, round(int(t.get("reward", 0)) * SH.RECOVERY_BONUS))  # noqa: E731
+    run = 0
+    for i, t in enumerate(order, 1):
+        run += pay(t)
+        if run >= owed:
+            return first, pay(first), i
+    return first, (pay(first) if first else 0), None
+
+
+def render_debt(state: dict) -> None:
+    """⬛ In debt, the whole app says so: a black-flag strip on every tab, how deep, how long, what's locked, and the
+    exact way out (next task, what it pays, how many finishes). Felt, never hopeless: the way out is always one tap."""
+    c = state.get("coins", 0)
+    if c >= 0:
+        return
+    n_ = now()
+    if not state.get("debt_since"):
+        _debt_episode(state)
+    peak = min(state.get("debt_peak", c), c)
+    since = parse_dt(state["debt_since"])
+    climbed = c - peak
+    pct = 100 * climbed / max(1, -peak)
+    first, pays, n_out = debt_way_out(state, n_)
+    bonus = SH.comeback_offer(state, n_)
+    pays += bonus  # the first finish also collects the comeback bounty
+    st.markdown(
+        "<style>[data-testid='stApp']::after{content:'';position:fixed;left:0;right:0;top:0;height:5px;z-index:999990;"
+        "pointer-events:none;background:repeating-linear-gradient(135deg,#e10600 0 10px,#0b0d11 10px 20px)}"
+        ".dod-cluster{border-color:#5a1d1f!important;box-shadow:0 0 0 1px rgba(225,6,0,.18),0 10px 30px -12px rgba(225,6,0,.35)}"
+        "</style>"
+        "<div class='dod-debt'><div class='dod-debt-h'><span class='flag'>⬛ BLACK FLAG</span>"
+        f"<span class='amt'>{c:,} 🪙</span><span class='m'>in the red {_span(n_ - since)}"
+        + (f" · deepest {peak:,}" if peak < c else "") + "</span></div>"
+        f"<div class='dod-debt-bar'><i style='width:{pct:.0f}%'></i></div>"
+        f"<div class='m'>" + (f"Climbed <b>{climbed}</b> of {-peak} back · " if climbed else "")
+        + f"<b>{-c}</b> to go</div>"
+        f"<div class='m lock'>🔒 Locked until you're out: {DEBT_LOCKS}</div></div>", unsafe_allow_html=True)
+    with st.container(key="debt_way"):
+        a, b = st.columns([4, 1.1], vertical_alignment="center")
+        if first:
+            L = Q.session_length(first)
+            after = c + pays
+            extra = " + comeback bounty" if bonus else ""
+            held = SH.held_total(state)
+            a.markdown(f"**Way out →** {html.escape(first['title'])} pays **~+{pays}** with recovery fuel{extra}"
+                       + (f" and cancels the {held} held" if held else "") + " → "
+                       + ("**back in the green.** One finish clears it." if after >= 0 else
+                          f"**{after:,}**. " + (f"About **{n_out}** finishes clear it." if n_out else
+                                                "Your open tasks don't cover it yet: add the next real one.")))
+            if b.button(f"▶ Start {L} min", key="debt_go", type="primary", use_container_width=True,
+                        disabled=bool(state.get("timer"))):
+                _start_timer(state, first, L)
+                flash(f"▶️ **{first['title']}** — {L}-min timer running. Every finish pays +25% while you're down.",
+                      sound="win")
+                st.rerun()
+        else:
+            a.markdown("**Way out →** no open tasks. Add the next real one, and bank the small stuff: dailies, the "
+                       f"morning check-in (+{J.AM_COINS}) and tonight's journal (up to +{J.PM_MAX}).")
+
+
 def _shield_strip(state: dict, n_: datetime) -> None:
     """🛡️ What the damage limiter is holding / offering right now (only shows when something's on the table)."""
     bits = []
@@ -2450,8 +2543,6 @@ def _shield_strip(state: dict, n_: datetime) -> None:
     offer = SH.comeback_offer(state, n_)
     if offer:
         bits.append(f"<span class='hot'>🔥 Comeback: your first finish today wins back <b>+{offer}</b></span>")
-    if state.get("coins", 0) < 0:
-        bits.append("<span>🔧 In debt: finishes pay <b>+25%</b> until you're out</span>")
     if state.get("shields"):
         bits.append(f"<span>🛡️ Streak shields <b>{state['shields']}</b>/{SH.SHIELD_MAX}</span>")
     if bits:
@@ -3549,6 +3640,18 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+.dod-debt{border:1px solid #5a1d1f;border-left:4px solid var(--r);border-radius:12px;padding:10px 14px;margin:.5rem 0 .3rem;
+  background:linear-gradient(90deg,rgba(225,6,0,.12),rgba(225,6,0,.03) 60%,transparent);animation:dodIn .35s ease-out both}
+.dod-debt-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.dod-debt .flag{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:800;letter-spacing:.06em;color:#ece8df}
+.dod-debt .amt{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:800;font-size:1.35rem;color:var(--r)}
+.dod-debt .m{color:var(--muted);font-size:.85rem}.dod-debt .m b{color:#ece8df}
+.dod-debt .lock{margin-top:2px;font-size:.8rem}
+.dod-debt-bar{height:6px;border-radius:4px;background:#2a1416;overflow:hidden;margin:7px 0 4px}
+.dod-debt-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--r),var(--t));border-radius:4px;
+  animation:dodGrow .9s cubic-bezier(.2,.7,.2,1) both;--from:0%}
+.st-key-debt_way{margin:0 0 .6rem}
+.st-key-debt_way p{margin:0}
 .dod-shield span.hot{border-color:var(--y);color:#ece8df;background:rgba(245,197,24,.08)}
 .st-key-audio_session{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
 .dod-ci{margin:-.2rem 0 .1rem}.dod-ci .m{color:var(--muted);font-size:.85rem;margin-left:4px}
@@ -3694,7 +3797,7 @@ def render_cluster(state: dict) -> None:
     if rp.get("revealed") is False:
         coins -= rp.get("payout", 0)  # no spoilers while the race is still running
     cells = [
-        ("Coins", f"{coins:,}", "in debt — black flag" if coins < 0 else "", coins < 0),
+        ("Coins", f"{coins:,}", "⬛ black flag" if coins < 0 else "", coins < 0),
         ("Day streak", f"{ds}", f"best {state.get('best_day_streak', 0)}", False),
         ("Focus today", f"{focus_today(state)}m", "", False),
         ("Car", f"{cond}%", "repair in the Garage" if cond < 60 else "", cond < 40),
@@ -3827,6 +3930,7 @@ st.markdown(f"<div class='dod-hero'><h1>Deadline or Die</h1><p>{greet}, {html.es
             + (" It's a danger day: no one's watching, so everything you finish pays +20%."
                if now().weekday() in DANGER_DAYS else "") + "</p></div>", unsafe_allow_html=True)
 render_cluster(state)
+render_debt(state)
 
 for kind, m in sync_msgs:
     getattr(st, kind)(m)

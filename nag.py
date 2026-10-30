@@ -349,6 +349,9 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             _off = SH.comeback_offer(save, now)
             if _off:
                 body += f"\n🔥 Comeback day: your first finish wins back +{_off} of yesterday."
+            if save.get("coins", 0) < 0:
+                body += (f"\n⬛ Black flag: {save['coins']} coins. Racing and the Lounge are locked; "
+                         "finishes pay +25% until you're out.")
             if SH.held_total(save):
                 body += f"\n🛡️ {SH.held_total(save)} held — finish one task and it's cancelled."
             body += "\n⏱️ Focus challenges can drop any time today. Keep your phone close."
