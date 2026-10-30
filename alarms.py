@@ -156,7 +156,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
                           title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio,
                           ["repeat"], bool(stake) and not rest))
     # 📓 evening journal reminder — cancelled once you've closed the day
-    jat = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=21)
+    jat = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=23)
     out.append(_alarm(("journal", d), jat, "📓 Close the day",
                       f"Two taps and a few lines: how it went, the win, tomorrow's one thing. Up to +{J.PM_MAX}.",
                       3, ["notebook"], not J.peek(save, d).get("pm")))

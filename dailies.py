@@ -195,7 +195,7 @@ def hit_rate(save: dict, today: date, days: int = 28) -> float | None:
 
 
 # ── 🔔 reminders: "off", "spread" (evenly through the day) or a list of "HH:MM" ──
-REMIND_OPTS = {"off": "🔕 No reminders", "spread": "🔔 Spread out", "times": "⏰ Set times"}
+REMIND_OPTS = {"off": "🔕 Off", "spread": "🔔 Spread out", "times": "⏰ Pick hours"}
 
 
 def remind_mode(h: dict) -> str:

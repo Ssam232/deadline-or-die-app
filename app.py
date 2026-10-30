@@ -1828,18 +1828,31 @@ def _prayer_settings(state: dict, today, key: str) -> None:
                + ". Reminders follow these windows; each +1 cancels that prayer's.")
 
 
+REMIND_HOURS = [f"{h:02d}:00" for h in range(6, 24)]
+
+
+def _hour_label(hm: str) -> str:
+    t = datetime.strptime(hm, "%H:%M")
+    return t.strftime("%I %p" if t.minute == 0 else "%I:%M %p").lstrip("0").replace(" AM", "a").replace(" PM", "p")
+
+
 def _remind_picker(key: str, mode: str, cur, h: dict | None = None):
-    """🔕 / 🔔 spread / ⏰ set times. Returns 'off', 'spread' or a list of 'HH:MM'."""
-    c1, c2 = st.columns([1, 1.1], vertical_alignment="center")
-    m = c1.selectbox("Reminders", list(DL.REMIND_OPTS), index=list(DL.REMIND_OPTS).index(mode),
-                     format_func=DL.REMIND_OPTS.get, key=f"{key}_m", label_visibility="collapsed")
+    """🔕 / 🔔 spread / ⏰ pick hours. Returns 'off', 'spread' or a sorted list of 'HH:MM'. Tapping hour chips means
+    nothing can be mistyped."""
+    m = st.segmented_control("Reminders", list(DL.REMIND_OPTS), default=mode, format_func=DL.REMIND_OPTS.get,
+                             key=f"{key}_m", label_visibility="collapsed") or mode
     if m == "times":
-        txt = c2.text_input("Times", value=", ".join(cur) if isinstance(cur, list) else "8:00, 13:00, 21:00",
-                            key=f"{key}_t", label_visibility="collapsed", placeholder="8:00, 1pm, 21:30")
-        return DL.parse_times(txt) or ["20:00"]
-    if m == "spread" and h:
-        c2.caption("⏰ " + ", ".join(datetime.strptime(x, "%H:%M").strftime("%I:%M").lstrip("0")
-                                    for x in DL.remind_times({**h, "remind": "spread"})))
+        have = cur if isinstance(cur, list) and cur else ["08:00", "13:00", "20:00"]
+        opts = sorted(set(REMIND_HOURS) | set(have))  # keep any older half-hour times visible
+        picked = st.pills("Remind me at", opts, selection_mode="multi", default=have, format_func=_hour_label,
+                          key=f"{key}_t", label_visibility="collapsed")
+        if not picked:
+            st.caption("Tap at least one hour — until then it keeps your last times.")
+            return have
+        return sorted(picked)
+    times = DL.remind_times({**(h or {"target": 1}), "remind": "spread"}) if m == "spread" else []
+    if times:
+        st.caption("⏰ " + ", ".join(_hour_label(x) for x in times))
     return m
 
 
@@ -1943,7 +1956,7 @@ def _daily_card(state: dict, h: dict, today) -> None:
             with st.popover("🕌 Prayer times & method", use_container_width=True):
                 _prayer_settings(state, today, h["id"])
         else:
-            new_r = _remind_picker(f"dl_r_{h['id']}", DL.remind_mode(h), h.get("remind"))
+            new_r = _remind_picker(f"dl_r_{h['id']}", DL.remind_mode(h), h.get("remind"), h)
             if new_r != (h.get("remind") or "off"):
                 h["remind"] = new_r
                 save_state(state)
@@ -1965,7 +1978,7 @@ def _daily_add_form(state: dict, today) -> None:
     else:
         st.markdown("<div style='font-size:.85rem;color:#8b909c;margin:4px 0 -6px'>Reminders</div>",
                     unsafe_allow_html=True)
-        rem = _remind_picker("dl_new", "spread", None)
+        rem = _remind_picker("dl_new", "spread", None, {"target": target})
     st.markdown(f"<div class='dod-row' style='border:0;padding:6px 0'><div>Worth <b>+{DL.reward(target)}</b> 🪙 when "
                 f"done · <b>−{DL.penalty(target)}</b> 🪙 if missed at midnight <span class='m'>· set by the game: the "
                 f"fewer times a day, the less it pays and the more it costs</span></div></div>", unsafe_allow_html=True)
