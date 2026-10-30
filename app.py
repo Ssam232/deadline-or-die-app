@@ -794,6 +794,11 @@ def _debt_episode(state: dict) -> None:
             pass
 
 
+def _md_inline(t: str) -> str:
+    """Escape, then turn **bold** into <b>: for short markdown lines placed inside custom HTML."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(t))
+
+
 def _span(d: timedelta) -> str:
     h = int(d.total_seconds() // 3600)
     return f"{h // 24} d {h % 24} h" if h >= 24 else f"{h} h" if h else f"{max(1, int(d.total_seconds() // 60))} min"
@@ -3652,6 +3657,16 @@ CSS = """<style>
   animation:dodGrow .9s cubic-bezier(.2,.7,.2,1) both;--from:0%}
 .st-key-debt_way{margin:0 0 .6rem}
 .st-key-debt_way p{margin:0}
+.st-key-drop_reveal{animation:dodDropOut .6s ease-in 4.8s both;overflow:hidden}
+.dod-drop{display:flex;gap:14px;align-items:center;padding:12px 16px;border:1px solid var(--y);border-radius:14px;
+  background:radial-gradient(120% 160% at 0% 50%,rgba(245,197,24,.16),transparent 60%),#141821;
+  box-shadow:0 0 0 1px rgba(245,197,24,.15),0 10px 30px -10px rgba(245,197,24,.35)}
+.dod-drop-box{font-size:2.3rem;animation:dodDropPop .7s cubic-bezier(.2,1.6,.4,1) both}
+.dod-drop-k{color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.06em}
+.dod-drop-v{font-size:1.1rem;color:#ece8df;animation:dodIn .4s ease-out .25s both}.dod-drop-v b{color:var(--y)}
+@keyframes dodDropPop{0%{transform:scale(.3) rotate(-18deg);opacity:0}60%{transform:scale(1.25) rotate(8deg);opacity:1}
+  100%{transform:none}}
+@keyframes dodDropOut{from{opacity:1;max-height:200px}to{opacity:0;max-height:0;margin:0;padding:0}}
 .dod-shield span.hot{border-color:var(--y);color:#ece8df;background:rgba(245,197,24,.08)}
 .st-key-audio_session{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
 .dod-ci{margin:-.2rem 0 .1rem}.dod-ci .m{color:var(--muted);font-size:.85rem;margin-left:4px}
@@ -3969,25 +3984,34 @@ if _lk["locked"]:
 elif _lk.get("override"):
     st.caption(f"🆘 Emergency unlock active until {parse_dt(state['override_until']):%I:%M %p}.")
 
+_reveal = st.session_state.pop("drop_reveal", None)
+if _reveal:  # 🎁 the moment you open it: what you got, then the card clears itself
+    with st.container(key="drop_reveal"):
+        st.markdown(f"<div class='dod-drop'><div class='dod-drop-box'>{_reveal['icon']}</div>"
+                    f"<div><div class='dod-drop-k'>{html.escape(_reveal['title'])} · opened</div>"
+                    f"<div class='dod-drop-v'>{_md_inline(_reveal['out'])}</div></div></div>", unsafe_allow_html=True)
 for e in EV.active(now()):
-    left = fmt_left(e["end"] - now())
     claims = state.setdefault("event_claims", [])
-    with st.container(border=True):
+    if e["id"] in claims:
+        continue  # claimed drops leave; only live offers stay on screen
+    left = fmt_left(e["end"] - now())
+    with st.container(border=True, key=f"ev_card_{e['id'].replace('#', '_')}"):
         st.markdown(f"#### 🎉 LIVE · {e['title']} · {left} left")
         st.caption(e["banner"].replace("**", ""))
-        if e["type"] in ("supply", "pitcrew") and e["id"] not in claims:
-            if st.button("🎁 Claim" if e["type"] == "supply" else "🔧 Repair me", key=f"ev_{e['id']}", type="primary"):
+        if e["type"] in ("supply", "pitcrew"):
+            if st.button("🎁 Open it" if e["type"] == "supply" else "🔧 Repair me", key=f"ev_{e['id']}", type="primary"):
                 claims.append(e["id"])
                 if e["type"] == "supply":
                     out = open_crate(state, {"reward": 45})
                 else:
                     state["car"]["condition"] = min(100, state["car"]["condition"] + 30)
-                    out = "🔧 Pit crew fixed you up: +30% condition."
+                    out = "🔧 Pit crew fixed you up: **+30% condition**."
                 save_state(state)
-                flash(out, celebrate=True, sound="jackpot")
+                st.session_state["drop_reveal"] = {"title": e["title"], "out": out,
+                                                   "icon": "🎁" if e["type"] == "supply" else "🔧"}
+                st.session_state["celebrate"] = True
+                st.session_state["sound"] = "jackpot"
                 st.rerun()
-        elif e["id"] in claims:
-            st.caption("✅ Claimed")
 
 snd = st.session_state.pop("sound", None)
 if snd and state["settings"].get("sounds", True):
