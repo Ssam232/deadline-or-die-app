@@ -224,3 +224,46 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
     return (f'<svg viewBox="-6 20 368 112" width="100%" style="max-width:{width}px" xmlns="http://www.w3.org/2000/svg">'
             f'<ellipse cx="180" cy="{GROUND + 2}" rx="168" ry="6" fill="#000" opacity=".28"/>'
             f'<g transform="translate(0,{drop})">{"".join(g)}</g>{wheels}</svg>')
+
+
+# ── top-down sprite for the focus-timer track: same paint, number and body as your Garage car ──
+TOP = {  # length, width, cabin (x0, x1) from the rear, nose taper, open cockpit
+    "sedan": (24, 11, (-5, 5), 3, False), "coupe": (23, 11, (-3, 5), 3.5, False),
+    "hatch": (21, 11, (-7, 5), 2.5, False), "roadster": (21, 10, (-3, 3), 3.5, True),
+    "super": (25, 12, (-1, 7), 4.5, False), "gt3": (26, 13, (-1, 7), 4.5, False),
+}
+
+
+def car_topdown(model_body: str, color: str, number, parts: dict) -> str:
+    """SVG <g> content centred on (0,0), nose pointing +x. Rear wing from aero 3+ (always on a GT3); wider tyres
+    from tyres 3+; a stripe from engine 4+."""
+    L, W, (c0, c1), taper, open_ = TOP.get(model_body, TOP["sedan"])
+    p = {k: int(v) for k, v in (parts or {}).items()}
+    gt3 = model_body == "gt3"
+    h, w = L / 2, W / 2
+    tw = 1.4 if p.get("tires", 0) >= 3 or gt3 else 1.0
+    num = html.escape(str(number))[:3]
+    out = []
+    for x in (-h + 4.5, h - 5):  # tyres peeking out at the four corners
+        for y in (-w - tw + .6, w - .6):
+            out.append(f'<rect x="{x - 2.4:.1f}" y="{y:.1f}" width="4.8" height="{tw:.1f}" rx=".6" fill="#0e1015"/>')
+    body = (f"M{-h:.1f},{-w + 1.5:.1f} Q{-h:.1f},{-w:.1f} {-h + 2:.1f},{-w:.1f} L{h - taper:.1f},{-w:.1f} "
+            f"Q{h:.1f},{-w + 1:.1f} {h:.1f},{-w + 3:.1f} L{h:.1f},{w - 3:.1f} Q{h:.1f},{w - 1:.1f} {h - taper:.1f},{w:.1f} "
+            f"L{-h + 2:.1f},{w:.1f} Q{-h:.1f},{w:.1f} {-h:.1f},{w - 1.5:.1f} Z")
+    out.append(f'<path d="{body}" fill="{color}" stroke="#0d0e10" stroke-width=".6"/>')
+    if p.get("engine", 0) >= 4 or gt3:
+        out.append(f'<rect x="{-h + 1:.1f}" y="-.9" width="{L - 2:.1f}" height="1.8" fill="#ffffff" opacity=".85"/>')
+    if open_:
+        out.append(f'<rect x="{c0:.1f}" y="{-w + 2:.1f}" width="{c1 - c0:.1f}" height="{W - 4:.1f}" rx="1.5" fill="#14161c"/>')
+        out.append(f'<rect x="{c1 - .6:.1f}" y="{-w + 1.6:.1f}" width="1.2" height="{W - 3.2:.1f}" rx=".5" fill="#9fb3c8"/>')
+    else:
+        out.append(f'<rect x="{c0:.1f}" y="{-w + 1.6:.1f}" width="{c1 - c0:.1f}" height="{W - 3.2:.1f}" rx="2" fill="#1a1e26"/>')
+        out.append(f'<rect x="{c1 - 2.2:.1f}" y="{-w + 2.2:.1f}" width="2" height="{W - 4.4:.1f}" rx=".8" fill="#8fb0cc" opacity=".55"/>')
+        out.append(f'<circle cx="{(c0 + c1) / 2 - .5:.1f}" cy="0" r="2.9" fill="#ffffff"/>'
+                   f'<text x="{(c0 + c1) / 2 - .5:.1f}" y="1.25" font-size="{3.6 if len(num) < 3 else 2.8}" '
+                   f'font-weight="800" text-anchor="middle" fill="#111" font-family="system-ui,sans-serif">{num}</text>')
+    if p.get("aero", 0) >= 3 or gt3:
+        out.append(f'<rect x="{-h - 2.2:.1f}" y="{-w - .4:.1f}" width="1.8" height="{W + .8:.1f}" rx=".5" fill="#111318"/>')
+    out.append(f'<rect x="{h - 1.3:.1f}" y="{-w + 1.6:.1f}" width="1" height="2" fill="#fff6c8"/>'
+               f'<rect x="{h - 1.3:.1f}" y="{w - 3.6:.1f}" width="1" height="2" fill="#fff6c8"/>')
+    return "".join(out)

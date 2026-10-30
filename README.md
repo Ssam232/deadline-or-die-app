@@ -10,6 +10,7 @@ app.py              Streamlit app (the game)
 notion_store.py     Notion backend: save file + synced task table + proof uploads
 nag.py              Phone nagger (GitHub Actions, every 10 min when GitHub obliges)
 alarms.py           Exact-time alarms queued on ntfy (prayers, deadline countdowns, qualifying, last calls)
+tracks.py           Real circuit outlines for the focus timer (from bacinger/f1-circuits, MIT)
 nudges.py           Work-hour focus nudges with a ▶️ Start-the-timer button
 notify.py           ntfy push helper
 .github/workflows/nag.yml
@@ -118,7 +119,7 @@ Anti-inflation: tasks finished within 10 min of creating pay 25% · over 10 clai
 - Timer: pick a task, 25/50/60/90/120 min of work, log it. Counts toward contracts and the +15% verified bonus.
 - Start a timer on any open task, or pick **✏️ New task…** and type what you're doing (blank = "Focus session"): it becomes a task due tonight and the timer is its proof.
 - **🌊 In the zone?** In the last 10 minutes of a session (or once it's done) a button adds +15 min, up to +60. Minutes you actually work past the original plan pay a small flow bonus (+1 per 3 min, max +20), and the whole thing logs as one block, so 50 + 15 counts as the Lounge's 1-hour block.
-- Running timer: a little circuit, a different one most sessions (Bow River Oval, Foothills Chicane, Rockies Ring, Kananaskis Esses, Glenmore Bowl, Nose Hill Hairpin), name in small print top-left. Your car laps it as you work (the trail is time done, teal marks are pit windows between stints), pulls into the 🔧 pit box on breaks, stops under a 🟡 yellow flag with hazards blinking when paused, and parks on the 🏁 line when the session is complete (overtime counts up in red). **⏸️ Pause** costs 2, 4, 6… coins per pause, paused time doesn't count, and a pause over 20 min ends the session (logging what you did). **☕ Skip break** jumps to the next work block.
+- Running timer: **your own car** (same paint, number and body as the Garage, wing once aero is upgraded) laps a **real circuit**: the 2026 F1 calendar plus WEC venues (Monaco, Suzuka, Spa, Monza, Baku, the Nürburgring…), a different one most sessions, with the name and length in small print. The trail is time done, teal marks are pit windows; on breaks the car pulls into the pits beside the start line; a pause is a 🟡 yellow flag; the 🏁 line marks the finish. Circuit outlines from [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) (MIT), unofficial.
 - 🍅 Breaks: pick **25/5 pomodoro**, **50/10**, or a custom *break at N min* interval (remembered). The clock turns blue on breaks and beeps at each switch; only work minutes are logged, so breaks never pad the receipt.
 - Contracts: 3 rotating weekly challenges, big payouts.
 - Lounge: blackjack + snake eyes. Opens after you finish a task worth 1h+ or run a single 1h focus block that day — and all day on weekends; max bet 50, 15 hands/day, closes at +200 or −300. House edge ~6% (blackjack) / ~17% (dice).
