@@ -140,7 +140,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
                                            "coins and the safety car picks your task. Takes 30 seconds."),
             (10, 5, "🚦 10 MIN TO QUALIFY", "Open the app and lock in today's mission. Now.")):
         out.append(_alarm(("q", d, mins), qd - timedelta(minutes=mins), title, msg, prio, ["vertical_traffic_light"],
-                          not rest and not e.get("qualified")))
+                          not rest and not e.get("qualified") and not daily.qualify_optional(d)))
     zero = not rest and not daily.finished_on(save, d)
     for hh, mm, prio, title, msg in (
             (18, 0, 4, "⚠️ Zero finishes today", f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins "

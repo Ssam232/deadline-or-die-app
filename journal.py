@@ -118,6 +118,8 @@ def recap(save: dict, ws: date, tz, through: date | None = None) -> dict:
             "wins": [(r["date"], r["entry"]["pm"]["win"]) for r in rows if (r["entry"].get("pm") or {}).get("win")],
             "blockers": [(r["date"], r["entry"]["pm"]["blocker"]) for r in rows
                          if (r["entry"].get("pm") or {}).get("blocker")],
+            "bailouts": [(d_, ((save.get("days") or {}).get(d_.isoformat()) or {}).get("bailout", {}).get("reason", ""))
+                         for d_ in days_ if ((save.get("days") or {}).get(d_.isoformat()) or {}).get("bailout")],
             "focus_good_mood": sum(good) / len(good) if good else None,
             "focus_low_mood": sum(low) / len(low) if low else None}
 
@@ -134,6 +136,8 @@ def recap_text(r: dict) -> str:
              + f" · 📓 {r['journaled']}/7 days journaled"]
     if r["best"]:
         lines.append(f"Best day: {r['best']['date']:%A} ({r['best']['focus'] / 60:.1f} h)")
+    if r.get("bailouts"):
+        lines.append("🪂 Bailed out: " + ", ".join(f"{d_:%a} ({why})" for d_, why in r["bailouts"]))
     if r["wins"]:
         lines.append("\nWins")
         lines += [f"• {d_:%a}: {w}" for d_, w in r["wins"]]

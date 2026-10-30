@@ -24,6 +24,10 @@ DAILY_DEFAULTS = {
     "pit_stops_per_week": 1,
     "rest_days": [],           # weekday numbers, 0 = Monday
 }
+WEEKEND = (5, 6)            # Sat/Sun: qualifying is optional (still pays fuel, never costs)
+BAILOUTS_PER_WEEK = 1
+BAIL_REASONS = ["🤒 Sick", "😵 Exhausted / burnt out", "🧠 Mental health", "🚨 Emergency", "🧳 Life got in the way",
+                "✏️ Something else"]
 SAFETY_CAR_TITLE = "🚨 Safety car: 30 min of focused work on anything real"
 SETTLE_LOOKBACK_DAYS = 7
 MAX_CHARGED_ZERO_DAYS = 3   # comeback rule: returning after a long absence shouldn't bury you
@@ -78,7 +82,62 @@ def pit_stops_used(save: dict, d: date) -> int:
 
 
 def is_rest(save: dict, d: date) -> bool:
-    return d.weekday() in cfg(save)["rest_days"] or bool(peek_day(save, d).get("pit_stop"))
+    e = peek_day(save, d)
+    return d.weekday() in cfg(save)["rest_days"] or bool(e.get("pit_stop")) or bool(e.get("bailout"))
+
+
+def qualify_optional(d: date) -> bool:
+    """Weekends: sleep in. Locking in still pays fuel; not locking in costs nothing."""
+    return d.weekday() in WEEKEND
+
+
+def bailouts_used(save: dict, d: date) -> int:
+    y, w, _ = d.isocalendar()
+    return sum(1 for k, v in save.get("days", {}).items()
+               if v.get("bailout") and date.fromisoformat(k).isocalendar()[:2] == (y, w))
+
+
+def bailouts_left(save: dict, d: date) -> int:
+    return max(0, BAILOUTS_PER_WEEK - bailouts_used(save, d))
+
+
+def bail_preview(save: dict, now: datetime) -> list[dict]:
+    """Open tasks due today that a bailout would push to tomorrow (the safety car is simply cancelled)."""
+    out = []
+    for t in save.get("tasks", []):
+        if t.get("status") != "open":
+            continue
+        dl = datetime.fromisoformat(t["deadline"])
+        dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
+        if dl.astimezone(now.tzinfo).date() <= now.date():
+            out.append(t)
+    return out
+
+
+def bail_out(save: dict, now: datetime, reason: str, why: str) -> dict | None:
+    """🪂 Pull the cord on today, any time of day. Today stops counting: no zero-day, dailies aren't charged, the
+    day streak is frozen (not broken, not grown), today's open work moves to tomorrow at the same time (the
+    safety car is cancelled). Once a week. Penalties already taken today stay taken."""
+    today = now.date()
+    if bailouts_left(save, today) <= 0 or peek_day(save, today).get("bailout"):
+        return None
+    moved, cancelled = [], []
+    for t in bail_preview(save, now):
+        if t.get("title", "").startswith("🚨 Safety car"):
+            t.update(status="cancelled", cancelled_at=now.isoformat())
+            cancelled.append(t["title"])
+            continue
+        dl = datetime.fromisoformat(t["deadline"])
+        dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
+        new = max(dl + timedelta(days=1), datetime.combine(today + timedelta(days=1), dtime(12, 0), now.tzinfo))
+        t["deadline"] = min(new, datetime.combine(today + timedelta(days=1), dtime(23, 59), now.tzinfo)).isoformat()
+        t["bailed_from"] = today.isoformat()
+        if t.get("mission_day") == today.isoformat():
+            t.pop("mission_day", None)
+        moved.append(t["title"])
+    e = day(save, today)
+    e["bailout"] = {"reason": reason, "why": why.strip(), "at": now.isoformat(), "moved": moved}
+    return {"moved": moved, "cancelled": cancelled}
 
 
 def qualify_deadline(save: dict, d: date, tz) -> datetime:
@@ -93,8 +152,12 @@ def status(save: dict, now: datetime) -> dict:
     m = mission(save, today)
     return {
         "rest": is_rest(save, today),
+        "bailout": e.get("bailout"),
+        "optional": qualify_optional(today),
+        "bailouts_left": bailouts_left(save, today),
         "qualified": bool(e.get("qualified")),
-        "missed": bool(e.get("q_missed")) or (not e.get("qualified") and now >= qualify_deadline(save, today, now.tzinfo)),
+        "missed": bool(e.get("q_missed")) or (not e.get("qualified") and not qualify_optional(today)
+                                               and now >= qualify_deadline(save, today, now.tzinfo)),
         "deadline": qualify_deadline(save, today, now.tzinfo),
         "start_at": e.get("start_at"),
         "mission": m,
@@ -144,7 +207,7 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
                     "one small mission today.")
 
     e = day(save, today)
-    if (not is_rest(save, today) and not e.get("qualified") and not e.get("q_missed")
+    if (not is_rest(save, today) and not qualify_optional(today) and not e.get("qualified") and not e.get("q_missed")
             and now >= qualify_deadline(save, today, now.tzinfo)):
         e["q_missed"] = True
         bank(save, -c["qualify_penalty"], "🚦 Missed qualifying")

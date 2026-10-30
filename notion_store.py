@@ -21,8 +21,8 @@ TASKS_DB_TITLE = "🏁 Deadline or Die — Tasks"
 SAVE_PAGE_TITLE = "🏁 Deadline or Die — Save file"
 NAG_PAGE_TITLE = "📣 Deadline or Die — Nagger"
 
-STATUS = {"open": "Open", "done": "Done", "failed": "Failed", "redeemed": "Redeemed"}
-STATUS_COLORS = {"Open": "blue", "Done": "green", "Failed": "red", "Redeemed": "yellow"}
+STATUS = {"open": "Open", "done": "Done", "failed": "Failed", "redeemed": "Redeemed", "cancelled": "Cancelled"}
+STATUS_COLORS = {"Open": "blue", "Done": "green", "Failed": "red", "Redeemed": "yellow", "Cancelled": "gray"}
 SIZES = {"Quick": "gray", "Medium": "blue", "Big": "orange", "Boss": "red"}
 CATEGORY_NAMES = {"deep": "🧠 Deep work", "admin": "📨 Academic admin", "health": "💪 Health & training",
                   "life": "🧺 Life admin", "show": "🪑 Showing up"}
@@ -128,7 +128,7 @@ def _tasks_db_schema(parent: str) -> dict:
 
 
 DASHBOARD_MARK = "PIT WALL"
-TASK_ICONS = {"open": "⏱️", "done": "🏁", "failed": "💀", "redeemed": "🩹"}
+TASK_ICONS = {"open": "⏱️", "done": "🏁", "failed": "💀", "redeemed": "🩹", "cancelled": "🪂"}
 HOW_IT_WORKS = [
     "Add a row below with a Due date (and a Size + Consequence if you like). It joins the game next time the app "
     "opens, or the nagger sees it within 30 min.",

@@ -2321,9 +2321,25 @@ def render_today(state: dict) -> None:
     c = daily.cfg(state)
     with st.container(border=True, key="live_card"):
         render_coming_up(state)
+        if stt["bailout"]:
+            b_ = stt["bailout"]
+            st.markdown("### 🪂 Bailed out")
+            st.caption(f"{b_['reason']} · {b_['why']}")
+            st.markdown("<div class='dod-pills'><span>No zero-day</span><span>Dailies not charged</span>"
+                        "<span>Streak frozen</span>" + (f"<span>{len(b_['moved'])} moved to tomorrow</span>"
+                                                        if b_.get("moved") else "") + "</div>", unsafe_allow_html=True)
+            st.caption("Rest, reset. Prayer reminders keep going; everything else is quiet until tomorrow.")
+            return
         if stt["rest"]:
             st.markdown("### 🛌 Pit stop day")
             st.caption("Recharge. Nothing counts against you today. Back on the grid tomorrow.")
+            return
+        if not stt["qualified"] and stt["optional"]:
+            st.markdown("### 🚦 Weekend: qualifying is optional")
+            st.caption(f"Sleep in. Lock in a mission any time today for +{c['qualify_fuel']} fuel. Not locking in "
+                       "costs nothing.")
+            render_qualify_form(state)
+            _bail_button(state, stt)
             return
         if not stt["qualified"]:
             left = stt["deadline"] - n_
@@ -2340,13 +2356,15 @@ def render_today(state: dict) -> None:
                     st.markdown("### 🚦 Qualifying missed")
                     st.caption("The safety car is out. You can still lock in your own mission.")
             render_qualify_form(state)
-            if stt["pit_stops_left"]:
-                if st.checkbox("I'm sick / genuinely need a rest day", key="pit_chk") and \
+            if stt["pit_stops_left"] and left.total_seconds() > 0:
+                if st.checkbox("Pull out before qualifying (sick / too tired to start)", key="pit_chk") and \
                         st.button(f"🛌 Take a pit stop ({stt['pit_stops_left']} left this week)"):
                     daily.pit_stop(state, n_)
                     save_state(state)
                     flash("🛌 Pit stop. Rest properly — the grid forms again tomorrow.", "info")
                     st.rerun()
+            else:
+                _bail_button(state, stt)
             return
         m, done = stt["mission"], stt["mission_done"]
         open_m = [t for t in m if t["status"] == "open"]
@@ -2394,11 +2412,78 @@ def render_today(state: dict) -> None:
                        "Do the smallest one now.")
         with st.expander("➕ Add to today's mission"):
             render_qualify_form(state)
+        _bail_button(state, stt)
 
 
 # ── 📓 journal: morning check-in, evening questionnaire, weekly recap ──
 def _scale_pills(label: str, opts: dict, key: str, default=None):
     return st.pills(label, list(opts), default=default, key=key, format_func=lambda k: opts[k])
+
+
+def _bail_button(state: dict, stt: dict) -> None:
+    left = stt.get("bailouts_left", 0)
+    if left:
+        if st.button("🪂 Rough day? Bail out", type="tertiary", key="bail_open",
+                     help=f"Pull the cord on today, any time. {left} left this week."):
+            st.session_state.pop("bail_s2", None)
+            st.session_state["bail_show"] = True
+        if st.session_state.get("bail_show"):
+            _bail_dialog(state)
+    else:
+        st.caption("🪂 This week's bailout is used.")
+
+
+def _bail_close() -> None:
+    for k in ("bail_show", "bail_s2"):
+        st.session_state.pop(k, None)
+
+
+@st.dialog("🪂 Bail out of today", on_dismiss=_bail_close)
+def _bail_dialog(state: dict) -> None:
+    n_ = now()
+    st.caption(f"Once a week ({daily.bailouts_left(state, n_.date())} left). Today stops counting against you, "
+               "but it should cost you a moment of honesty.")
+    reason = st.pills("1 · What's going on?", daily.BAIL_REASONS, key="bail_r")
+    if not reason:
+        return
+    small = sorted((t for t in state["tasks"] if t["status"] == "open"), key=lambda t: t.get("minutes") or 30)
+    if not st.session_state.get("bail_s2"):
+        st.markdown("**2 · Before you pull the cord**")
+        if small and reason not in ("🚨 Emergency", "🤒 Sick"):
+            t = small[0]
+            st.caption(f"Could you do just 10 minutes of **{t['title']}** instead? Ten minutes keeps the day alive.")
+            c1, c2 = st.columns(2)
+            if c1.button("⏱️ Do 10 min instead", type="primary", use_container_width=True, key="bail_10"):
+                _start_timer(state, t, 10)
+                _bail_close()
+                flash(f"⏱️ 10 minutes on **{t['title']}**. That's all. Then decide.", sound="win")
+                st.rerun()
+            c2.button("No, I need out", use_container_width=True, key="bail_no",
+                      on_click=lambda: st.session_state.__setitem__("bail_s2", True))
+            return
+        st.session_state["bail_s2"] = True
+    why = st.text_area("3 · In a sentence: what happened, and what will you do instead?", key="bail_why",
+                       placeholder="e.g. Car died on the highway, spent the day sorting the tow. Early night, "
+                                   "restart tomorrow at 9.", max_chars=300)
+    moving = [t for t in daily.bail_preview(state, n_) if not t["title"].startswith("🚨 Safety car")]
+    st.markdown("**4 · What happens**")
+    st.markdown("- No zero-day penalty; today's dailies aren't charged\n- Your day streak is frozen (not broken)\n"
+                + (f"- Moves to tomorrow: {', '.join(t['title'] for t in moving)}\n" if moving else "")
+                + "- Penalties already taken today stay taken\n- Uses this week's bailout")
+    conf = st.text_input("Type BAIL OUT to confirm", key="bail_conf")
+    ok = len((why or "").strip()) >= 25 and conf.strip().upper() == "BAIL OUT"
+    if len((why or "").strip()) < 25:
+        st.caption("A real sentence, please (25+ characters).")
+    if st.button("🪂 Pull the cord", type="primary", disabled=not ok, use_container_width=True, key="bail_go"):
+        res = daily.bail_out(state, n_, reason, why)
+        if res is None:
+            st.error("No bailout left this week.")
+            return
+        save_state(state)
+        _bail_close()
+        flash("🪂 Bailed out. Today doesn't count against you" + (f"; {len(res['moved'])} task(s) moved to tomorrow"
+                                                                 if res["moved"] else "") + ". Rest, reset.", "info")
+        st.rerun()
 
 
 def render_checkin(state: dict) -> None:

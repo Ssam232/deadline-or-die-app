@@ -143,7 +143,7 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
         dm.clear()
         dm["date"] = now.date().isoformat()
     out = []
-    if not stt["qualified"]:
+    if not stt["qualified"] and not stt["optional"]:
         left = (stt["deadline"] - now).total_seconds() / 60
         if 0 < left <= 60:
             pass  # the 60/30/10-min countdown is queued on ntfy (alarms.py)
@@ -339,7 +339,9 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         if save.get("tasks") is not None:
             stt = daily.status(save, now)
             if stt["rest"]:
-                body += "\n\n🛌 Pit stop day. Rest."
+                body += ("\n\n🪂 Bailed out today. Rest, reset." if stt.get("bailout") else "\n\n🛌 Pit stop day. Rest.")
+            elif not stt["qualified"] and stt["optional"]:
+                body += "\n\n🚦 Weekend: qualifying is optional. Lock in any time today for +15 fuel."
             elif not stt["qualified"]:
                 body += f"\n\n🚦 Qualifying closes {stt['deadline']:%I:%M %p} — lock in today's mission."
             body += f"\n📅 Day streak: {stt['day_streak']}"
