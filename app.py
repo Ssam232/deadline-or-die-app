@@ -75,6 +75,7 @@ import locks as LK
 import pomo as PM
 import prayers as PR
 import alarms as AL
+import journal as J
 import nudges as NU
 import prep as P
 import quickparse as Q
@@ -1999,6 +2000,9 @@ def _q_keep(state: dict | None) -> None:
     if state is None:
         return
     items = [list(x) for x in st.session_state.get("q_pending", [])]
+    cur = state.get("draft") or {}
+    if not items and cur.get("date", "") > now().date().isoformat():
+        return  # tomorrow's "one thing" from tonight's journal: leave it alone
     new = {"date": now().date().isoformat(), "items": items} if items else None
     if state.get("draft") != new:
         state["draft"] = new
@@ -2340,6 +2344,9 @@ def render_today(state: dict) -> None:
         if stt["start_at"]:
             pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
         pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
+        _am = J.peek(state, n_.date()).get("am")
+        if _am:
+            pills.append(f"☀️ {J.MOODS[_am['mood']]} {J.ENERGY[_am['energy']]}")
         st.markdown(
             f"<div class='dod-mh'><div class='dod-mt'>🏁 Today's mission</div><div class='dod-mb'>{len(done)}/{len(m)}"
             + (f" · {_hm_left(left_min)} to go" if open_m else " · done") + "</div></div>"
@@ -2374,6 +2381,148 @@ def render_today(state: dict) -> None:
                        "Do the smallest one now.")
         with st.expander("➕ Add to today's mission"):
             render_qualify_form(state)
+
+
+# ── 📓 journal: morning check-in, evening questionnaire, weekly recap ──
+def _scale_pills(label: str, opts: dict, key: str, default=None):
+    return st.pills(label, list(opts), default=default, key=key, format_func=lambda k: opts[k])
+
+
+def render_checkin(state: dict) -> None:
+    """One tap on the way in. Only before 3 PM and only until you've answered."""
+    d = now().date()
+    if J.peek(state, d).get("am") or now().hour >= 15:
+        return
+    with st.container(border=True, key="checkin"):
+        st.markdown("<div class='dod-ci'>☀️ <b>How are you starting today?</b> <span class='m'>+2 · one tap each</span>"
+                    "</div>", unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            mood = _scale_pills("Mood", J.MOODS, "ci_mood")
+        with c2:
+            energy = _scale_pills("Energy", J.ENERGY, "ci_energy")
+        if mood and energy:
+            got = J.check_in(state, d, mood, energy, now(), bank)
+            save_state(state)
+            flash(f"☀️ Logged: {J.MOODS[mood]} {J.MOOD_WORDS[mood]}, energy {J.ENERGY[energy]}"
+                  + (f" · +{got}" if got else ""))
+            st.rerun()
+
+
+def _journal_form(state: dict, d, key: str) -> None:
+    pm = J.peek(state, d).get("pm") or {}
+    with st.form(f"jf_{key}", border=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            mood = _scale_pills("How was the day?", J.MOODS, f"{key}_mood", pm.get("mood"))
+        with c2:
+            energy = _scale_pills("Energy now", J.ENERGY, f"{key}_energy", pm.get("energy"))
+        ans = {}
+        for k, q, ph in J.QUESTIONS:
+            ans[k] = st.text_input(q, value=pm.get(k, ""), placeholder=ph, key=f"{key}_{k}", max_chars=240)
+        to_q = st.checkbox("Put “the one thing” into tomorrow's mission queue", value=True, key=f"{key}_toq")
+        paid = pm.get("paid", 0)
+        sub = st.form_submit_button("📓 Save the day" + (f" · up to +{J.PM_MAX - paid}" if paid < J.PM_MAX else ""),
+                                    type="primary", use_container_width=True)
+    if sub:
+        if not (mood and energy):
+            st.error("Pick a mood and an energy level first.")
+            return
+        got = J.close_day(state, d, {**ans, "mood": mood, "energy": energy}, now(), bank)
+        tmr = (ans.get("tomorrow") or "").strip()
+        if to_q and tmr and d == now().date():
+            p_ = Q.parse(tmr, now() + timedelta(days=1))
+            state["draft"] = {"date": (d + timedelta(days=1)).isoformat(),
+                              "items": [[tmr, p_["minutes"], p_["category"], False]]}
+        save_state(state)
+        flash(f"📓 Day saved{f' · +{got}' if got else ''}. {J.MOODS[mood]} — see it any time in Stats → Journal.")
+        st.rerun()
+
+
+def render_close_day(state: dict) -> None:
+    """From 5 PM: a short end-of-day questionnaire. Pays a little, once."""
+    d = now().date()
+    if now().hour < J.PM_OPENS:
+        return
+    pm = J.peek(state, d).get("pm")
+    if pm:
+        st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div>📓 Day journaled "
+                    f"{J.MOODS[pm['mood']]} <span class='m'>· +{pm.get('paid', 0)} · edit in Stats → Journal</span></div>"
+                    "</div>", unsafe_allow_html=True)
+        return
+    with st.container(border=True, key="closeday"):
+        st.markdown(f"### 📓 Close the day")
+        st.caption(f"Two taps and a few lines. +{J.PM_BASE} for the taps, +{J.PM_PER_ANSWER} per real answer "
+                   f"(up to +{J.PM_MAX}). It all lands in Stats → Journal and your weekly recap.")
+        _journal_form(state, d, "cd")
+
+
+def render_journal(state: dict) -> None:
+    today = now().date()
+    ws_this = J.week_start(today)
+    pick = st.segmented_control("Week", ["This week", "Last week"], default="This week", key="jr_week",
+                                label_visibility="collapsed") or "This week"
+    ws = ws_this if pick == "This week" else ws_this - timedelta(days=7)
+    r = J.recap(state, ws, TZ, through=today if pick == "This week" else None)
+    end = ws + timedelta(days=6)
+    st.markdown(f"#### 🗓️ {'Week so far' if pick == 'This week' and today < end else 'Weekly recap'} · "
+                f"{ws:%b} {ws.day}–{end:%b} {end.day}")
+    st.markdown("<div class='dod-pills'>"
+                f"<span>⏱️ <b>{r['focus_min'] / 60:.1f} h</b> focused</span><span>✅ <b>{r['done']}</b> done</span>"
+                f"<span>Mood <b>{J.mood_face(r['mood_avg'])}</b>"
+                + (f" {r['mood_avg']:.1f}/5" if r["mood_avg"] is not None else "") + "</span>"
+                f"<span>📓 <b>{r['journaled']}</b>/7 journaled</span>"
+                + (f"<span>🏆 Best: <b>{r['best']['date']:%a}</b> {r['best']['focus'] / 60:.1f} h</span>" if r["best"] else "")
+                + "</div>", unsafe_allow_html=True)
+    import altair as alt
+    acc = accent(state)[0]
+    df = pd.DataFrame([{"Day": f"{x['date']:%a}", "i": k, "Focus h": round(x["focus"] / 60, 2),
+                        "Mood": x["mood"], "Face": J.mood_face(x["mood"]) if x["mood"] is not None else ""}
+                       for k, x in enumerate(r["rows"])])
+    if not df.empty:
+        base = alt.Chart(df).encode(x=alt.X("Day:N", sort=alt.SortField("i"), title=None,
+                                             axis=alt.Axis(labelAngle=0)))
+        bars = base.mark_bar(cornerRadiusEnd=4, color=acc, size=26).encode(
+            y=alt.Y("Focus h:Q", title="Focus hours"), tooltip=["Day", "Focus h", "Mood"])
+        faces = base.mark_text(dy=-12, fontSize=18).encode(y=alt.Y("Focus h:Q"), text="Face:N")
+        _chart((bars + faces).properties(height=200))
+    if r["focus_good_mood"] is not None and r["focus_low_mood"] is not None:
+        st.caption(f"On 🙂/😄 days you focused {r['focus_good_mood']:.0f} min; on 😕/😫 days, "
+                   f"{r['focus_low_mood']:.0f} min.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**🏆 Wins**")
+        st.markdown("\n".join(f"- *{d_:%a}* {html.escape(w)}" for d_, w in r["wins"]) or "<span class='m'>None "
+                    "written yet.</span>", unsafe_allow_html=True)
+    with c2:
+        st.markdown("**🧱 What got in the way**")
+        st.markdown("\n".join(f"- *{d_:%a}* {html.escape(b)}" for d_, b in r["blockers"]) or "<span class='m'>"
+                    "Nothing logged.</span>", unsafe_allow_html=True)
+    with st.expander("📋 Recap to paste"):
+        st.code(J.recap_text(r), language=None)
+    st.markdown("#### 📓 Days")
+    if not J.peek(state, today).get("pm"):
+        with st.expander(f"✏️ Today, {today:%a %b} {today.day} · not journaled yet"):
+            _journal_form(state, today, "jt")
+    ents = J.entries(state)
+    if not ents:
+        st.caption("Your check-ins and evening entries land here, one card per day.")
+    for d_, e in ents[:30]:
+        am, pm = e.get("am") or {}, e.get("pm") or {}
+        done = J.done_on(state, d_, TZ)
+        head = (f"{d_:%a %b} {d_.day} · " + (f"{J.MOODS[am['mood']]}" if am else "·") + " → "
+                + (f"{J.MOODS[pm['mood']]}" if pm else "·") + f" · ⏱️ {J.focus_on(state, d_) / 60:.1f} h · ✅ {len(done)}")
+        with st.expander(head):
+            if d_ == today and pm:
+                _journal_form(state, d_, f"je_{d_.isoformat()}")
+                continue
+            for k, q, _ in J.QUESTIONS:
+                if pm.get(k):
+                    st.markdown(f"**{q}**  \n{html.escape(pm[k])}")
+            if done:
+                st.caption("Finished: " + " · ".join(t["title"] for t in done[:8]))
+            if not pm:
+                st.caption("No evening entry that day.")
 
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
@@ -3069,6 +3218,9 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+.dod-ci{margin:-.2rem 0 .1rem}.dod-ci .m{color:var(--muted);font-size:.85rem;margin-left:4px}
+.st-key-checkin [data-testid="stButtonGroup"] button,.st-key-closeday [data-testid="stButtonGroup"] button,
+[class*="st-key-jf_"] [data-testid="stButtonGroup"] button{font-size:1.15rem;min-width:2.6rem}
 /* working… : a slim racing-stripe bar while the app thinks (only shows if it takes > ~0.2 s) */
 [data-testid="stApp"][data-test-script-state="running"]::before{content:"";position:fixed;top:0;left:0;right:0;height:3px;
   z-index:1000100;background:linear-gradient(90deg,transparent,var(--y),transparent);background-size:40% 100%;
@@ -3399,7 +3551,9 @@ with tab_today:
   if tab_today.open is not False:
     c_main, c_rail = st.columns([1.55, 1], gap="large")
     with c_main:
+        render_checkin(state)
         render_today(state)
+        render_close_day(state)
         render_task_board(state, open_tasks)
     with c_rail:
         render_timer(state)
@@ -3584,11 +3738,13 @@ def _hlabel(h: int) -> str:
 
 with tab_stats:
   if tab_stats.open is not False:
-    stats_view = st.segmented_control("Stats view", ["📊 Numbers", "📸 Scrapbook"], default="📊 Numbers",
+    stats_view = st.segmented_control("Stats view", ["📊 Numbers", "📸 Scrapbook", "📓 Journal"], default="📊 Numbers",
                                       key="stats_view", label_visibility="collapsed") or "📊 Numbers"
     if stats_view == "📸 Scrapbook":
         render_scrapbook(state)
-  if tab_stats.open is not False and stats_view != "📸 Scrapbook":
+    elif stats_view == "📓 Journal":
+        render_journal(state)
+  if tab_stats.open is not False and stats_view == "📊 Numbers":
     import altair as alt
     _acc = accent(state)[0]
     VIZ = {**VIZ, "normal": _acc, "light": _mix(_acc, "#ffffff", .55)}

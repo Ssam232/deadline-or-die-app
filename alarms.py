@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 
 import dailies as DL
 import daily
+import journal as J
 import nudges as NU
 import prayers as PR
 from notify import SERVER
@@ -154,6 +155,18 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
         out.append(_alarm(("dl", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
                           title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio,
                           ["repeat"], bool(stake) and not rest))
+    # 📓 evening journal reminder — cancelled once you've closed the day
+    jat = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=21)
+    out.append(_alarm(("journal", d), jat, "📓 Close the day",
+                      f"Two taps and a few lines: how it went, the win, tomorrow's one thing. Up to +{J.PM_MAX}.",
+                      3, ["notebook"], not J.peek(save, d).get("pm")))
+    # 🗓️ Sunday-evening weekly recap
+    if d.weekday() == J.RECAP_DAY:
+        r = J.recap(save, J.week_start(d), now.tzinfo, through=now.date())
+        rat = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=J.RECAP_HOUR)
+        out.append(_alarm(("recap", d), rat, "🗓️ Your week",
+                          f"{r['focus_min'] / 60:.1f} h focused · {r['done']} done · mood {J.mood_face(r['mood_avg'])}. "
+                          "Stats → Journal for the full recap.", 3, ["calendar"], True))
     return out
 
 

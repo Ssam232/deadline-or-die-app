@@ -1,7 +1,8 @@
 """
 📊 Analytics that feed the engine.
 
-Reads your history (focus sessions + finished tasks) and works out when you actually work.
+Reads your history and works out when you actually work. Hours come from ⏱️ focus sessions only (claiming
+a task or ticking a daily isn't working); finished tasks feed the counts and categories.
 The game uses it:
   • ⏱️ focus challenges + ⚡ live events land in your DEAD ZONES — hours you're up and about but not
     working (i.e. goofing off) — because that's where a nudge buys the most real work.
@@ -68,9 +69,7 @@ def history(save: dict, as_of: date, tz, days: int = WINDOW_DAYS) -> dict:
             active.add(c.date())
             if t.get("status") == "done" and c <= _dt(t["deadline"], tz):
                 on_time += 1
-            if t["id"] not in focused_tasks:  # no timer: assume the work happened just before you proved it
-                _spread(hour_min, wd_hour, c - timedelta(minutes=mins), mins)
-                first_hour[c.date()] = min(first_hour.get(c.date(), 24), (c - timedelta(minutes=mins)).hour)
+            # when you WORK comes from timer sessions only: claiming a task or ticking a daily isn't working
         elif t.get("status") == "failed":
             f = _dt(t.get("failed_at"), tz)
             if f and lo <= f.date() < as_of:
