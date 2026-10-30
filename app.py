@@ -2973,14 +2973,26 @@ def _timer_ring(state: dict, tm: dict) -> None:
 body{{margin:0;font-family:system-ui,sans-serif;color:#ece8df;overflow:hidden}}
 .w{{display:flex;flex-direction:column;align-items:center}}
 svg{{width:100%;max-width:340px;height:auto;display:block}}
-#t{{font:700 28px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums}}
+#t{{font:700 27px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums}}
+.w{{position:relative;overflow:hidden}}
+#flag{{position:absolute;top:14%;left:-110px;width:96px;height:118px;pointer-events:none;opacity:0;z-index:5}}
+#flag i{{position:absolute;left:0;top:0;width:3px;height:118px;border-radius:2px;background:linear-gradient(#e7e9ee,#8b909c)}}
+#flag b{{position:absolute;left:3px;top:2px;width:88px;height:58px;transform-origin:left center;border-radius:0 3px 3px 0;
+  background:conic-gradient(#f2efe8 25%,#111318 0 50%,#f2efe8 0 75%,#111318 0) 0 0/14.6px 14.6px;
+  box-shadow:0 6px 18px rgba(0,0,0,.45);animation:wave .32s ease-in-out infinite alternate}}
+.fin #flag{{animation:sweep 2.6s cubic-bezier(.45,.05,.35,1) .15s forwards}}
+@keyframes sweep{{0%{{left:-110px;opacity:1}}88%{{opacity:1}}100%{{left:calc(100% + 20px);opacity:0}}}}
+@keyframes wave{{from{{transform:perspective(160px) rotateY(-14deg) skewY(-5deg)}}to{{transform:perspective(160px) rotateY(12deg) skewY(5deg)}}}}
+.fin #t{{animation:pulse 1.2s ease-in-out 3}}
+@keyframes pulse{{50%{{opacity:.45}}}}
 #p{{font-size:10.5px;fill:#8b909c;letter-spacing:.06em;text-transform:uppercase}}
 #s{{font-size:12.5px;color:#8b909c;margin-top:1px;text-align:center;min-height:16px}}
 #halo{{opacity:0}} .blink #halo{{animation:hz 1s steps(2,end) infinite}}
 @keyframes hz{{0%{{opacity:.9}}50%{{opacity:0}}}}
 #crew{{opacity:0}} .pit #crew{{opacity:1;animation:gun .35s linear infinite}}
 @keyframes gun{{50%{{opacity:.25}}}}
-@media (prefers-reduced-motion:reduce){{.blink #halo,.pit #crew{{animation:none}}}}
+@media (prefers-reduced-motion:reduce){{.blink #halo,.pit #crew,#flag b,.fin #t{{animation:none}}
+  .fin #flag{{animation:none;opacity:1;left:auto;right:6px;transform:scale(.4);transform-origin:top right}}}}
 </style>
 <div class="w" id="w">
 <svg viewBox="0 0 300 172" aria-label="Focus session progress">
@@ -2993,10 +3005,10 @@ svg{{width:100%;max-width:340px;height:auto;display:block}}
  <g id="sf"></g>
  <g id="crew"><circle id="c1" r="1.4" fill="#2ec4b6"/><circle id="c2" r="1.4" fill="#2ec4b6"/></g>
  <text id="pitl" font-size="6" font-weight="700" fill="#2ec4b6" text-anchor="middle" opacity="0">PIT</text>
- <text id="t" x="150" y="148" text-anchor="middle"></text>
- <text id="p" x="150" y="164" text-anchor="middle"></text>
+ <text id="t" x="146" y="164" text-anchor="end"></text>
+ <text id="p" x="154" y="160" text-anchor="start"></text>
  <g id="car"><circle id="halo" r="10" fill="#f5c518"/>{sprite}</g>
-</svg><div id="s"></div></div>
+</svg><div id="flag"><i></i><b></b></div><div id="s"></div></div>
 <script>
 const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},LIM={limit},ACC='{acc}';
 const TICKS=[{ticks}],EXT={ext};
@@ -3038,7 +3050,7 @@ function frame(){{
  const pit=ph==='break'&&!PA;
  place(ph==='done'?0:f,pit);
  trail.setAttribute('stroke-dasharray',(L*Math.min(1,f))+' 99999');
- w.className=PA?'w blink':pit?'w pit':'w';
+ w.className='w'+(PA?' blink':'')+(pit?' pit':'')+(ph==='done'&&!PA?' fin':'');
  pl.setAttribute('opacity',pit?1:0);
  const sec=Math.floor(now/1000);
  if(sec!==shown){{shown=sec;
