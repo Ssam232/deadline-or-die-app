@@ -105,22 +105,28 @@ def explain(pos: int | str, gap: float, track: str, cond: int, heat: int, eff: d
 
 
 def replay_html(track: str, history: list[list[float]], names: list[str], colors: list[str], you_idx: int,
-                laps: int, ticker: list[tuple[int, str]], dnf_tick: int | None, seconds: float = 10) -> str:
+                laps: int, ticker: list[tuple[int, str]], dnf_tick: int | None, seconds: float = 10,
+                start_ms: int | None = None) -> str:
+    """The race plays against the wall clock from `start_ms`, so a page refresh resumes it (or shows the finish)
+    instead of starting over."""
     finish = max(max(row) for row in history) or 1
     data = {"h": [[round(d / finish, 4) for d in row] for row in history], "names": names, "colors": colors,
-            "you": you_idx, "laps": laps, "ticker": ticker, "dnf": dnf_tick, "ms": int(seconds * 1000)}
+            "you": you_idx, "laps": laps, "ticker": ticker, "dnf": dnf_tick, "ms": int(seconds * 1000),
+            "start": int(start_ms) if start_ms else None}
     path = TRACK_SHAPES.get(track, TRACK_SHAPES["Parking Lot Sprint"])
     return f"""<div style="font-family:system-ui,sans-serif;color:#eee;background:#0d0f14;border-radius:12px;padding:8px">
 <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
 <svg id="trk" viewBox="0 0 320 190" style="flex:1 1 260px;max-width:420px">
   <path d="{path}" fill="none" stroke="#2b2e36" stroke-width="16" stroke-linejoin="round"/>
   <path id="line" d="{path}" fill="none" stroke="#555a66" stroke-width="1.2" stroke-dasharray="4 5"/>
+  <g id="sf"></g>
   <g id="cars"></g>
 </svg>
 <div style="flex:0 0 150px;font-size:12px">
   <div id="lap" style="font-weight:700;margin-bottom:4px">LAP 1/{laps}</div><ol id="board" style="margin:0;padding-left:18px"></ol>
 </div></div>
-<div id="tick" style="font-size:12.5px;line-height:1.45;margin-top:6px;max-height:120px;overflow:auto"></div></div>
+<div id="tick" style="font-size:12.5px;line-height:1.45;margin-top:6px;max-height:120px;overflow:auto"></div>
+<a id="again" href="#" style="display:none;font-size:12px;color:#8b909c;margin-top:4px">↻ Watch again</a></div>
 <script>
 const D={json.dumps(data)};
 const line=document.getElementById('line'),L=line.getTotalLength(),g=document.getElementById('cars');
@@ -128,6 +134,18 @@ const ns='http://www.w3.org/2000/svg',dots=[];
 D.names.forEach((n,i)=>{{const c=document.createElementNS(ns,'circle');c.setAttribute('r',i===D.you?6:4.2);
 c.setAttribute('fill',D.colors[i]);c.setAttribute('stroke',i===D.you?'#fff':'#111');c.setAttribute('stroke-width',i===D.you?2:1);
 g.appendChild(c);dots.push(c);}});
+// chequered start/finish line across the track where the lap counter ticks over
+(function(){{const a=line.getPointAtLength(0),b=line.getPointAtLength(1),ang=Math.atan2(b.y-a.y,b.x-a.x)*180/Math.PI;
+ const sf=document.getElementById('sf');sf.setAttribute('transform','translate('+a.x+','+a.y+') rotate('+ang+')');
+ const bd=document.createElementNS(ns,'rect');bd.setAttribute('x',-5.5);bd.setAttribute('y',-10);bd.setAttribute('width',11);
+ bd.setAttribute('height',20);bd.setAttribute('fill','#f2efe8');bd.setAttribute('rx',1);sf.appendChild(bd);
+ for(let r=-3;r<3;r++)for(let c=0;c<3;c++){{const q=document.createElementNS(ns,'rect');q.setAttribute('x',-4.5+c*3);
+  q.setAttribute('y',r*3);q.setAttribute('width',3);q.setAttribute('height',3);
+  q.setAttribute('fill',(r+c)%2?'#f2efe8':'#111318');sf.appendChild(q);}}
+ const lb=document.createElementNS(ns,'text');lb.setAttribute('x',0);lb.setAttribute('y',-14);lb.setAttribute('font-size','8');
+ lb.setAttribute('font-weight','800');lb.setAttribute('fill','#f2efe8');lb.setAttribute('paint-order','stroke');
+ lb.setAttribute('stroke','#0e1117');lb.setAttribute('stroke-width','3');lb.setAttribute('text-anchor','middle');
+ lb.setAttribute('transform','rotate('+(-ang)+')');lb.textContent='🏁 FINISH';sf.appendChild(lb);}})();
 const T=D.h.length-1;let shown=0;const tk=document.getElementById('tick');
 function frame(t){{const f=Math.max(0,Math.min(1,(t-st)/D.ms)),x=f*T,i=Math.floor(x),a=x-i,j=Math.min(T,i+1);
  const prog=D.names.map((_,k)=>D.h[i][k]+(D.h[j][k]-D.h[i][k])*a);
@@ -138,8 +156,11 @@ function frame(t){{const f=Math.max(0,Math.min(1,(t-st)/D.ms)),x=f*T,i=Math.floo
  document.getElementById('lap').textContent=f>=1?'🏁 FINISH':`LAP ${{Math.min(D.laps,Math.floor(prog[ord[0][1]]*D.laps)+1)}}/${{D.laps}}`;
  while(shown<D.ticker.length&&D.ticker[shown][0]<=x){{const d=document.createElement('div');d.textContent=D.ticker[shown][1];
   tk.prepend(d);shown++;}}
- if(f<1)requestAnimationFrame(frame);}}
-const st=performance.now();requestAnimationFrame(frame);
+ if(f<1)requestAnimationFrame(frame);else document.getElementById('again').style.display='inline-block';}}
+// wall-clock start: a refresh picks up where the race is, a finished race shows the finish
+let st=performance.now()-(D.start?Math.max(0,Date.now()-D.start):0);requestAnimationFrame(frame);
+document.getElementById('again').onclick=e=>{{e.preventDefault();tk.innerHTML='';shown=0;
+ document.getElementById('again').style.display='none';st=performance.now();requestAnimationFrame(frame);}};
 </script>"""
 
 

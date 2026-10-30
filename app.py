@@ -1609,7 +1609,7 @@ def simulate_race(state: dict, track: dict) -> None:
         res = ("warning", f"P{pos} at {track['name']}, **{gap:.1f}s** off the win.", "fail", False)
     st.session_state["race_replay"] = {
         "html": RV.replay_html(track["name"], history, names, [f["color"] for f in field], 0, track["laps"],
-                               ticker, dnf_tick, seconds=secs),
+                               ticker, dnf_tick, seconds=secs, start_ms=time.time() * 1000),
         "why": why, "title": track["name"], "result": res, "payout": payout,
         "reveal_at": time.time() + secs + 1, "revealed": False,
     }
@@ -4054,24 +4054,44 @@ def render_focus_periods(state: dict) -> None:
         return
     # 1) over time
     if kind == "Year":
+        label_of = lambda d: f"{d:%b}"  # noqa: E731
         rows = [{"When": date(lo.year, m, 1).strftime("%b"), "i": m,
                  "Hours": round(sum(v for d, v in g["day"].items() if d.month == m) / 60, 1)} for m in range(1, 13)]
     else:
+        label_of = (lambda d: f"{d:%a}") if kind == "Week" else (lambda d: str(d.day))  # noqa: E731
         rows = [{"When": (f"{d:%a}" if kind == "Week" else str(d.day)), "i": i,
                  "Hours": round(g["day"].get(d, 0) / 60, 2), "now": d == today}
                 for i, d in enumerate(lo + timedelta(days=k) for k in range((hi - lo).days + 1))]
     df = pd.DataFrame(rows)
-    st.markdown("**Focus over time**" + (" · hours per month" if kind == "Year" else " · hours per day"))
-    _chart(alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=acc, **({} if kind == "Month" else {"size": 26})).encode(
+    unit = "month" if kind == "Year" else "day"
+    st.markdown(f"**Focus over time** · hours per {unit} · <span style='opacity:.6'>tap bars to filter the chart "
+                f"below</span>", unsafe_allow_html=True)
+    # one selection drives both charts: tap bars here and "When in the day" narrows to them
+    pick = alt.selection_point(name="pick", fields=["When"], toggle="true", empty=True)
+    top_chart = alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=acc,
+                                       **({} if kind == "Month" else {"size": 26})).encode(
         x=alt.X("When:N", sort=alt.SortField("i"), title=None, axis=alt.Axis(labelAngle=0)),
-        y=alt.Y("Hours:Q", title="Hours"), tooltip=["When", "Hours"]).properties(height=190))
-    # 2) time of day
-    span = max(1, len(active))
+        y=alt.Y("Hours:Q", title="Hours"), tooltip=["When", "Hours"],
+        opacity=alt.condition(pick, alt.value(1), alt.value(.3))).add_params(pick).properties(height=190)
+    try:
+        ev = st.altair_chart(top_chart, width="stretch", on_select="rerun", selection_mode="pick",
+                             key=f"fx_pick_{kind}_{back}")
+        chosen = {x.get("When") for x in ((ev or {}).get("selection", {}).get("pick") or []) if x.get("When")}
+    except Exception:  # noqa: BLE001 — older Streamlit: plain chart, no linking
+        _chart(top_chart)
+        chosen = set()
+    # 2) time of day, over the same period (or just the bars you picked)
+    in_sel = (lambda d: label_of(d) in chosen) if chosen else (lambda d: True)  # noqa: E731
+    sel_days = {d for d in active if in_sel(d)}
+    span = max(1, len(sel_days))
     hrs = pd.DataFrame([{"Hour": _hlabel(h), "h": h,
-                         "Min/day": round(sum(v for (d, hh), v in g["dh"].items() if hh == h) / span, 1)}
+                         "Min/day": round(sum(v for (d, hh), v in g["dh"].items() if hh == h and in_sel(d)) / span, 1)}
                         for h in range(5, 24)])
     top = hrs.sort_values("Min/day", ascending=False).iloc[0]
-    st.markdown(f"**When in the day** · average minutes per working day at each hour · peak **{top['Hour']}**")
+    scope = (f"{', '.join(sorted(chosen, key=lambda w: df.loc[df['When'] == w, 'i'].iloc[0]))} only"
+             if chosen else label)
+    st.markdown(f"**When in the day** · {scope} · avg minutes per working day at each hour"
+                + (f" · peak **{top['Hour']}**" if top["Min/day"] > 0 else " · nothing logged"))
     _chart(alt.Chart(hrs).mark_bar(cornerRadiusEnd=3, color=acc).encode(
         x=alt.X("Hour:N", sort=alt.SortField("h"), title=None),
         y=alt.Y("Min/day:Q", title="Min / day"), tooltip=["Hour", "Min/day"]).properties(height=170))
