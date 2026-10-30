@@ -38,9 +38,10 @@ def _drop_stale_local_modules() -> None:
     a new app.py can call something an old module doesn't have yet. If any of our modules changed on disk since it
     was imported (its .pyc still records the old source mtime), forget them all so the imports below load fresh."""
     import sys
-    here = Path(__file__).resolve().parent
-    mods = {n: m for n, m in list(sys.modules.items())
-            if getattr(m, "__file__", None) and Path(m.__file__).resolve().parent == here and n != "__main__"}
+    here = str(Path(__file__).resolve().parent) + os.sep
+    mods = {n: m for n, m in list(sys.modules.items())  # string prefix check: resolving thousands of paths costs ~80 ms
+            if n != "__main__" and isinstance(getattr(m, "__file__", None), str) and m.__file__.startswith(here)
+            and os.sep not in m.__file__[len(here):]}
 
     def stale(m) -> bool:
         try:
@@ -1863,7 +1864,7 @@ def render_dailies(state: dict) -> None:
             st.markdown(note, unsafe_allow_html=True)
             for r in rows:
                 h = r["h"]
-                c1, c2, c3 = st.columns([5, 1, 2], vertical_alignment="center")
+                c1, c2, c3 = st.container(key=f"dlrow_{h['id']}").columns([5, 1, 2], vertical_alignment="center")
                 dots = "●" * min(r["count"], h["target"]) + "○" * max(0, h["target"] - r["count"])
                 c1.markdown(f"**{h['name']}** &nbsp;<span style='letter-spacing:2px;color:{'#199e70' if r['done'] else '#9aa0ad'}'>"
                             f"{dots}</span> <small>{r['count']}/{h['target']}"
@@ -3068,6 +3069,31 @@ CSS = """<style>
 [data-testid="stExpanderDetails"]{animation:dodIn .28s ease-out both}
 [data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="InputInstructions"]{display:none}
+/* working… : a slim racing-stripe bar while the app thinks (only shows if it takes > ~0.2 s) */
+[data-testid="stApp"][data-test-script-state="running"]::before{content:"";position:fixed;top:0;left:0;right:0;height:3px;
+  z-index:1000100;background:linear-gradient(90deg,transparent,var(--y),transparent);background-size:40% 100%;
+  background-repeat:no-repeat;animation:dodRun 1s linear infinite,dodFadeIn .2s ease .2s both}
+@keyframes dodRun{from{background-position:-40% 0}to{background-position:140% 0}}
+@keyframes dodFadeIn{from{opacity:0}to{opacity:1}}
+/* first-load splash */
+.dod-boot{min-height:60vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.dod-boot-car{font-size:3rem;animation:dodBob .9s ease-in-out infinite alternate}
+.dod-boot-t{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.2rem;color:#ece8df}
+.dod-boot-bar{width:180px;height:4px;border-radius:4px;background:#262b36;overflow:hidden}
+.dod-boot-bar i{display:block;width:40%;height:100%;background:var(--y);border-radius:4px;animation:dodSlide 1.1s ease-in-out infinite}
+@keyframes dodBob{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+@keyframes dodSlide{0%{transform:translateX(-100%)}100%{transform:translateX(260%)}}
+/* dailies rows: name · ↩ · +1 on one line on phones */
+[class*="st-key-dlrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
+[class*="st-key-dlrow_"] [data-testid="stColumn"]{min-width:0!important}
+[class*="st-key-dlrow_"] [data-testid="stColumn"]:nth-child(2){flex:0 0 2.6rem!important;width:2.6rem!important}
+[class*="st-key-dlrow_"] [data-testid="stColumn"]:nth-child(3){flex:0 0 5.2rem!important;width:5.2rem!important}
+/* stats numbers: 2 × 2 on phones */
+@media (max-width:640px){.st-key-stat_kpis [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;gap:.5rem 1rem}
+  .st-key-stat_kpis [data-testid="stColumn"]{flex:1 1 calc(50% - 1rem)!important;min-width:calc(50% - 1rem)!important}}
+/* toasts in the app's colours */
+[data-testid="stToast"]{background:#1b1f27!important;border:1px solid var(--line);border-left:3px solid var(--y);
+  color:#ece8df;box-shadow:0 8px 24px rgba(0,0,0,.45)}
 [class*="st-key-scrap_"] img{max-height:210px;object-fit:cover;width:100%;border-radius:10px}
 .dod-scrap-tile{height:96px;border-radius:10px;background:linear-gradient(135deg,#1b1f27,#141821);display:flex;
   align-items:center;justify-content:center;font-size:2.4rem;margin-bottom:.4rem;border:1px solid var(--line)}
@@ -3249,6 +3275,10 @@ def app_link() -> str | None:
     return f"{base.split('?')[0]}?k={remember_key(_pw)}"
 
 
+_boot = st.empty() if "_booted" not in st.session_state else None
+if _boot is not None:
+    _boot.markdown("<div class='dod-boot'><div class='dod-boot-car'>🏎️</div><div class='dod-boot-t'>Warming up the "
+                   "tyres…</div><div class='dod-boot-bar'><i></i></div></div>", unsafe_allow_html=True)
 state = load_state()
 st.markdown(theme_css(state), unsafe_allow_html=True)
 PROFILE = I.profile(state, now().date(), TZ)  # history before today → steers today's surprises (same in the nagger)
@@ -3263,6 +3293,9 @@ if st.session_state.pop("_fresh_load", False) and notion_cfg():
     except Exception as e:
         sync_msgs = [("warning", f"Couldn't sync tasks with Notion: {e}")]
 
+if _boot is not None:
+    _boot.empty()
+    st.session_state["_booted"] = True
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
@@ -3300,8 +3333,14 @@ for m in crash_msgs:
     st.error(m)
 if rust_msg:
     st.warning(rust_msg)
+TOAST_ICON = {"success": "✅", "info": "💬"}
 for kind, m in st.session_state.pop("flash", []):
-    getattr(st, kind)(m)
+    if kind in TOAST_ICON and len(m) <= 170 and "\n" not in m:
+        lead = m.split(" ", 1)
+        icon = lead[0] if len(lead) == 2 and not lead[0][:1].isalnum() and len(lead[0]) <= 3 and "*" not in lead[0] else None
+        st.toast(lead[1] if icon else m, icon=icon or TOAST_ICON[kind], duration="long" if len(m) > 90 else "short")
+    else:
+        getattr(st, kind)(m)
 if st.session_state.pop("celebrate", False):
     st.balloons()
 _lk = LK.status(state, now())
@@ -3526,6 +3565,12 @@ with tab_goals:
 VIZ = {"normal": "#3987e5", "dead": "#d95926", "peak": "#199e70", "low": "#1d2735", "grid": "#2b2e36"}
 
 
+def _mix(hex_: str, other: str, t: float) -> str:
+    a = [int(hex_[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(other[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
+
 def _chart(c) -> None:
     try:
         st.altair_chart(c, width="stretch")
@@ -3545,8 +3590,10 @@ with tab_stats:
         render_scrapbook(state)
   if tab_stats.open is not False and stats_view != "📸 Scrapbook":
     import altair as alt
+    _acc = accent(state)[0]
+    VIZ = {**VIZ, "normal": _acc, "light": _mix(_acc, "#ffffff", .55)}
     full = I.history(state, now().date() + timedelta(days=1), TZ)  # last 28 days, today included
-    k = st.columns(4)
+    k = st.container(key="stat_kpis").columns(4)
     k[0].metric("Finished · 28 days", full["done"],
                 help="Tasks you finished with proof (incl. redeemed) in the last 28 days.")
     rate = full["on_time"] / full["done"] if full["done"] else None
@@ -3603,7 +3650,7 @@ with tab_stats:
         _chart(alt.Chart(hm_).mark_rect(cornerRadius=3, stroke="#0e1117", strokeWidth=2).encode(
             x=alt.X("Hour:N", sort=alt.SortField("h"), title=None),
             y=alt.Y("Day:N", sort=days_, title=None),
-            color=alt.Color("Minutes:Q", scale=alt.Scale(range=[VIZ["low"], VIZ["normal"], "#a9cbf5"]),
+            color=alt.Color("Minutes:Q", scale=alt.Scale(range=[VIZ["low"], VIZ["normal"], VIZ["light"]]),
                             legend=alt.Legend(title="Min")),
             tooltip=["Day", "Hour", "Minutes"]).properties(height=230))
 
