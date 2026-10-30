@@ -3435,6 +3435,66 @@ def render_lounge(state: dict) -> None:
 # ─────────────────────────── look & feel ───────────────────────────
 # Fonts + colours live in .streamlit/config.toml (Barlow / Saira Semi Condensed, asphalt + Phoenix Yellow).
 # This only adds what the theme can't: the instrument cluster, the live-card rail, dark text on yellow buttons.
+# Smooth view switches. Installed once into the page: on a tap that swaps a view (a main tab, or one of the view
+# pickers below) the old view fades out at once, a skeleton holds its place if the rerun takes a moment, and the new
+# view fades in only after Streamlit has finished drawing it (script state back to idle + two frames). The page
+# height is held during the swap so nothing jumps or scrolls. Pure decoration: it never blocks, gives up after 6 s.
+VIEW_KEYS = ["stats_view", "fx_kind", "fx_prev", "fx_next", "sb_per", "jr_week", "dl_view", "set_sec"]
+VIEW_IN_COLUMNS = ["fx_kind", "fx_prev", "fx_next"]
+TRANSITIONS_JS = """<script>(function(){
+let P;try{P=parent.document;}catch(e){return;}
+const W=parent;if(W.__dodTx)return;W.__dodTx=1;
+const KEYS=%s,COLS=%s,H=P.documentElement;
+let pend=null,fs=null;
+const app=()=>P.querySelector('[data-testid="stApp"]');
+const running=()=>{const a=app(),v=a&&a.getAttribute('data-test-script-state');return v==='running'||v==='rerunRequested';};
+const main=()=>P.querySelector('[data-testid="stMainBlockContainer"]')||P.querySelector('.block-container');
+function start(kind,anchor){
+  if(pend)finish(true);
+  const m=main();if(m){m.style.minHeight=m.offsetHeight+'px';}
+  if(kind==='tab')H.setAttribute('data-dod-switch','1');
+  if(anchor)anchor.setAttribute('data-dod-anchor','1');
+  pend={t0:Date.now(),saw:false,anchor:anchor};
+  clearTimeout(fs);fs=setTimeout(()=>finish(),6000);
+  (function tick(){if(!pend)return;
+    if(running())pend.saw=true;
+    else if(pend.saw||Date.now()-pend.t0>700){
+      // idle again: let React commit and charts lay out before revealing
+      requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(()=>{if(pend&&!running())finish();else setTimeout(tick,40);},60)));return;}
+    setTimeout(tick,40);})();
+}
+function finish(now){
+  if(!pend)return;const a=pend.anchor;pend=null;clearTimeout(fs);
+  H.removeAttribute('data-dod-switch');
+  P.querySelectorAll('[data-dod-anchor]').forEach(e=>e.removeAttribute('data-dod-anchor'));
+  const m=main();if(m)setTimeout(()=>{if(!pend)m.style.minHeight='';},now?0:450);
+}
+function topNode(el,cols){
+  let n=el;
+  if(cols){const hb=el.closest('[data-testid="stHorizontalBlock"]');if(hb)n=hb;}
+  while(n.parentElement&&!n.parentElement.matches('[data-testid="stVerticalBlock"]'))n=n.parentElement;
+  return n;
+}
+// tabs select on press (before 'click'), so catch them on pointerdown / Enter
+function onTab(ev){
+  const t=ev.target;if(!t||!t.closest)return;
+  const tab=t.closest('[role="tab"]');if(!tab)return;
+  if(ev.type==='keydown'&&ev.key!=='Enter'&&ev.key!==' ')return;
+  const tabs=tab.closest('[data-testid="stTabs"]');
+  // only the main tab bar reruns; nested tabs switch instantly in the browser
+  if(tabs&&!tabs.parentElement.closest('[role="tabpanel"]')&&tab.getAttribute('aria-selected')!=='true')start('tab',null);
+}
+P.addEventListener('pointerdown',onTab,true);P.addEventListener('keydown',onTab,true);
+P.addEventListener('click',function(ev){
+  const t=ev.target;if(!t||!t.closest||t.closest('[role="tab"]'))return;
+  const b=t.closest('button');if(!b||b.disabled)return;
+  const box=b.closest('[class*="st-key-"]');if(!box)return;
+  const k=KEYS.find(k=>box.classList.contains('st-key-'+k));if(!k)return;
+  if(b.closest('[data-testid="stButtonGroup"]')&&(b.getAttribute('aria-checked')==='true'||b.getAttribute('aria-pressed')==='true'||b.getAttribute('kind')==='segmented_controlActive'))return;
+  start('view',topNode(box,COLS.includes(k)));
+},true);
+})();</script>""" % (json.dumps(VIEW_KEYS), json.dumps(VIEW_IN_COLUMNS))
+
 CSS = """<style>
 :root{--y:#f5c518;--r:#e10600;--t:#2ec4b6;--panel:#1b1f27;--line:#2c313c;--muted:#8b909c}
 .block-container{max-width:1280px;padding-top:2.6rem}
@@ -3551,7 +3611,24 @@ CSS = """<style>
 [class*="st-key-dlh_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem}
 [class*="st-key-dlh_"] [data-testid="stColumn"]{min-width:0!important}
 [class*="st-key-dlh_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
-[data-baseweb="tab-panel"]{animation:dodIn .3s ease-out both}
+[role="tabpanel"]{animation:dodIn .3s ease-out both}
+/* view switches (tabs, view pickers): the old view fades out on tap, a skeleton holds the space while the app
+   reruns, and the new view fades in once it's fully drawn, so the swap itself is never seen (see TRANSITIONS_JS) */
+[role="tabpanel"]>*,[data-dod-anchor]~*{transition:opacity .26s ease,transform .26s cubic-bezier(.2,.7,.2,1)}
+html[data-dod-switch] [role="tabpanel"]:not([hidden])>*,[data-dod-anchor]~*{opacity:0!important;
+  transform:translateY(4px);transition:opacity .1s ease,transform .1s ease!important;pointer-events:none}
+html[data-dod-switch] [role="tabpanel"]:not([hidden]){position:relative;min-height:180px}
+[data-dod-anchor]{position:relative}
+html[data-dod-switch] [role="tabpanel"]:not([hidden])::before,[data-dod-anchor]::after{content:"";
+  position:absolute;left:0;right:0;height:150px;z-index:2;pointer-events:none;border-radius:6px;
+  background:linear-gradient(#222733,#222733) 0 0/58% 24px no-repeat,linear-gradient(#222733,#222733) 0 44px/100% 14px no-repeat,
+    linear-gradient(#222733,#222733) 0 70px/86% 14px no-repeat,linear-gradient(#222733,#222733) 0 96px/93% 14px no-repeat,
+    linear-gradient(#222733,#222733) 0 122px/64% 14px no-repeat;
+  animation:dodSkShow .01s linear .18s both,dodSkPulse .8s ease-in-out .18s infinite alternate}
+html[data-dod-switch] [role="tabpanel"]:not([hidden])::before{top:14px}
+[data-dod-anchor]::after{top:calc(100% + 16px)}
+@keyframes dodSkShow{from{visibility:hidden}to{visibility:visible}}
+@keyframes dodSkPulse{from{opacity:.45}to{opacity:1}}
 [data-testid="stProgressBarTrack"] div{transition:width .6s cubic-bezier(.2,.7,.2,1)}
 [data-baseweb="tab-highlight"]{transition:all .25s ease}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -3643,7 +3720,7 @@ st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="wide"
 st.markdown(CSS, unsafe_allow_html=True)
 with st.container(key="audio_session"):  # iOS: app sounds mix with your music instead of pausing it
     st.iframe("<script>try{for(const w of [window,parent])if(w.navigator.audioSession)"
-              "w.navigator.audioSession.type='ambient';}catch(e){}</script>", height=1)
+              "w.navigator.audioSession.type='ambient';}catch(e){}</script>" + TRANSITIONS_JS, height=1)
 if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
     os.environ["NTFY_TOPIC"] = get_secret("NTFY_TOPIC")  # same secret seed as the nagger for surprise events
 
