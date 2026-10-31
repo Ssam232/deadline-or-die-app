@@ -125,6 +125,29 @@ def _tasks(save: dict, now: datetime) -> list[dict]:
                    + ("\nOpen it. 10 minutes. Go." if mins >= 60 else "\nSubmit proof NOW."))
             out.append(_alarm(("task", t["id"], t["deadline"], mins), at, title, msg, prio, ["rotating_light"],
                               t.get("status") == "open"))
+    return out + _blocks(save, now)
+
+
+def _blocks(save: dict, now: datetime) -> list[dict]:
+    """🗺️ Booked roadmap time: a heads-up 10 min before, then 'it's time' with a ▶️ Start button."""
+    out = []
+    goals = {g["id"]: g.get("title", "") for g in save.get("goals", [])}
+    for t in save.get("tasks", []):
+        b = t.get("block")
+        if not b or not t.get("scheduled"):
+            continue
+        at = datetime.fromisoformat(t["scheduled"])
+        at = at if at.tzinfo else at.replace(tzinfo=now.tzinfo)
+        if not (now - timedelta(minutes=15) < at < now + HORIZON):
+            continue
+        g = goals.get(t.get("goal_id"), "")
+        live = t.get("status") == "open" and not t.get("focus_min")
+        for lead, prio, title, msg in (
+                (10, 3, f"🗺️ In 10 min: {t['title']}", f"{b['minutes']} min booked at {_hm(at)} for {g}."),
+                (0, 4, f"▶️ Now: {t['title']}", f"Your {b['minutes']}-min block for {g} starts now. "
+                                                 f"Tap ▶️ and the timer runs.")):
+            out.append(_alarm(("block", t["id"], t["scheduled"], lead), at - timedelta(minutes=lead), title, msg,
+                              prio, ["world_map"], live, (t["id"], b["minutes"])))
     return out
 
 

@@ -81,6 +81,7 @@ import tracks as TR
 import journal as J
 import nudges as NU
 import prep as P
+import roadmap as R
 import quickparse as Q
 import raceviz as RV
 import lounge as L
@@ -1231,6 +1232,15 @@ def timer_proof(t: dict) -> tuple[float, float]:
     return float(t.get("focus_min") or 0), float(max(10, round(0.8 * (t.get("minutes") or 30))))
 
 
+def pay_stages(state: dict) -> list[str]:
+    """🧩 Cleared stages pay their bonus (once)."""
+    msgs = []
+    for g, n, bonus in R.settle(state["goals"], state["tasks"]):
+        bank(state, bonus, f"🧩 Stage cleared: {n['title']}")
+        msgs.append(f"🧩 **Stage cleared: {n['title']}** (+{bonus}) on the road to *{g['title']}*.")
+    return msgs
+
+
 def _proof_touch(k: str) -> None:
     """You're filling in this proof form: keep its panel open on every redraw."""
     st.session_state["proof_open"] = k
@@ -1346,7 +1356,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
             mine = [x for x in state["tasks"] if x.get("goal_id") == t.get("goal_id")]
             msg += f"\n\n🎯 One lap closer to **{g}** ({sum(x['status'] == 'done' for x in mine)}/{len(mine)})."
         crate = open_crate(state, t)
-        msg += f"\n\n{crate}" + "".join(f"\n\n{m_}" for m_ in shield_msgs)
+        msg += f"\n\n{crate}" + "".join(f"\n\n{m_}" for m_ in shield_msgs + pay_stages(state))
         claims = state.setdefault("event_claims", [])
         for e in EV.active(at):
             if e["type"] == "bounty" and t.get("category") == "deep" and e["id"] not in claims:
@@ -1368,6 +1378,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
             if p.get("task_id") == t["id"] and not p["served"]:
                 p.update(served=True, served_at=now().isoformat(), how="redeemed")
         msg = f"🩹 Redeemed **{t['title']}** — +{refund} coins back, +{t['xp'] // 2} XP. Late, but done."
+        msg += "".join(f"\n\n{m_}" for m_ in pay_stages(state))
         sound = "win"
     state["last_done_date"] = at.date().isoformat()
     state["rust_days"] = 0
@@ -3434,7 +3445,9 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
     today = now().date().isoformat()
     stt = daily.status(state, now())
     in_mission = {t["id"] for t in stt["mission"]} if stt["qualified"] else set()
-    rest = [t for t in open_tasks if t["id"] not in in_mission]
+    # booked roadmap blocks show up on their own day, not as clutter before then
+    rest = [t for t in open_tasks if t["id"] not in in_mission
+            and not (t.get("block") and t["block"]["date"] > today)]
     with st.container(border=True):
         st.markdown(f"#### Tasks · {len(open_tasks)} open")
         render_quick_add(state, "qa_top", boxed=False)
@@ -3687,6 +3700,9 @@ CSS = """<style>
 .st-key-debt_way{margin:0 0 .6rem}
 .st-key-debt_way p{margin:0}
 [class*="st-key-win_"]{animation:dodDropOut .7s ease-in 9s both;overflow:hidden}
+/* roadmap flow chart: readable on a phone — it keeps its size and you swipe sideways */
+@media (max-width:640px){[data-testid="stGraphVizChart"]{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  [data-testid="stGraphVizChart"] svg{min-width:660px;height:auto}}
 .st-key-drop_reveal{animation:dodDropOut .6s ease-in 4.8s both;overflow:hidden}
 .dod-drop{display:flex;gap:14px;align-items:center;padding:12px 16px;border:1px solid var(--y);border-radius:14px;
   background:radial-gradient(120% 160% at 0% 50%,rgba(245,197,24,.16),transparent 60%),#141821;
@@ -4108,6 +4124,86 @@ with tab_tasks:
                 st.markdown(f"{icon} **{t['title']}** · +{t.get('earned', 0)} 🪙 "
                             f"<small>· {parse_dt(t['completed_at']):%b %d}</small>", unsafe_allow_html=True)
 
+def _stage_opts(g: dict) -> dict[str, str]:
+    out = {"": "🏁 Straight into the goal"}
+
+    def walk(parent, lvl):
+        for n in R.children(g, parent):
+            out[n["id"]] = "  " * lvl + ("└ " if lvl else "") + "🧩 " + n["title"]
+            walk(n["id"], lvl + 1)
+    walk(None, 0)
+    return out
+
+
+BLOCK_LENGTHS = [15, 30, 45, 60, 90, 120, 180, 240]
+
+
+def render_roadmap_planner(state: dict, g: dict) -> None:
+    """Stages (nestable) + scheduled work blocks for one goal."""
+    gid = g["id"]
+    opts = _stage_opts(g)
+    t1, t2, t3 = st.tabs(["🗓️ Schedule work", "🧩 Add a stage", "🧹 Tidy"])
+    with t1:
+        last = max((date.fromisoformat(t["block"]["date"]) for t in R.goal_tasks(g, state["tasks"]) if t.get("block")),
+                   default=None)
+        first0 = max(now().date(), last + timedelta(days=1)) if last else now().date()
+        with st.form(f"rb_form_{gid}", clear_on_submit=True, border=False):
+            what = st.text_input("What", placeholder="e.g. Read the Walter papers · Meeting with Walter · Compile notes")
+            under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"rb_under_{gid}")
+            c1, c2, c3 = st.columns(3)
+            first = c1.date_input("First day", value=first0, min_value=now().date(), key=f"rb_first_{gid}")
+            days = c2.number_input("Days", 1, 21, 1, key=f"rb_days_{gid}",
+                                   help="Read for 2 days → 2. One block per day, same time each day.")
+            start = c3.time_input("Start", value=dtime(9, 0), step=900, key=f"rb_start_{gid}")
+            c4, c5, c6 = st.columns(3)
+            mins = c4.selectbox("Length", BLOCK_LENGTHS, index=3, format_func=min_label, key=f"rb_len_{gid}")
+            cat = c5.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"rb_cat_{gid}")
+            skip = c6.checkbox("Skip weekends", value=False, key=f"rb_skip_{gid}")
+            go = st.form_submit_button("🗓️ Book it", type="primary")
+        if go:
+            if not (what or "").strip():
+                st.error("Name the block first.")
+            else:
+                ds = R.block_days(first, int(days), skip)
+                made = []
+                for i, d_ in enumerate(ds, 1):
+                    title = what.strip() + (f" · day {i}/{len(ds)}" if len(ds) > 1 else "")
+                    t = make_task(title, f"🗺️ {g['title']}", now(), None, "", gid,
+                                  category=None if cat == "auto" else cat, minutes=int(mins))
+                    t.update(R.block_fields(d_, start.strftime("%H:%M"), int(mins), TZ), node=under or None)
+                    state["tasks"].append(t)
+                    made.append(t)
+                save_state(state)
+                span = (f"{ds[0]:%a %b} {ds[0].day}" + (f" → {ds[-1]:%a %b} {ds[-1].day}" if len(ds) > 1 else ""))
+                flash(f"🗓️ Booked **{what.strip()}** · {len(ds)} block{'s' if len(ds) > 1 else ''} · {span} at "
+                      f"{start:%I:%M %p}".replace(" 0", " ") + f" · +{made[0]['reward']} each.")
+                st.rerun()
+    with t2:
+        with st.form(f"rs_form_{gid}", clear_on_submit=True, border=False):
+            name = st.text_input("Stage", placeholder="e.g. Literature review · Data analysis · Write-up")
+            par = st.selectbox("Feeds into", list(opts), format_func=opts.get, key=f"rs_par_{gid}")
+            if st.form_submit_button("🧩 Add stage", type="primary") and (name or "").strip():
+                R.add_stage(g, name, par or None)
+                save_state(state)
+                flash(f"🧩 Stage **{name.strip()}** added. Book work blocks into it.")
+                st.rerun()
+        st.caption(f"Clear every block under a stage → **+{R.STAGE_BASE}–{R.STAGE_MAX}** stage bonus. "
+                   "Stages can sit inside other stages.")
+    with t3:
+        empty = [n for n in R.stages(g) if not R.children(g, n["id"])
+                 and not any(t.get("node") == n["id"] for t in R.goal_tasks(g, state["tasks"]))]
+        if empty:
+            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+            rm = c1.selectbox("Empty stage", [n["id"] for n in empty],
+                              format_func=lambda i: next(n["title"] for n in empty if n["id"] == i), key=f"rr_{gid}")
+            if c2.button("Remove", key=f"rr_go_{gid}"):
+                R.remove_stage(g, state["tasks"], rm)
+                save_state(state)
+                st.rerun()
+        else:
+            st.caption("Only empty stages can be removed. Open blocks can be dropped from the Tasks tab.")
+
+
 # ── Goals ──
 with tab_goals:
   if tab_goals.open is not False:
@@ -4163,20 +4259,34 @@ with tab_goals:
                         text=f"{n_done}/{len(gtasks)} milestones · {'📅 event' if g.get('event_kind') else 'target'} "
                              f"{target:%b %d, %Y} "
                              f"({(target - now().date()).days} days)")
-            for t in sorted(gtasks, key=lambda t: t["deadline"]):
-                icon = {"open": chip(parse_dt(t["deadline"])), "done": "🏁", "redeemed": "🩹",
-                        "failed": "💀"}[t["status"]]
-                st.markdown(f"{icon} {t['title']} <small>· {parse_dt(t['deadline']):%b %d}</small>",
-                            unsafe_allow_html=True)
+            big = R.goal_bonus(g, state["tasks"])
+            if R.stages(g) or any(t.get("block") for t in gtasks):
+                _dot = R.dot(g, state["tasks"], now(), accent(state)[0])
+                try:
+                    st.graphviz_chart(_dot, width="stretch")
+                except TypeError:
+                    st.graphviz_chart(_dot, use_container_width=True)
+                st.caption(f"🪙 Each block pays its own coins · 🧩 a cleared stage +{R.STAGE_BASE}–{R.STAGE_MAX} · "
+                           f"🏆 the whole goal **+{big}**")
+            else:
+                for t in sorted(gtasks, key=lambda t: t["deadline"]):
+                    icon = {"open": chip(parse_dt(t["deadline"])), "done": "🏁", "redeemed": "🩹",
+                            "failed": "💀"}[t["status"]]
+                    st.markdown(f"{icon} {t['title']} <small>· {parse_dt(t['deadline']):%b %d}</small>",
+                                unsafe_allow_html=True)
+
+            with st.expander("🗺️ Plan the roadmap · stages + booked work time", key=f"exp_rm_{g['id']}",
+                             expanded=not gtasks and not R.stages(g)):
+                render_roadmap_planner(state, g)
 
             if gtasks and len(gtasks) >= 3 and n_done == len(gtasks) and not g.get("claimed"):
-                if st.button(f"🏆 Claim finish-line bonus (+{GOAL_BONUS[0]} 🪙)", key=f"claim_{g['id']}",
+                if st.button(f"🏆 Claim finish-line bonus (+{big} 🪙)", key=f"claim_{g['id']}",
                              type="primary"):
                     g["claimed"] = True
-                    bank(state, GOAL_BONUS[0], f"🏆 Goal complete: {g['title']}")
+                    bank(state, big, f"🏆 Goal complete: {g['title']}")
                     state["xp"] += GOAL_BONUS[1]
                     save_state(state)
-                    flash(f"🏆 Goal **{g['title']}** complete! +{GOAL_BONUS[0]} coins, +{GOAL_BONUS[1]} XP.",
+                    flash(f"🏆 Goal **{g['title']}** complete! +{big} coins, +{GOAL_BONUS[1]} XP.",
                           celebrate=True)
                     st.rerun()
 
