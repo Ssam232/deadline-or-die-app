@@ -221,11 +221,15 @@ def sync_out(n: Notion, m: dict, tasks: list[dict], now: datetime) -> list[str]:
             start, timed, mins = slot(t, tz)
             sig = f"{t['title']}|{start.isoformat()}|{timed}|{mins}"
             if t["status"] == "open" and not t.get("out_page"):
-                if start.date() <= horizon:
+                if start.date() <= horizon or t.get("block"):  # booked roadmap time goes on the calendar at once
                     t["out_page"], t["out_state"], t["out_sig"] = push(n, m, t, tz), "open", sig
             elif t.get("out_page") and t["status"] == "open" and t.get("out_sig") != sig:
                 n.req("PATCH", f"/pages/{t['out_page']}", json={"properties": card_props(m, t, tz)})
                 t["out_sig"] = sig
+            elif t.get("out_page") and t["status"] == "cancelled":
+                if not t.get("out_archived"):  # dropped from the plan: take the card off the calendar
+                    n.req("PATCH", f"/pages/{t['out_page']}", json={"archived": True})
+                    t["out_archived"], t["out_state"] = True, "cancelled"
             elif t.get("out_page") and t["status"] != t.get("out_state"):
                 mark_finished(n, m, t["out_page"], t["title"], t["status"])
                 t["out_state"] = t["status"]

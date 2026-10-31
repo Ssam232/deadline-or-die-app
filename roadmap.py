@@ -59,7 +59,7 @@ def depth(g: dict, sid: str | None) -> int:
 
 
 def goal_tasks(g: dict, tasks: list[dict]) -> list[dict]:
-    return [t for t in tasks if t.get("goal_id") == g["id"] and not t.get("abandoned")]
+    return [t for t in tasks if t.get("goal_id") == g["id"] and not t.get("abandoned") and t["status"] != "cancelled"]
 
 
 def stage_tasks(g: dict, tasks: list[dict], sid: str) -> list[dict]:

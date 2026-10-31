@@ -2467,6 +2467,8 @@ def render_today(state: dict) -> None:
             if t["status"] in ("done", "redeemed"):
                 st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>{html.escape(t['title'])}</s>"
                             f" <span class='m'>+{t.get('reward', 0)} earned</span></div></div>", unsafe_allow_html=True)
+            elif t["status"] == "cancelled":
+                continue
             elif t["status"] == "open":
                 dl = parse_dt(t["deadline"])
                 fm_ = t.get("focus_min") or 0
@@ -4124,6 +4126,98 @@ with tab_tasks:
                 st.markdown(f"{icon} **{t['title']}** · +{t.get('earned', 0)} 🪙 "
                             f"<small>· {parse_dt(t['completed_at']):%b %d}</small>", unsafe_allow_html=True)
 
+def render_new_goal(state: dict) -> None:
+    """A big goal, typed or picked from your Assignments board (read-only: the app never writes to it)."""
+    today = now().date()
+    bc = board_cfg(state)
+    src = "✍️ Type it"
+    if bc:
+        src = st.segmented_control("Source", ["✍️ Type it", "📚 From Assignments"], default="✍️ Type it",
+                                   key="ng_src", label_visibility="collapsed") or "✍️ Type it"
+    title0, target0, page = "", today + timedelta(days=30), None
+    if src == "📚 From Assignments":
+        try:
+            taken = {B.clean_id(x) for g in state["goals"] for x in (g.get("assign_page"), g.get("event_page")) if x}
+            items = [b for b in _board_range(*bc, today.isoformat(), EVENT_LOOKAHEAD)
+                     if not b.get("recurring") and B.clean_id(b["id"]) not in taken]
+        except Exception as e:  # noqa: BLE001
+            items = []
+            st.caption(f"(Couldn't read the board: {e})")
+        if not items:
+            st.caption(f"Nothing upcoming on the board in the next {EVENT_LOOKAHEAD} days that isn't a goal yet.")
+            return
+        lbl = {b["id"]: _board_label(b, today) for b in items}
+        pid = st.selectbox("Assignment", list(lbl), format_func=lbl.get, key="ng_pick")
+        b = next(x for x in items if x["id"] == pid)
+        title0, page = b["title"], b["id"]
+        target0 = max(today, date.fromisoformat(b["date"])) if b.get("date") else target0
+    k = f"ng_{page or 'typed'}"
+    title = st.text_input("Goal", value=title0, key=f"{k}_t", placeholder="The big thing you're working towards")
+    c1, c2 = st.columns([2, 1])
+    why = c1.text_input("Why it matters (shown when you need it)", key=f"{k}_w")
+    target = c2.date_input("Target date", value=target0, min_value=today, key=f"{k}_d")
+    if st.button("🗺️ Create goal & plan it", type="primary", key=f"{k}_go"):
+        if not (title or "").strip():
+            st.error("Name the goal first.")
+            return
+        g = {"id": uuid.uuid4().hex[:10], "title": title.strip(), "why": (why or "").strip(),
+             "target": target.isoformat(), "created": now().isoformat(), "claimed": False}
+        if page:
+            g["assign_page"] = page  # a reference only: Assignments stays read-only
+        state["goals"].append(g)
+        save_state(state)
+        st.session_state["rm_open"] = g["id"]
+        flash(f"🗺️ **{g['title']}** is on the board. Add stages and book work time in its roadmap below.")
+        st.rerun()
+
+
+def render_block_editor(state: dict, g: dict) -> None:
+    """Move, resize, rename or drop a booked block. The Notion calendar card follows."""
+    gid = g["id"]
+    blocks = sorted((t for t in R.goal_tasks(g, state["tasks"]) if t.get("block") and t["status"] == "open"),
+                    key=lambda t: t["scheduled"])
+    if not blocks:
+        st.caption("No open blocks to edit yet.")
+        return
+    lbl = {t["id"]: f"{t['title']} · {R._fmt_block(t, TZ)}" for t in blocks}
+    tid = st.selectbox("Block", list(lbl), format_func=lbl.get, key=f"be_pick_{gid}")
+    t = next(x for x in blocks if x["id"] == tid)
+    b = t["block"]
+    opts = _stage_opts(g)
+    k = f"be_{tid}"
+    with st.form(f"{k}_form", border=False):
+        title = st.text_input("What", value=t["title"], key=f"{k}_t")
+        under = st.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
+                             if (t.get("node") or "") in opts else 0, format_func=opts.get, key=f"{k}_u")
+        c1, c2, c3 = st.columns(3)
+        day = c1.date_input("Day", value=max(now().date(), date.fromisoformat(b["date"])), min_value=now().date(),
+                            key=f"{k}_d")
+        hh, mm = (int(x) for x in b["start"].split(":"))
+        start = c2.time_input("Start", value=dtime(hh, mm), step=900, key=f"{k}_s")
+        lens = sorted(set(BLOCK_LENGTHS + [int(b["minutes"])]))
+        mins = c3.selectbox("Length", lens, index=lens.index(int(b["minutes"])), format_func=min_label, key=f"{k}_m")
+        save = st.form_submit_button("💾 Save changes", type="primary")
+    if save and (title or "").strip():
+        t["title"] = title.strip()
+        t["node"] = under or None
+        t.update(R.block_fields(day, start.strftime("%H:%M"), int(mins), TZ))
+        if int(mins) != int(t.get("minutes") or 0):
+            v = V.value(t["category"], int(mins))
+            t.update(minutes=int(mins), reward=v["reward"], penalty=v["penalty"], xp=v["xp"],
+                     difficulty=V.size_label(int(mins)))
+        save_state(state)
+        flash(f"✏️ **{t['title']}** → {_when(R.block_at(t, TZ))} · {min_label(int(mins))}. Calendar updated.")
+        st.rerun()
+    if t.get("focus_min"):
+        st.caption("Has focus time logged, so it can't be dropped: finish it instead.")
+    elif st.button("🗑️ Drop this block (no penalty)", key=f"{k}_x",
+                   help="Planned time you no longer need. It leaves the roadmap and the calendar."):
+        t.update(status="cancelled", cancelled_at=now().isoformat())
+        save_state(state)
+        flash(f"🗑️ Dropped **{t['title']}** from the plan.")
+        st.rerun()
+
+
 def _stage_opts(g: dict) -> dict[str, str]:
     out = {"": "🏁 Straight into the goal"}
 
@@ -4142,13 +4236,15 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
     """Stages (nestable) + scheduled work blocks for one goal."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t1, t2, t3 = st.tabs(["🗓️ Schedule work", "🧩 Add a stage", "🧹 Tidy"])
+    t1, t4, t2, t3 = st.tabs(["🗓️ Schedule work", "✏️ Edit blocks", "🧩 Add a stage", "🧹 Tidy"])
+    with t4:
+        render_block_editor(state, g)
     with t1:
         last = max((date.fromisoformat(t["block"]["date"]) for t in R.goal_tasks(g, state["tasks"]) if t.get("block")),
                    default=None)
         first0 = max(now().date(), last + timedelta(days=1)) if last else now().date()
         with st.form(f"rb_form_{gid}", clear_on_submit=True, border=False):
-            what = st.text_input("What", placeholder="e.g. Read the Walter papers · Meeting with Walter · Compile notes")
+            what = st.text_input("What", placeholder="One piece of work, e.g. Read · Meeting · Draft")
             under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"rb_under_{gid}")
             c1, c2, c3 = st.columns(3)
             first = c1.date_input("First day", value=first0, min_value=now().date(), key=f"rb_first_{gid}")
@@ -4207,46 +4303,18 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
 # ── Goals ──
 with tab_goals:
   if tab_goals.open is not False:
-    existing = {g["title"] for g in state["goals"]}
-    starters = [s_ for s_ in starter_goals() if s_[0] not in existing]
-    if starters:
-        with st.expander("⚡ Quick-start goals", expanded=not state["goals"]):
-            with st.form("starter_form"):
-                pick = st.selectbox("Goal", [s_[0] for s_ in starters])
-                tgt = st.date_input("Target date", value=now().date() + timedelta(days=60),
-                                    min_value=now().date(), key="starter_target")
-                if st.form_submit_button("Start this goal", type="primary"):
-                    why = dict(starters)[pick]
-                    state["goals"].append({"id": uuid.uuid4().hex[:10], "title": pick, "why": why,
-                                           "target": tgt.isoformat(), "created": now().isoformat(),
-                                           "claimed": False})
-                    save_state(state)
-                    flash(f"🎯 **{pick}** is on the board. Break it into deadlines below.")
-                    st.rerun()
+    with st.expander("🗺️ New goal", expanded=not state["goals"], key="exp_new_goal"):
+        render_new_goal(state)
 
-    with st.expander("🎯 New long-term goal", expanded=not state["goals"] and not starters):
-        with st.form("goal_form", clear_on_submit=True):
-            gt = st.text_input("Goal", placeholder="e.g. Submit the paper to a journal")
-            why = st.text_input("Why it matters (shown when you need it)")
-            target = st.date_input("Target date", value=now().date() + timedelta(days=60), min_value=now().date())
-            if st.form_submit_button("Create goal", type="primary") and gt.strip():
-                state["goals"].append({"id": uuid.uuid4().hex[:10], "title": gt.strip(), "why": why.strip(),
-                                       "target": target.isoformat(), "created": now().isoformat(),
-                                       "claimed": False})
-                save_state(state)
-                flash(f"Goal created. Now break it down into deadlines.")
-                st.rerun()
-
-    with st.expander("🗓️ Prep for an upcoming event (conference, talk, exam, submission…)",
-                     expanded=not any(g.get("event_kind") for g in state["goals"])):
+    with st.expander("🗓️ Prep for an upcoming event (conference, talk, exam, submission…)", key="exp_prep"):
         st.caption("Pick something coming up on your DECK 12 board. It becomes a goal with prep steps planned "
                    "backwards from the date — each step is a real deadline, and finishing them fills the goal.")
         render_event_planner(state)
 
     has_key = bool(get_secret("ANTHROPIC_API_KEY"))
     for g in state["goals"]:
-        gtasks = [t for t in state["tasks"] if t.get("goal_id") == g["id"]]
-        n_done = sum(t["status"] == "done" for t in gtasks)
+        gtasks = R.goal_tasks(g, state["tasks"])  # dropped (cancelled) blocks don't count
+        n_done = sum(t["status"] in R.DONE for t in gtasks)
         target = date.fromisoformat(g["target"])
         with st.container(border=True):
             st.markdown(f"### {P.KINDS[g['event_kind']][0].split()[0] if g.get('event_kind') in P.KINDS else '🎯'} "
@@ -4276,7 +4344,7 @@ with tab_goals:
                                 unsafe_allow_html=True)
 
             with st.expander("🗺️ Plan the roadmap · stages + booked work time", key=f"exp_rm_{g['id']}",
-                             expanded=not gtasks and not R.stages(g)):
+                             expanded=(not gtasks and not R.stages(g)) or st.session_state.get("rm_open") == g["id"]):
                 render_roadmap_planner(state, g)
 
             if gtasks and len(gtasks) >= 3 and n_done == len(gtasks) and not g.get("claimed"):
