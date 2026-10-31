@@ -97,7 +97,7 @@ PROOF_DIR = DATA_DIR / "proofs"
 STATE_FILE = DATA_DIR / "state.json"
 RACE_TICK = float(os.getenv("DOD_RACE_TICK", "0.12"))  # seconds per animation frame
 
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_URL = os.getenv("DOD_ANTHROPIC_URL", "https://api.anthropic.com/v1/messages")  # tests use a stub
 NOTION_VERSION = "2022-06-28"
 DONE_WORDS = {"done", "complete", "completed", "finished", "✅"}
 
@@ -1231,6 +1231,22 @@ def timer_proof(t: dict) -> tuple[float, float]:
     return float(t.get("focus_min") or 0), float(max(10, round(0.8 * (t.get("minutes") or 30))))
 
 
+def _proof_touch(k: str) -> None:
+    """You're filling in this proof form: keep its panel open on every redraw."""
+    st.session_state["proof_open"] = k
+
+
+def proof_open(key: str) -> bool:
+    return st.session_state.get("proof_open") == key
+
+
+def _when(d: datetime) -> str:
+    """A due time that doesn't tick: 'today 6:30 PM', 'Sat 11:59 PM'."""
+    day = "today" if d.date() == now().date() else "tomorrow" if d.date() == now().date() + timedelta(days=1) \
+        else f"{d:%a}"
+    return f"{day} {d:%I:%M %p}".replace(" 0", " ")
+
+
 def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     """mode: 'open' (normal completion) or 'redeem' (finishing a missed task for a partial refund)."""
     s = state["settings"]
@@ -1247,16 +1263,17 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
                     f"focus timer</b> <span class='m'>{tail}</span></div></div>", unsafe_allow_html=True)
         if f"note_{k}" not in st.session_state:
             st.session_state[f"note_{k}"] = f"⏱️ {fm:.0f} min on the focus timer. "
-    note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.")
+    touch = {"on_change": _proof_touch, "args": (k,)}
+    note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.", **touch)
     up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else ""),
-                          type=PROOF_TYPES, key=f"file_{k}")
-    link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}")
+                          type=PROOF_TYPES, key=f"file_{k}", **touch)
+    link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}", **touch)
     honor = True
     if use_ai:
         st.caption("🧑‍⚖️ The AI race steward will review this proof.")
     else:
-        honor = st.checkbox("On my honor (and my car's paint job), this proof is real.", key=f"honor_{k}")
-    if not st.button("📸 Submit proof", key=f"submit_{k}", type="primary"):
+        honor = st.checkbox("On my honor (and my car's paint job), this proof is real.", key=f"honor_{k}", **touch)
+    if not st.button("📸 Submit proof", key=f"submit_{k}", type="primary", on_click=_proof_touch, args=(k,)):
         return
 
     errors, data, h = [], None, None
@@ -2314,8 +2331,11 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
     s = state["settings"]
     dl = parse_dt(t["deadline"])
     fm_ = t.get("focus_min") or 0
-    with st.expander(f"{chip(dl)} {t['title']} · {fmt_left(dl - now())} · +{t['reward']}"
-                     + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else ""), key=f"exp_{scope}{t['id']}"):
+    # the label never ticks (no live countdown): a changing label can make Streamlit redraw the panel closed
+    with st.expander(f"{chip(dl)} {t['title']} · due {_when(dl)} · +{t['reward']}"
+                     + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else ""), key=f"exp_{scope}{t['id']}",
+                     expanded=proof_open(f"{scope}open_{t['id']}")):
+        st.caption(f"⏳ {fmt_left(dl - now())} left")
         g = goal_title(state, t.get("goal_id"))
         st.markdown(
             f"**Due** {dl:%a %b %d, %I:%M %p} · **{t['difficulty']}** · +{t['reward']} 🪙 / −{t['penalty']} 🪙"
@@ -2441,7 +2461,8 @@ def render_today(state: dict) -> None:
                 fm_ = t.get("focus_min") or 0
                 c1, c2 = st.container(key=f"mrow_{t['id']}").columns([6, 1], vertical_alignment="top")
                 with c1.expander(f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())} · "
-                                 f"+{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}"):
+                                 f"+{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
+                                 expanded=proof_open(f"today_open_{t['id']}")):
                     render_proof_form(state, t, "open", scope="today_")
                 running = bool(tm) and tm.get("task_id") == t["id"]
                 if c2.button("⏱️" if running else "▶", key=f"mgo_{t['id']}", use_container_width=True,
@@ -3430,7 +3451,8 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
                       and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
         for t in redeemable:
             left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-            with st.expander(f"🩹 {t['title']} · {fmt_left(left)} to redeem for half back", key=f"exp_tb_{t['id']}"):
+            with st.expander(f"🩹 {t['title']} · redeem by {_when(now() + left)} for half back", key=f"exp_tb_{t['id']}",
+                             expanded=proof_open(f"tb_redeem_{t['id']}")):
                 render_proof_form(state, t, "redeem", scope="tb_")
 
 
@@ -4074,7 +4096,8 @@ with tab_tasks:
         st.caption(f"Missed — but finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
         for t in redeemable:
             left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-            with st.expander(f"💀 {t['title']} · {fmt_left(left)} to redeem", key=f"exp_rd_{t['id']}"):
+            with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
+                             expanded=proof_open(f"redeem_{t['id']}")):
                 render_proof_form(state, t, "redeem")
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
