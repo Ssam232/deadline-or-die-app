@@ -306,10 +306,12 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                     title, body = cands[(i + now.day) % len(cands)]
                     send(title, body, 3, ["bulb"])
 
+    queued = set((mem.get("alarms") or {}).keys())  # events/challenges already queued on ntfy at their start time
     sent_ch = mem.setdefault("challenges", [])
     claimed = set((save or {}).get("challenge_claims", []))
     for ch in EV.focus_challenges(now.date(), TZ):  # ping when a challenge window opens
-        if ch["start"] <= now < ch["end"] and ch["id"] not in sent_ch and ch["id"] not in claimed and not quiet:
+        if ch["start"] <= now < ch["end"] and ch["id"] not in sent_ch and ch["id"] not in claimed and not quiet \
+                and AL._seq("ch", ch["id"]) not in queued:
             sent_ch.append(ch["id"])
             send("⏱️ FOCUS CHALLENGE — window open",
                  f"Start a {ch['minutes']}-min session before {ch['end']:%I:%M %p} → {EV.prize_label(ch['kind'], ch['val'])}. "
@@ -318,9 +320,9 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
 
     sent_ev = mem.setdefault("events", [])
     for e in EV.active(now):  # random live events — the reason to open the app right now
-        if e["id"] not in sent_ev and not quiet:
+        if e["id"] not in sent_ev and not quiet and AL._seq("ev", e["id"]) not in queued:
             sent_ev.append(e["id"])
-            send(f"🎉 {e['title']}", f"{e['push']}\nEnds {e['end']:%I:%M %p}.", 4, ["tada"])
+            send(f"🎉 {e['title']}", EV.push_text(e, now), 4, ["tada"])
     del sent_ev[:-30]
 
     open_keys = {t["key"] for t in tasks}

@@ -2,8 +2,10 @@
 🗓️ Bridge to your existing Notion board (e.g. the Assignments board in DECK 12) — no two islands.
 
   • Pull: today's cards on your board show up as one-tap suggestions when you set your mission.
-  • Input board (e.g. Assignments): STRICTLY READ-ONLY. Today + upcoming cards become one-tap suggestions and
-          events you can prep for. The app never writes to it.
+  • Input board (e.g. Assignments): READ-ONLY, with one exception you asked for: each long-term goal you create
+          in the app gets ONE card on its target date ("🏁 🎯 …", ✅ when claimed). The app never edits or reads back
+          anything else there; its own cards are skipped when reading. Today + upcoming cards become one-tap
+          suggestions and events you can prep for.
   • Output board (e.g. Fortuna, a daily schedule): WRITE-ONLY. Every task appears as a "🏁 …" card on the day/time
           it's set to happen (or when it was assigned), ticks ✅ when done, and is tidied away after its day.
           Nothing is ever read back from it, so whatever else you put there stays out of the game.
@@ -241,6 +243,56 @@ def sync_out(n: Notion, m: dict, tasks: list[dict], now: datetime) -> list[str]:
                     t["out_archived"] = True
         except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
             errs.append(f"{t['title']}: {e}")
+    return errs
+
+
+GOAL_FIELDS = ("assign_out", "assign_sig")
+
+
+def goal_props(m: dict, g: dict) -> dict:
+    d = date.fromisoformat(g["target"])
+    props = {m["title"]: {"title": rt(("✅ " if g.get("claimed") else MARK) + "🎯 " + g["title"])}}
+    if m["date"]:
+        props[m["date"]] = {"date": {"start": d.isoformat()}}
+    if m["weekday"]:
+        opt = m["weekday_opts"].get(WEEKDAYS[d.weekday()])
+        if opt:
+            props[m["weekday"]] = ({"multi_select": [{"name": opt}]} if m["weekday_type"] == "multi_select"
+                                   else {m["weekday_type"]: {"name": opt}})
+    if m["time"]:
+        props[m["time"]] = {"rich_text": rt("🎯 goal target")}
+    if m["done"] and g.get("claimed"):
+        props[m["done"]] = ({"checkbox": True} if m["done_type"] == "checkbox"
+                            else {m["done_type"]: {"name": m["done_opt"]}})
+    return props
+
+
+def is_long_term(g: dict) -> bool:
+    """Goals you set in the app (not ones that came FROM the board, and not event-prep plans)."""
+    return bool(g.get("target")) and not (g.get("assign_page") or g.get("event_page") or g.get("event_kind"))
+
+
+def sync_goals(n: Notion, m: dict, goals: list[dict]) -> list[str]:
+    """The one write the input board gets: a card per long-term goal on its target date, kept in step with
+    the goal's name/date, ✅ once you claim it."""
+    errs = []
+    for g in goals:
+        if not is_long_term(g):
+            continue
+        sig = f"{g['title']}|{g['target']}|{bool(g.get('claimed'))}"
+        try:
+            if not g.get("assign_out"):
+                if g.get("claimed"):
+                    continue
+                g["assign_out"] = n.req("POST", "/pages", json={
+                    "parent": {"database_id": m["db"]}, "properties": goal_props(m, g),
+                    "icon": {"type": "emoji", "emoji": "🎯"}})["id"]
+                g["assign_sig"] = sig
+            elif g.get("assign_sig") != sig:
+                n.req("PATCH", f"/pages/{g['assign_out']}", json={"properties": goal_props(m, g)})
+                g["assign_sig"] = sig
+        except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
+            errs.append(f"goal {g['title']}: {e}")
     return errs
 
 

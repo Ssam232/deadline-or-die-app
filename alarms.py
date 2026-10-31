@@ -237,11 +237,29 @@ def _timer(save: dict, now: datetime) -> list[dict]:
     return [end_a] + slots
 
 
+def _live(save: dict, now: datetime, prof: dict | None) -> list[dict]:
+    """🎉 Live events and ⏱️ focus challenges, pushed the minute they start (not whenever the cron wakes up)."""
+    import events as EV
+    EV.set_profile(prof)  # same profile as the app and the nagger → the same schedule
+    out, tz = [], now.tzinfo
+    ev_claims, ch_claims = set(save.get("event_claims", [])), set(save.get("challenge_claims", []))
+    for d in (now.date(), now.date() + timedelta(days=1)):
+        for e in EV.todays(d, tz):
+            out.append(_alarm(("ev", e["id"]), e["start"], f"🎉 {e['title']}", EV.push_text(e, e["start"]), 4,
+                              ["tada"], e["id"] not in ev_claims))
+        for ch in EV.focus_challenges(d, tz):
+            out.append(_alarm(("ch", ch["id"]), ch["start"], "⏱️ FOCUS CHALLENGE — window open",
+                              f"Start a {ch['minutes']}-min session before {_hm(ch['end'])} → "
+                              f"{EV.prize_label(ch['kind'], ch['val'])}. Open the app, pick a task, hit Start.", 4,
+                              ["stopwatch"], ch["id"] not in ch_claims, ("new", ch["minutes"])))
+    return out
+
+
 def plan(save: dict, now: datetime, prof: dict | None = None) -> list[dict]:
     """Every alarm that could fire in the next ~2 days, wanted or not (unwanted ones get cancelled)."""
     if not save:
         return []
-    out = _tasks(save, now) + NU.build(save, now, prof, _alarm) + _timer(save, now)
+    out = _tasks(save, now) + NU.build(save, now, prof, _alarm) + _timer(save, now) + _live(save, now, prof)
     for d in (now.date(), now.date() + timedelta(days=1)):
         out += _prayers(save, d, now) + _day(save, d, now) + _daily_reminders(save, d, now)
     lo, hi = now + timedelta(seconds=MIN_LEAD), now + HORIZON

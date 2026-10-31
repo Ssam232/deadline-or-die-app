@@ -516,13 +516,15 @@ DASH_EVERY = 45  # seconds between dashboard refreshes
 
 
 def _notion_sync(n: Notion, ids: dict, state: dict, out_map: dict | None, app_url: str | None,
-                 dash: bool) -> list[str]:
+                 dash: bool, in_map: dict | None = None) -> list[str]:
     """All the Notion round-trips for one save. Mutates `state` (adds page ids) — never touches Streamlit."""
     errs = _push_tasks(n, ids, state)
     try:  # board problems never block saving
         errs += B.retract_pushed(n, state["tasks"])  # input board is read-only: undo old pushes
         if out_map:
             errs += B.sync_out(n, out_map, state["tasks"], now())
+        if in_map:  # long-term goals → one card each on the Assignments calendar
+            errs += B.sync_goals(n, in_map, state.get("goals", []))
     except Exception as e:
         errs.append(f"board: {e}")
     save_json(n, ids["save_page"], state)
@@ -542,6 +544,7 @@ class _Saver:
         self.lock, self.ev = threading.Lock(), threading.Event()
         self.job, self.busy, self.errors = None, False, []
         self.known: dict[str, dict] = {}   # task id -> sync fields (None = removed)
+        self.known_goals: dict[str, dict] = {}  # goal id -> Assignments card fields
         self.last_dash, self.last_ok = 0.0, 0.0
         threading.Thread(target=self._run, daemon=True, name="dod-saver").start()
 
@@ -557,6 +560,12 @@ class _Saver:
         t0 = time.time()
         while self.pending() and time.time() - t0 < timeout:
             time.sleep(0.05)
+
+    def _apply_known_goals(self, goals: list[dict]) -> None:
+        for g in goals:
+            for f, v in self.known_goals.get(g["id"], {}).items():
+                if v is not None:
+                    g[f] = v
 
     def _apply_known(self, tasks: list[dict]) -> None:
         for t in tasks:
@@ -576,18 +585,22 @@ class _Saver:
                 if not job:
                     continue
                 self.busy = True
-            live, snapshot, (token, ids, out_map, app_url) = job
+            live, snapshot, (token, ids, out_map, app_url, in_map) = job
             try:
                 snap = json.loads(snapshot)
                 self._apply_known(snap["tasks"])
+                self._apply_known_goals(snap.get("goals", []))
                 dash = time.time() - self.last_dash > DASH_EVERY
-                errs = _notion_sync(Notion(token), ids, snap, out_map, app_url, dash)
+                errs = _notion_sync(Notion(token), ids, snap, out_map, app_url, dash, in_map)
                 if dash:
                     self.last_dash = time.time()
                 with self.lock:
                     for t in snap["tasks"]:
                         self.known[t["id"]] = {f: t.get(f) for f in SYNC_FIELDS}
+                    for g in snap.get("goals", []):
+                        self.known_goals[g["id"]] = {f: g.get(f) for f in B.GOAL_FIELDS}
                     self._apply_known(live.get("tasks", []))  # hand the new ids back to the live game
+                    self._apply_known_goals(live.get("goals", []))
                     self.errors += errs
                     self.last_ok = time.time()
             except Exception as e:  # noqa: BLE001
@@ -621,14 +634,15 @@ def save_state(state: dict) -> None:
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
     try:
         n, ids = notion_ctx()
-        oc = out_cfg(state)
+        oc, bc = out_cfg(state), board_cfg(state)
         out_map = _board_map(*oc) if oc else None
+        in_map = _board_map(*bc) if bc else None
         if os.getenv("DOD_SYNC_SAVE"):  # tests: do it inline
-            errs = _notion_sync(n, ids, state, out_map, get_secret("APP_URL"), True)
+            errs = _notion_sync(n, ids, state, out_map, get_secret("APP_URL"), True, in_map)
             if errs:
                 flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
             return
-        _saver().submit(state, snapshot, (get_secret("NOTION_TOKEN"), ids, out_map, get_secret("APP_URL")))
+        _saver().submit(state, snapshot, (get_secret("NOTION_TOKEN"), ids, out_map, get_secret("APP_URL"), in_map))
     except Exception as e:
         flash(f"⚠️ Couldn't save to Notion ({e}). Your progress is kept on this server for now.", "error")
 
@@ -1899,8 +1913,33 @@ def _prayer_settings(state: dict, today, key: str) -> None:
         state["settings"].update(prayer_method=meth, prayer_asr=asr_)
         save_state(state)
     tt = PR.times_for(today, TZ, **PR.settings_of(state))
+    fit_ = state["settings"].get("prayer_fit")
     st.caption("Today in Calgary: " + " · ".join(f"{k} {v:%I:%M}".replace(" 0", " ") for k, v in tt.items())
-               + ". Reminders follow these windows; each +1 cancels that prayer's.")
+               + ". Reminders follow these windows; each +1 cancels that prayer's."
+               + (f" 📲 Matched to your prayer app ({date.fromisoformat(fit_['on']):%b %d})." if fit_ else ""))
+    with st.form(f"pr_match_{key}", border=False):
+        st.markdown("**📲 Match my prayer app** · copy today's five times from the app (or mosque timetable) you "
+                    "pray by. The reminders then follow it every day, seasons included.")
+        cols = st.columns(5)
+        typed = {n: cols[i].time_input(n, value=tt[n].time().replace(second=0, microsecond=0), step=60,
+                                       key=f"pr_m_{key}_{n}") for i, n in enumerate(PR.NAMES)}
+        c1, c2 = st.columns([1, 1])
+        go = c1.form_submit_button("📲 Use these times", type="primary")
+        reset = c2.form_submit_button("↺ Back to calculated", disabled=not fit_)
+    if go:
+        target = {n: datetime.combine(today, v, TZ) for n, v in typed.items()}
+        state["settings"]["prayer_fit"] = PR.fit(today, TZ, target, lat=PR.settings_of(state)["lat"],
+                                                 lng=PR.settings_of(state)["lng"])
+        save_state(state)
+        got = PR.times_for(today, TZ, **PR.settings_of(state))
+        off = [n for n in PR.NAMES if abs((got[n] - target[n]).total_seconds()) > 60]
+        flash("📲 Prayer times now follow your app." + (f" ({', '.join(off)} within a couple of minutes.)" if off else ""))
+        st.rerun()
+    if reset:
+        state["settings"].pop("prayer_fit", None)
+        save_state(state)
+        flash("↺ Back to the calculated prayer times.")
+        st.rerun()
 
 
 REMIND_HOURS = [f"{h:02d}:00" for h in range(6, 24)]
@@ -4343,6 +4382,18 @@ with tab_goals:
                     st.markdown(f"{icon} {t['title']} <small>· {parse_dt(t['deadline']):%b %d}</small>",
                                 unsafe_allow_html=True)
 
+            with st.expander("✏️ Edit goal", key=f"exp_ge_{g['id']}"):
+                with st.form(f"ge_form_{g['id']}", border=False):
+                    nt = st.text_input("Goal", value=g["title"], key=f"ge_t_{g['id']}")
+                    c1, c2 = st.columns([2, 1])
+                    nw = c1.text_input("Why it matters", value=g.get("why", ""), key=f"ge_w_{g['id']}")
+                    nd = c2.date_input("Target date", value=target, key=f"ge_d_{g['id']}")
+                    if st.form_submit_button("💾 Save", type="primary") and (nt or "").strip():
+                        g.update(title=nt.strip(), why=(nw or "").strip(), target=nd.isoformat())
+                        save_state(state)
+                        flash(f"✏️ **{g['title']}** updated" + (" (and its Assignments card)." if B.is_long_term(g)
+                                                                  and board_cfg(state) else "."))
+                        st.rerun()
             with st.expander("🗺️ Plan the roadmap · stages + booked work time", key=f"exp_rm_{g['id']}",
                              expanded=(not gtasks and not R.stages(g)) or st.session_state.get("rm_open") == g["id"]):
                 render_roadmap_planner(state, g)
@@ -4405,6 +4456,12 @@ with tab_goals:
             if not any(t["status"] == "open" for t in gtasks):
                 if st.checkbox("Delete this goal", key=f"gdel_chk_{g['id']}") and \
                         st.button("Delete", key=f"gdel_{g['id']}"):
+                    card = g.get("assign_out") or (_saver().known_goals.get(g["id"]) or {}).get("assign_out")
+                    if card and get_secret("NOTION_TOKEN"):  # take its card off the Assignments calendar too
+                        try:
+                            Notion(get_secret("NOTION_TOKEN")).req("PATCH", f"/pages/{card}", json={"archived": True})
+                        except Exception:  # noqa: BLE001
+                            pass
                     state["goals"].remove(g)
                     save_state(state)
                     st.rerun()

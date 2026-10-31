@@ -58,8 +58,11 @@ def _sun(jd: float) -> tuple[float, float]:
     return _asin(_sin(e) * _sin(L)), eqt
 
 
-def _times(d: date, lat: float, lng: float, tz_hours: float, method: str, asr_school: str) -> dict:
+def _times(d: date, lat: float, lng: float, tz_hours: float, method: str, asr_school: str,
+           fajr: float | None = None, isha=None) -> dict:
     fajr_a, isha_a = METHODS.get(method, METHODS["ISNA"])
+    fajr_a = fajr if fajr is not None else fajr_a
+    isha_a = isha if isha is not None else isha_a
     jd = _julian(d.year, d.month, d.day) - lng / (15 * 24)
 
     def midday(t):
@@ -103,11 +106,33 @@ def _times(d: date, lat: float, lng: float, tz_hours: float, method: str, asr_sc
 
 
 def times_for(d: date, tz, lat: float = CALGARY[0], lng: float = CALGARY[1], method: str = "ISNA",
-              asr_school: str = "Standard") -> dict[str, datetime]:
+              asr_school: str = "Standard", fajr: float | None = None, isha=None,
+              offsets: dict | None = None) -> dict[str, datetime]:
     off = datetime.combine(d, dtime(12, 0), tz).utcoffset().total_seconds() / 3600
-    hrs = _times(d, lat, lng, off, method, asr_school)
+    hrs = _times(d, lat, lng, off, method, asr_school, fajr, isha)
     base = datetime.combine(d, dtime(0, 0), tz)
-    return {k: base + timedelta(minutes=round(v * 60)) for k, v in hrs.items()}
+    offsets = offsets or {}
+    return {k: base + timedelta(minutes=round(v * 60) + int(offsets.get(k, 0))) for k, v in hrs.items()}
+
+
+# ── 📲 match the app you actually pray by ──
+FAJR_ANGLES = [x / 2 for x in range(20, 42)]                 # 10°–20.5°
+ISHA_OPTS = [x / 2 for x in range(20, 42)] + ["+60", "+75", "+90", "+120"]
+
+
+def fit(d: date, tz, target: dict[str, datetime], lat: float = CALGARY[0], lng: float = CALGARY[1]) -> dict:
+    """Given one day of times from your prayer app (or mosque timetable), find the angles / Asr school that
+    reproduce them, plus any fixed minute offsets the app adds (e.g. Dhuhr +5). Angles keep it right as the
+    seasons change; offsets catch the app's own adjustments. Returns the settings to store as prayer_fit."""
+    def mins(a: datetime, b: datetime) -> float:
+        return (a - b).total_seconds() / 60
+    kw = {"lat": lat, "lng": lng}
+    asr = min(ASR, key=lambda a: abs(mins(times_for(d, tz, asr_school=a, **kw)["Asr"], target["Asr"])))
+    fa = min(FAJR_ANGLES, key=lambda a: abs(mins(times_for(d, tz, fajr=a, **kw)["Fajr"], target["Fajr"])))
+    ia = min(ISHA_OPTS, key=lambda a: abs(mins(times_for(d, tz, isha=a, **kw)["Isha"], target["Isha"])))
+    base = times_for(d, tz, asr_school=asr, fajr=fa, isha=ia, **kw)
+    off = {n: round(mins(target[n], base[n])) for n in NAMES if n in target}
+    return {"fajr": fa, "isha": ia, "asr": asr, "off": {k: v for k, v in off.items() if v}, "on": d.isoformat()}
 
 
 def windows(d: date, tz, **kw) -> list[dict]:
@@ -129,5 +154,10 @@ def status(count: int, now: datetime, **kw) -> dict:
 
 def settings_of(save: dict) -> dict:
     s = save.get("settings", {})
-    return {"method": s.get("prayer_method", "ISNA"), "asr_school": s.get("prayer_asr", "Standard"),
-            "lat": float(s.get("prayer_lat", CALGARY[0])), "lng": float(s.get("prayer_lng", CALGARY[1]))}
+    out = {"method": s.get("prayer_method", "ISNA"), "asr_school": s.get("prayer_asr", "Standard"),
+           "lat": float(s.get("prayer_lat", CALGARY[0])), "lng": float(s.get("prayer_lng", CALGARY[1]))}
+    f = s.get("prayer_fit")
+    if f:  # matched to your prayer app: its angles, Asr school and minute adjustments win
+        out.update(asr_school=f.get("asr", out["asr_school"]), fajr=f.get("fajr"), isha=f.get("isha"),
+                   offsets=f.get("off") or {})
+    return out
