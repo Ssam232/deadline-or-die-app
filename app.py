@@ -3196,7 +3196,8 @@ function finish(){{  // whole-page "you're done" you can catch from across the r
  const key='dodfin:'+S;try{{if(parent.sessionStorage.getItem(key))return;parent.sessionStorage.setItem(key,'1');}}catch(e){{}}
  if(P.getElementById('dod-fin'))return;
  const st=P.createElement('style');st.id='dod-fin-css';st.textContent=`
-#dod-fin{{position:fixed;inset:0;z-index:999999;pointer-events:none;overflow:hidden}}
+#dod-fin{{position:fixed;inset:0;z-index:999999;pointer-events:none;overflow:hidden;animation:dfo .7s ease 6.6s forwards}}
+@keyframes dfo{{to{{opacity:0;visibility:hidden}}}}
 #dod-fin .fr{{position:absolute;inset:0;padding:14px;box-sizing:border-box;
   background:repeating-conic-gradient(#f2efe8 0 25%,#111318 0 50%) 0 0/14px 14px;
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
@@ -3212,12 +3213,18 @@ function finish(){{  // whole-page "you're done" you can catch from across the r
 @media (prefers-reduced-motion:reduce){{#dod-fin .fl{{display:none}}#dod-fin .fr,#dod-fin .gl{{animation:none}}}}`;
  P.head.appendChild(st);
  const o=P.createElement('div');o.id='dod-fin';o.innerHTML='<div class="gl"></div><div class="fr"></div><div class="fl"></div>';
- P.body.appendChild(o);setTimeout(()=>{{o.remove();st.remove();}},7800);
- // tab title blinks until you come back to it
- const t0=P.title;let on=true;const iv=setInterval(()=>{{P.title=on?'🏁 SESSION DONE':t0;on=!on;}},900);
- const stop=()=>{{clearInterval(iv);P.title=t0;}};
- parent.addEventListener('focus',stop,{{once:true}});P.addEventListener('pointerdown',stop,{{once:true}});
- setTimeout(stop,10*60*1000);
+ P.body.appendChild(o);
+ // cleanup runs in the PAGE, not in this iframe: the app reruns right after a session ends and this frame is
+ // thrown away, which used to take its timers with it and leave the flag on screen. CSS fades it out regardless.
+ const sc=P.createElement('script');sc.textContent=`(function(){{
+  setTimeout(function(){{var o=document.getElementById('dod-fin'),c=document.getElementById('dod-fin-css');
+   if(o)o.remove();if(c)c.remove();}},7600);
+  var t0=document.title.replace(/^🏁 SESSION DONE$/,'')||'Deadline or Die',on=true;
+  var iv=setInterval(function(){{document.title=on?'🏁 SESSION DONE':t0;on=!on;}},900);
+  function stop(){{clearInterval(iv);document.title=t0;}}
+  window.addEventListener('focus',stop,{{once:true}});document.addEventListener('pointerdown',stop,{{once:true}});
+  setTimeout(stop,600000);}})();`;
+ P.body.appendChild(sc);sc.remove();
  try{{if(parent.navigator.vibrate)parent.navigator.vibrate([400,150,400,150,800]);}}catch(e){{}}}}
 const tr=document.getElementById('track'),L=tr.getTotalLength(),car=document.getElementById('car');
 const trail=document.getElementById('trail'),w=document.getElementById('w'),NS='http://www.w3.org/2000/svg';
@@ -3657,6 +3664,7 @@ CSS = """<style>
   animation:dodGrow .9s cubic-bezier(.2,.7,.2,1) both;--from:0%}
 .st-key-debt_way{margin:0 0 .6rem}
 .st-key-debt_way p{margin:0}
+[class*="st-key-win_"]{animation:dodDropOut .7s ease-in 9s both;overflow:hidden}
 .st-key-drop_reveal{animation:dodDropOut .6s ease-in 4.8s both;overflow:hidden}
 .dod-drop{display:flex;gap:14px;align-items:center;padding:12px 16px;border:1px solid var(--y);border-radius:14px;
   background:radial-gradient(120% 160% at 0% 50%,rgba(245,197,24,.16),transparent 60%),#141821;
@@ -3964,6 +3972,9 @@ for kind, m in st.session_state.pop("flash", []):
         lead = m.split(" ", 1)
         icon = lead[0] if len(lead) == 2 and not lead[0][:1].isalnum() and len(lead[0]) <= 3 and "*" not in lead[0] else None
         st.toast(lead[1] if icon else m, icon=icon or TOAST_ICON[kind], duration="long" if len(m) > 90 else "short")
+    elif kind == "success":  # the big win card: has its moment, then clears itself
+        with st.container(key=f"win_{abs(hash(m)) % 10**8}"):
+            st.success(m)
     else:
         getattr(st, kind)(m)
 if st.session_state.pop("celebrate", False):
