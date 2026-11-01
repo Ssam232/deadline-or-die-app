@@ -2538,7 +2538,9 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
     dl = parse_dt(t["deadline"])
     fm_ = t.get("focus_min") or 0
     # the label never ticks (no live countdown): a changing label can make Streamlit redraw the panel closed
-    with st.expander(f"{chip(dl)} {t['title']} · due {_when(dl)} · +{t['reward']}"
+    _ba = R.block_at(t, TZ)  # booked roadmap time: show when it's booked, not the end-of-day deadline
+    with st.expander((f"🗺️ {t['title']} · booked {_when(_ba)}" if _ba else f"{chip(dl)} {t['title']} · due {_when(dl)}")
+                     + f" · +{t['reward']}"
                      + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else ""), key=f"exp_{scope}{t['id']}",
                      expanded=proof_open(f"{scope}open_{t['id']}")):
         st.caption(f"⏳ {fmt_left(dl - now())} left")

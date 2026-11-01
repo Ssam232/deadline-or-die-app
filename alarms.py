@@ -299,6 +299,14 @@ def diff(alarms: list[dict], posted: dict, now: datetime) -> tuple[list[dict], l
             # cancel even if we never posted it: the other syncer (app ↔ nagger) might have
             cancel.append(a)
             m[a["seq"]] = [a["at"].timestamp(), "x"]
+    # alarms we queued that aren't in the plan any more (a block or deadline was MOVED, so its alarm got a new id):
+    # take the old ones back too, or they still go off at the old time
+    planned = {a["seq"] for a in alarms}
+    soon = now.timestamp() + MIN_LEAD + 5  # too close to call back reliably / not planned because it's imminent
+    for seq, v in list(m.items()):
+        if seq not in planned and v[1] != "x" and v[0] > soon:
+            cancel.append({"seq": seq, "at": datetime.fromtimestamp(v[0], now.tzinfo), "title": "", "message": ""})
+            m[seq] = [v[0], "x"]
     return post, cancel, m
 
 
