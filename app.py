@@ -2693,7 +2693,10 @@ def render_today(state: dict) -> None:
         elif not stt["done_today"] and n_.hour >= 18 and n_.weekday() not in daily.WEEKEND:
             st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
                        "Do the smallest one now.")
-        with st.expander("➕ Add to today's mission"):
+        _only_booked = bool(m) and all(t.get("block") for t in m)
+        if _only_booked:
+            st.caption("🗺️ Your booked blocks got you qualified. Anything else today? Add it below.")
+        with st.expander("➕ Add to today's mission", expanded=_only_booked and n_ < stt["deadline"]):
             render_qualify_form(state)
         _bail_button(state, stt)
 

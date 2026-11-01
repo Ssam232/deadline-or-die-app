@@ -165,6 +165,18 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
             (10, 5, "🚦 10 MIN TO QUALIFY", "Open the app and lock in today's mission. Now.")):
         out.append(_alarm(("q", d, mins), qd - timedelta(minutes=mins), title, msg, prio, ["vertical_traffic_light"],
                           not rest and not daily.qualified(save, d) and not daily.qualify_optional(d)))
+    # 🗺️ booked roadmap time already qualifies you; still nudge to add the rest of the day (cancelled once you do)
+    bk = daily.booked(save, d)
+    extra = [t for t in daily.mission(save, d) if not t.get("block")]
+    if bk:
+        first = datetime.strptime(bk[0]["block"]["start"], "%H:%M").strftime("%I:%M %p").lstrip("0")
+        for mins, title, msg in (
+                (60, f"🚦 Booked: {len(bk)} block{'s' * (len(bk) != 1)} today", f"First at {first}. You're qualified, but "
+                 f"is that the whole day? Add anything else to today's mission before {_hm(qd)}."),
+                (15, "🚦 Anything else today?", "Your roadmap blocks are locked in. 30 seconds to add the rest of "
+                                                "today's mission (emails, errands, the small stuff).")):
+            out.append(_alarm(("qb", d, mins), qd - timedelta(minutes=mins), title, msg, 3, ["vertical_traffic_light"],
+                              not rest and not extra))
     if daily.qualify_optional(d):  # weekends: no countdown, just two friendly offers (cancelled once you lock in)
         for hh, mm, title, msg in (
                 (11, 30, "🚦 Weekend mission?", f"Optional today: lock in 1–3 things any time for +{c['qualify_fuel']} fuel. "
