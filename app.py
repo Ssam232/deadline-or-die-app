@@ -4382,20 +4382,23 @@ def render_new_goal(state: dict) -> None:
         st.rerun()
 
 
-def render_block_editor(state: dict, g: dict) -> None:
-    """Move, resize, rename or drop a booked block. The Notion calendar card follows."""
+def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str = "be") -> None:
+    """Move, resize, rename or drop a booked block. The Notion calendar card follows.
+    only=<task id>: edit that block straight away (tapped on the flow chart)."""
     gid = g["id"]
     blocks = sorted((t for t in R.goal_tasks(g, state["tasks"]) if t.get("block") and t["status"] == "open"),
                     key=lambda t: t["scheduled"])
+    if only:
+        blocks = [t for t in blocks if t["id"] == only]
     if not blocks:
-        st.caption("No open blocks to edit yet.")
+        st.caption("No open blocks to edit yet." if not only else "That one's finished (or gone), so there's nothing to edit.")
         return
     lbl = {t["id"]: f"{t['title']} · {R._fmt_block(t, TZ)}" for t in blocks}
-    tid = st.selectbox("Block", list(lbl), format_func=lbl.get, key=f"be_pick_{gid}")
+    tid = only or st.selectbox("Block", list(lbl), format_func=lbl.get, key=f"{kp}_pick_{gid}")
     t = next(x for x in blocks if x["id"] == tid)
     b = t["block"]
     opts = _stage_opts(g)
-    k = f"be_{tid}"
+    k = f"{kp}_{tid}"
     with st.form(f"{k}_form", border=False):
         title = st.text_input("What", value=t["title"], key=f"{k}_t")
         under = st.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
@@ -4429,6 +4432,119 @@ def render_block_editor(state: dict, g: dict) -> None:
         st.rerun()
 
 
+def render_stage_editor(state: dict, g: dict, only: str | None = None, kp: str = "se") -> None:
+    """Rename a stage, change what it feeds into, or delete it (its blocks and sub-stages move up a level)."""
+    gid = g["id"]
+    if not R.stages(g):
+        st.caption("No stages yet. Add one in 🧩 Add a stage.")
+        return
+    opts = _stage_opts(g)
+    sid = only or st.selectbox("Stage", [n["id"] for n in R.stages(g)], format_func=lambda i: opts.get(i, i).strip(),
+                               key=f"{kp}_pick_{gid}")
+    n = next((x for x in R.stages(g) if x["id"] == sid), None)
+    if not n:
+        return
+    allowed = {"": opts[""], **{x["id"]: opts[x["id"]] for x in R.move_options(g, sid)}}
+    k = f"{kp}_{sid}"
+    with st.form(f"{k}_form", border=False):
+        name = st.text_input("Stage name", value=n["title"], key=f"{k}_t")
+        cur = n.get("parent") or ""
+        par = st.selectbox("Feeds into", list(allowed), index=list(allowed).index(cur) if cur in allowed else 0,
+                           format_func=allowed.get, key=f"{k}_p")
+        go = st.form_submit_button("💾 Save stage", type="primary")
+    if go and (name or "").strip():
+        R.update_stage(g, sid, title=name, parent=par or None)
+        save_state(state)
+        flash(f"🧩 Stage **{name.strip()}** saved.")
+        st.rerun()
+    inside = len(R.children(g, sid)) + sum(t.get("node") == sid for t in R.goal_tasks(g, state["tasks"]))
+    up = opts.get(n.get("parent") or "", "").strip()
+    if st.checkbox(f"Delete this stage" + (f" (its {inside} item{'s' * (inside != 1)} move up to {up})" if inside else ""),
+                   key=f"{k}_delchk") and st.button("🗑️ Delete stage", key=f"{k}_del"):
+        R.delete_stage(g, state["tasks"], sid)
+        st.session_state.pop(f"flow_sel_{gid}", None)
+        save_state(state)
+        flash(f"🗑️ Stage **{n['title']}** deleted" + (f"; its contents moved up to {up}." if inside else "."))
+        st.rerun()
+
+
+def render_task_quick_edit(state: dict, g: dict, tid: str) -> None:
+    """A milestone (not a booked block): rename it, move it to a stage, change its due date."""
+    t = next((x for x in R.goal_tasks(g, state["tasks"]) if x["id"] == tid), None)
+    if not t or t["status"] != "open":
+        st.caption("That one's finished (or gone), so there's nothing to edit.")
+        return
+    opts = _stage_opts(g)
+    k = f"me_{tid}"
+    dl = parse_dt(t["deadline"])
+    with st.form(f"{k}_form", border=False):
+        title = st.text_input("What", value=t["title"], key=f"{k}_t")
+        c1, c2 = st.columns(2)
+        under = c1.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
+                             if (t.get("node") or "") in opts else 0, format_func=opts.get, key=f"{k}_u")
+        due = c2.date_input("Due", value=max(now().date(), dl.date()), min_value=now().date(), key=f"{k}_d")
+        go = st.form_submit_button("💾 Save", type="primary")
+    if go and (title or "").strip():
+        t.update(title=title.strip(), node=under or None,
+                 deadline=datetime.combine(due, dl.time().replace(tzinfo=None), TZ).isoformat())
+        save_state(state)
+        flash(f"✏️ **{t['title']}** saved.")
+        st.rerun()
+
+
+_FLOW = components.declare_component("flow", path=str(Path(__file__).parent / "components" / "flow"))
+
+
+def render_flow(state: dict, g: dict) -> None:
+    """The roadmap as a flow chart you can tap: the box you tap opens for editing right underneath."""
+    gid = g["id"]
+    dot = R.dot(g, state["tasks"], now(), accent(state)[0])
+    sel = st.session_state.get(f"flow_sel_{gid}")
+    try:
+        ev = _FLOW(dot=dot, sel=sel or "", key=f"flow_{gid}", default=None)
+    except Exception:  # noqa: BLE001 — never lose the chart: fall back to the plain (non-tappable) one
+        ev = None
+        st.graphviz_chart(dot, use_container_width=True)
+    if ev and ev.get("t") != st.session_state.get(f"flow_t_{gid}"):
+        st.session_state[f"flow_t_{gid}"] = ev.get("t")
+        sel = st.session_state[f"flow_sel_{gid}"] = ev.get("id")
+    if not sel:
+        return
+    with st.container(border=True, key=f"flow_ed_{gid}"):
+        c1, c2 = st.columns([6, 1], vertical_alignment="center")
+        if c2.button("✕", key=f"flow_x_{gid}", help="Close"):
+            st.session_state.pop(f"flow_sel_{gid}", None)
+            st.rerun()
+        if sel == "goal":
+            c1.markdown("**✏️ The goal**")
+            render_goal_edit(state, g, "fg")
+        elif sel.startswith("s_"):
+            c1.markdown("**✏️ Stage**")
+            render_stage_editor(state, g, only=sel[2:], kp="fse")
+        elif sel.startswith("t_"):
+            t = next((x for x in state["tasks"] if x["id"] == sel[2:]), None)
+            c1.markdown(f"**✏️ {html.escape(t['title']) if t else 'Block'}**")
+            if t and t.get("block"):
+                render_block_editor(state, g, only=t["id"], kp="fbe")
+            else:
+                render_task_quick_edit(state, g, sel[2:])
+
+
+def render_goal_edit(state: dict, g: dict, k0: str = "ge") -> None:
+    target = date.fromisoformat(g["target"])
+    with st.form(f"{k0}_form_{g['id']}", border=False):
+        nt = st.text_input("Goal", value=g["title"], key=f"{k0}_t_{g['id']}")
+        c1, c2 = st.columns([2, 1])
+        nw = c1.text_input("Why it matters", value=g.get("why", ""), key=f"{k0}_w_{g['id']}")
+        nd = c2.date_input("Target date", value=target, key=f"{k0}_d_{g['id']}")
+        if st.form_submit_button("💾 Save", type="primary") and (nt or "").strip():
+            g.update(title=nt.strip(), why=(nw or "").strip(), target=nd.isoformat())
+            save_state(state)
+            flash(f"✏️ **{g['title']}** updated" + (" (and its Assignments card)." if B.is_long_term(g)
+                                                      and board_cfg(state) else "."))
+            st.rerun()
+
+
 def _stage_opts(g: dict) -> dict[str, str]:
     out = {"": "🏁 Straight into the goal"}
 
@@ -4447,7 +4563,7 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
     """Stages (nestable) + scheduled work blocks for one goal."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t1, t4, t2, t3 = st.tabs(["🗓️ Schedule work", "✏️ Edit blocks", "🧩 Add a stage", "🧹 Tidy"])
+    t1, t4, t2, t3 = st.tabs(["🗓️ Schedule work", "✏️ Edit blocks", "🧩 Add a stage", "🧩 Edit stages"])
     with t4:
         render_block_editor(state, g)
     with t1:
@@ -4497,18 +4613,7 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
         st.caption(f"Clear every block under a stage → **+{R.STAGE_BASE}–{R.STAGE_MAX}** stage bonus. "
                    "Stages can sit inside other stages.")
     with t3:
-        empty = [n for n in R.stages(g) if not R.children(g, n["id"])
-                 and not any(t.get("node") == n["id"] for t in R.goal_tasks(g, state["tasks"]))]
-        if empty:
-            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
-            rm = c1.selectbox("Empty stage", [n["id"] for n in empty],
-                              format_func=lambda i: next(n["title"] for n in empty if n["id"] == i), key=f"rr_{gid}")
-            if c2.button("Remove", key=f"rr_go_{gid}"):
-                R.remove_stage(g, state["tasks"], rm)
-                save_state(state)
-                st.rerun()
-        else:
-            st.caption("Only empty stages can be removed. Open blocks can be dropped from the Tasks tab.")
+        render_stage_editor(state, g)
 
 
 # ── Goals ──
@@ -4540,11 +4645,7 @@ with tab_goals:
                              f"({(target - now().date()).days} days)")
             big = R.goal_bonus(g, state["tasks"])
             if R.stages(g) or any(t.get("block") for t in gtasks):
-                _dot = R.dot(g, state["tasks"], now(), accent(state)[0])
-                try:
-                    st.graphviz_chart(_dot, width="stretch")
-                except TypeError:
-                    st.graphviz_chart(_dot, use_container_width=True)
+                render_flow(state, g)
                 st.caption(f"🪙 Each block pays its own coins · 🧩 a cleared stage +{R.STAGE_BASE}–{R.STAGE_MAX} · "
                            f"🏆 the whole goal **+{big}**")
             else:
@@ -4555,17 +4656,7 @@ with tab_goals:
                                 unsafe_allow_html=True)
 
             with st.expander("✏️ Edit goal", key=f"exp_ge_{g['id']}"):
-                with st.form(f"ge_form_{g['id']}", border=False):
-                    nt = st.text_input("Goal", value=g["title"], key=f"ge_t_{g['id']}")
-                    c1, c2 = st.columns([2, 1])
-                    nw = c1.text_input("Why it matters", value=g.get("why", ""), key=f"ge_w_{g['id']}")
-                    nd = c2.date_input("Target date", value=target, key=f"ge_d_{g['id']}")
-                    if st.form_submit_button("💾 Save", type="primary") and (nt or "").strip():
-                        g.update(title=nt.strip(), why=(nw or "").strip(), target=nd.isoformat())
-                        save_state(state)
-                        flash(f"✏️ **{g['title']}** updated" + (" (and its Assignments card)." if B.is_long_term(g)
-                                                                  and board_cfg(state) else "."))
-                        st.rerun()
+                render_goal_edit(state, g)
             with st.expander("🗺️ Plan the roadmap · stages + booked work time", key=f"exp_rm_{g['id']}",
                              expanded=(not gtasks and not R.stages(g)) or st.session_state.get("rm_open") == g["id"]):
                 render_roadmap_planner(state, g)

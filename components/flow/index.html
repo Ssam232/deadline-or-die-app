@@ -1,0 +1,53 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;background:transparent;font-family:system-ui,sans-serif}
+#wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+#wrap svg{width:100%;height:auto;display:block}
+@media (max-width:640px){#wrap svg{min-width:660px}}
+g.node{cursor:pointer}
+g.node:hover path,g.node:hover polygon,g.node:hover ellipse{filter:brightness(1.35)}
+g.node.sel path,g.node.sel polygon{stroke-width:3.2px}
+#hint{color:#8b909c;font-size:12px;margin:2px 0 0}
+</style>
+<script src="viz-standalone.js"></script>
+</head>
+<body>
+<div id="wrap"></div><div id="hint">Tap a box to edit it.</div>
+<script>
+// 🗺️ The roadmap flow chart, drawn with Graphviz (viz.js, MIT) and clickable: tapping a box sends its id back to
+// the app, which opens that block / stage / goal for editing right under the chart.
+const send = (type, extra) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, extra), "*");
+let lastDot = null, lastSel = null, vizP = Viz.instance();
+const height = () => send("streamlit:setFrameHeight", {height: document.body.scrollHeight + 4});
+function mark(sel) {
+  document.querySelectorAll("g.node").forEach(g => {
+    const id = (g.querySelector("title") || {}).textContent;
+    g.classList.toggle("sel", !!sel && id === sel);
+  });
+}
+window.addEventListener("message", ev => {
+  const d = ev.data || {};
+  if (d.type !== "streamlit:render") return;
+  const a = d.args || {};
+  if (a.dot === lastDot) { if (a.sel !== lastSel) { lastSel = a.sel; mark(a.sel); } return; }
+  lastDot = a.dot; lastSel = a.sel;
+  vizP.then(viz => {
+    const svg = viz.renderSVGElement(a.dot);
+    svg.removeAttribute("width"); svg.removeAttribute("height");
+    const w = document.getElementById("wrap"); w.innerHTML = ""; w.appendChild(svg);
+    svg.querySelectorAll("g.node").forEach(g => {
+      g.addEventListener("click", () => {
+        const id = (g.querySelector("title") || {}).textContent;
+        mark(id);
+        send("streamlit:setComponentValue", {value: {id: id, t: Date.now()}, dataType: "json"});
+      });
+    });
+    mark(a.sel); height();
+    setTimeout(height, 120);
+  }).catch(e => { document.getElementById("wrap").textContent = "Couldn't draw the chart: " + e; height(); });
+});
+window.addEventListener("resize", height);
+send("streamlit:componentReady", {apiVersion: 1});
+</script>
+</body></html>

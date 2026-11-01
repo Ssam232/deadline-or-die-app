@@ -105,6 +105,42 @@ def remove_stage(g: dict, tasks: list[dict], sid: str) -> bool:
     return True
 
 
+def move_options(g: dict, sid: str) -> list[dict]:
+    """Stages this one could feed into without making a loop."""
+    bad = descendants(g, sid)
+    return [n for n in stages(g) if n["id"] not in bad]
+
+
+def update_stage(g: dict, sid: str, title: str | None = None, parent: str | None | bool = False) -> bool:
+    n = next((x for x in stages(g) if x["id"] == sid), None)
+    if not n:
+        return False
+    if title:
+        n["title"] = title.strip()
+    if parent is not False:
+        if parent and parent in descendants(g, sid):
+            return False  # would loop back into itself
+        n["parent"] = parent or None
+    return True
+
+
+def delete_stage(g: dict, tasks: list[dict], sid: str) -> int:
+    """Remove a stage; its blocks and sub-stages move up to where it fed into. Returns how many things moved."""
+    n = next((x for x in stages(g) if x["id"] == sid), None)
+    if not n:
+        return 0
+    up, moved = n.get("parent"), 0
+    for c in children(g, sid):
+        c["parent"] = up
+        moved += 1
+    for t in goal_tasks(g, tasks):
+        if t.get("node") == sid:
+            t["node"] = up
+            moved += 1
+    g["nodes"] = [x for x in stages(g) if x["id"] != sid]
+    return moved
+
+
 def block_days(first: date, days: int, skip_weekends: bool) -> list[date]:
     out, d = [], first
     while len(out) < days:
