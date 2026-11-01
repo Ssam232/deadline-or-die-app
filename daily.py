@@ -77,6 +77,40 @@ def mission(save: dict, d: date) -> list[dict]:
     return [t for t in save.get("tasks", []) if t.get("mission_day") == key]
 
 
+def booked(save: dict, d: date) -> list[dict]:
+    """Roadmap blocks booked for day d (open or done), in time order."""
+    iso = d.isoformat()
+    return sorted((t for t in save.get("tasks", []) if (t.get("block") or {}).get("date") == iso
+                   and t.get("status") in ("open", "done", "redeemed")), key=lambda t: t["block"]["start"])
+
+
+def qualified(save: dict, d: date) -> bool:
+    """Locked in a mission, or booked roadmap time that day (booked work IS a plan for the day)."""
+    return bool(peek_day(save, d).get("qualified")) or bool(booked(save, d))
+
+
+def auto_qualify(save: dict, now: datetime, bank) -> str | None:
+    """Today's booked roadmap blocks become today's mission and count as qualifying (+fuel, once). Qualifying
+    stays open: you can still lock in more. Blocks booked later in the day join the mission too."""
+    today = now.date()
+    if is_rest(save, today):
+        return None
+    bl = [t for t in booked(save, today) if t.get("mission_day") != today.isoformat()]
+    if not bl:
+        return None
+    e = day(save, today)
+    if e.get("qualified"):
+        for t in bl:
+            t["mission_day"] = today.isoformat()
+        return None
+    lock_in(save, now, [t["id"] for t in bl], bl[0]["block"]["start"], bank)
+    e["auto"] = "roadmap"
+    c = cfg(save)
+    return (f"🗺️ Your booked roadmap time is today's qualifying: {len(bl)} block{'s' * (len(bl) != 1)} locked in, "
+            f"first at {datetime.strptime(bl[0]['block']['start'], '%H:%M'):%I:%M %p}".replace(" 0", " ")
+            + f" · +{c['qualify_fuel']} fuel. You can still add more to today's mission.")
+
+
 def pit_stops_used(save: dict, d: date) -> int:
     y, w, _ = d.isocalendar()
     return sum(1 for k, v in save.get("days", {}).items()
@@ -157,8 +191,9 @@ def status(save: dict, now: datetime) -> dict:
         "bailout": e.get("bailout"),
         "optional": qualify_optional(today),
         "bailouts_left": bailouts_left(save, today),
-        "qualified": bool(e.get("qualified")),
-        "missed": bool(e.get("q_missed")) or (not e.get("qualified") and not qualify_optional(today)
+        "qualified": qualified(save, today),
+        "booked": booked(save, today),
+        "missed": bool(e.get("q_missed")) or (not qualified(save, today) and not qualify_optional(today)
                                                and now >= qualify_deadline(save, today, now.tzinfo)),
         "deadline": qualify_deadline(save, today, now.tzinfo),
         "start_at": e.get("start_at"),
@@ -218,7 +253,7 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
                     "one small mission today.")
 
     e = day(save, today)
-    if (not is_rest(save, today) and not qualify_optional(today) and not e.get("qualified") and not e.get("q_missed")
+    if (not is_rest(save, today) and not qualify_optional(today) and not qualified(save, today) and not e.get("q_missed")
             and now >= qualify_deadline(save, today, now.tzinfo)):
         e["q_missed"] = True
         bank(save, -c["qualify_penalty"], "🚦 Missed qualifying")

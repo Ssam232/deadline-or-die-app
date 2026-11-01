@@ -2641,6 +2641,7 @@ def render_today(state: dict) -> None:
                 _bail_button(state, stt)
             return
         m, done = stt["mission"], stt["mission_done"]
+        m = sorted(m, key=lambda t: (0, t["block"]["start"]) if t.get("block") else (1, t["deadline"]))
         open_m = [t for t in m if t["status"] == "open"]
         left_min = sum(t.get("minutes") or 30 for t in open_m)
         segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
@@ -2648,6 +2649,8 @@ def render_today(state: dict) -> None:
         pills = [f"🔥 Day streak <b>{stt['day_streak']}</b>" + ("" if stt["done_today"] else " · +1 on your first finish")]
         if stt["start_at"]:
             pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
+        if stt.get("booked"):
+            pills.append(f"🗺️ <b>{len(stt['booked'])}</b> booked from your roadmap")
         pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
         _am = J.peek(state, n_.date()).get("am")
         if _am:
@@ -2668,8 +2671,11 @@ def render_today(state: dict) -> None:
                 dl = parse_dt(t["deadline"])
                 fm_ = t.get("focus_min") or 0
                 c1, c2 = st.container(key=f"mrow_{t['id']}").columns([6, 1], vertical_alignment="top")
-                with c1.expander(f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())} · "
-                                 f"+{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
+                _bk = t.get("block")
+                _lbl = (f"⏰ {datetime.strptime(_bk['start'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
+                        + f" · {t['title']} · {min_label(t.get('minutes') or 30)} · 🗺️ {goal_title(state, t.get('goal_id'))[:28]}"
+                        if _bk else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
+                with c1.expander(_lbl + f" · +{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
                                  expanded=proof_open(f"today_open_{t['id']}")):
                     render_proof_form(state, t, "open", scope="today_")
                 running = bool(tm) and tm.get("task_id") == t["id"]
@@ -4181,6 +4187,9 @@ _excused = daily.excuse_outages(state, bank)
 crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
 _made_good = daily.make_good(state, bank, DL)
+_auto_q = daily.auto_qualify(state, now(), bank)
+if _auto_q:
+    _made_good = _made_good + [_auto_q]
 if _made_good:
     st.session_state.setdefault("flash", []).extend(("info", m) for m in _made_good)
 rust_msg = process_rust(state)
@@ -4432,6 +4441,51 @@ def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str =
         st.rerun()
 
 
+def render_roadmap_draft(state: dict, g: dict) -> None:
+    """✨ A starter plan for this goal, worked back from its target date (what the old event-prep did), as
+    booked blocks you can edit before booking: step, day, time, length, stage."""
+    gid = g["id"]
+    today, target = now().date(), date.fromisoformat(g["target"])
+    if target <= today:
+        st.caption("The target date is today or past: move it in ✏️ Edit goal to draft a plan.")
+        return
+    kinds = list(P.KINDS)
+    c1, c2 = st.columns([2, 1])
+    kind = c1.selectbox("What is it?", kinds, index=kinds.index(P.guess_kind(g["title"])),
+                        format_func=lambda k: P.KINDS[k][0], key=f"rd_kind_{gid}")
+    at = c2.time_input("Usual start", value=dtime(10, 0), step=900, key=f"rd_at_{gid}")
+    stage_names = ["🏁 The goal"] + [n["title"] for n in R.stages(g)]
+    steps = P.plan(kind, target, today)
+    df = pd.DataFrame([{"add": True, "step": x["title"], "day": x["due"], "start": at, "minutes": x["minutes"],
+                        "stage": stage_names[0]} for x in steps])
+    st.caption(f"Worked back from {target:%a %b} {target.day} ({(target - today).days} days). Change anything, "
+               "untick what you don't need, then book it. Every row becomes a block on the chart, in Fortuna, "
+               "and on the day it's booked for.")
+    ed = st.data_editor(df, hide_index=True, key=f"rd_ed_{gid}_{kind}", use_container_width=True, column_config={
+        "add": st.column_config.CheckboxColumn("✔", width="small"),
+        "step": st.column_config.TextColumn("Step", width="large"),
+        "day": st.column_config.DateColumn("Day", min_value=today, max_value=target),
+        "start": st.column_config.TimeColumn("Start", step=900, format="h:mm a"),
+        "minutes": st.column_config.SelectboxColumn("Length", options=BLOCK_LENGTHS),
+        "stage": st.column_config.SelectboxColumn("Stage", options=stage_names),
+    })
+    rows = [r for r in ed.to_dict("records") if r["add"] and str(r["step"]).strip() and to_date(r["day"])]
+    if st.button(f"🗓️ Book {len(rows)} block{'s' * (len(rows) != 1)}", type="primary", key=f"rd_go_{gid}",
+                 disabled=not rows):
+        by_name = {n["title"]: n["id"] for n in R.stages(g)}
+        for r in rows:
+            st_ = r["start"] if isinstance(r["start"], dtime) else at
+            mins = int(r["minutes"] or 30)
+            t = make_task(str(r["step"]).strip(), f"🗺️ {g['title']}", now(), None, "", gid, minutes=mins,
+                          category=next((c for _, ttl, _m, c in P.KINDS[kind][1] if ttl == r["step"]), None))
+            t.update(R.block_fields(to_date(r["day"]), st_.strftime("%H:%M"), mins, TZ),
+                     node=by_name.get(r["stage"]))
+            state["tasks"].append(t)
+        save_state(state)
+        flash(f"🗓️ Booked {len(rows)} blocks for **{g['title']}**. Tap any box on the chart to fine-tune it.")
+        st.rerun()
+
+
 def render_stage_editor(state: dict, g: dict, only: str | None = None, kp: str = "se") -> None:
     """Rename a stage, change what it feeds into, or delete it (its blocks and sub-stages move up a level)."""
     gid = g["id"]
@@ -4563,7 +4617,10 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
     """Stages (nestable) + scheduled work blocks for one goal."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t1, t4, t2, t3 = st.tabs(["🗓️ Schedule work", "✏️ Edit blocks", "🧩 Add a stage", "🧩 Edit stages"])
+    t0, t1, t4, t2, t3 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "✏️ Edit blocks", "🧩 Add a stage",
+                                  "🧩 Edit stages"])
+    with t0:
+        render_roadmap_draft(state, g)
     with t4:
         render_block_editor(state, g)
     with t1:
@@ -4622,10 +4679,6 @@ with tab_goals:
     with st.expander("🗺️ New goal", expanded=not state["goals"], key="exp_new_goal"):
         render_new_goal(state)
 
-    with st.expander("🗓️ Prep for an upcoming event (conference, talk, exam, submission…)", key="exp_prep"):
-        st.caption("Pick something coming up on your DECK 12 board. It becomes a goal with prep steps planned "
-                   "backwards from the date — each step is a real deadline, and finishing them fills the goal.")
-        render_event_planner(state)
 
     has_key = bool(get_secret("ANTHROPIC_API_KEY"))
     for g in state["goals"]:

@@ -164,7 +164,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
                                            "coins and the safety car picks your task. Takes 30 seconds."),
             (10, 5, "🚦 10 MIN TO QUALIFY", "Open the app and lock in today's mission. Now.")):
         out.append(_alarm(("q", d, mins), qd - timedelta(minutes=mins), title, msg, prio, ["vertical_traffic_light"],
-                          not rest and not e.get("qualified") and not daily.qualify_optional(d)))
+                          not rest and not daily.qualified(save, d) and not daily.qualify_optional(d)))
     if daily.qualify_optional(d):  # weekends: no countdown, just two friendly offers (cancelled once you lock in)
         for hh, mm, title, msg in (
                 (11, 30, "🚦 Weekend mission?", f"Optional today: lock in 1–3 things any time for +{c['qualify_fuel']} fuel. "
@@ -172,7 +172,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
                 (14, 30, "🚦 Still time for a weekend mission", f"Lock in something small and the +{c['qualify_fuel']} "
                                                                 "fuel is yours. Skip it and nothing happens.")):
             out.append(_alarm(("qw", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
-                              title, msg, 3, ["vertical_traffic_light"], not rest and not e.get("qualified")))
+                              title, msg, 3, ["vertical_traffic_light"], not rest and not daily.qualified(save, d)))
     zero = not rest and d.weekday() not in daily.WEEKEND and not daily.finished_on(save, d)  # weekends: optional
     for hh, mm, prio, title, msg in (
             (18, 0, 4, "⚠️ Zero finishes today", f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins "
