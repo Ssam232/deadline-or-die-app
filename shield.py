@@ -43,7 +43,8 @@ def _dt(s: str, tz) -> datetime:
 
 def charged_since(save: dict, since: datetime) -> int:
     return -sum(e["delta"] for e in save.get("ledger", [])
-                if e["delta"] < 0 and is_penalty(e["reason"]) and _dt(e["ts"], since.tzinfo) >= since)
+                if e["delta"] < 0 and is_penalty(e["reason"]) and not e.get("refunded")
+                and _dt(e["ts"], since.tzinfo) >= since)
 
 
 def absorb(save: dict, amount: int, reason: str, now: datetime) -> int:

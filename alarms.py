@@ -173,7 +173,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
                                                                 "fuel is yours. Skip it and nothing happens.")):
             out.append(_alarm(("qw", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
                               title, msg, 3, ["vertical_traffic_light"], not rest and not e.get("qualified")))
-    zero = not rest and not daily.finished_on(save, d)
+    zero = not rest and d.weekday() not in daily.WEEKEND and not daily.finished_on(save, d)  # weekends: optional
     for hh, mm, prio, title, msg in (
             (18, 0, 4, "⚠️ Zero finishes today", f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins "
                                                 "and the day streak dies. Smallest task, now."),

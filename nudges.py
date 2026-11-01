@@ -98,7 +98,7 @@ def build(save: dict, now: datetime, prof: dict | None, mk) -> list[dict]:
         done = focus_on(save, d) if d == now.date() else 0.0
         goal_hit = done >= c["focus_goal"]
         last = _last_end(save, d, tz) if d == now.date() else None
-        zero = not daily.finished_on(save, d)
+        zero = not daily.finished_on(save, d) and d.weekday() not in daily.WEEKEND
         pen = daily.cfg(save)["zero_day_penalty"]
 
         def wanted(at):

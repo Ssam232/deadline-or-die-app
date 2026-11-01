@@ -367,7 +367,7 @@ def load_state() -> dict:
         return _load_local() or default_state()
     cached = st.session_state.get("_state")
     latest = _saver().latest  # the newest game state ANY tab/device on this server has saved
-    if latest and latest[1] is not cached and latest[0] > st.session_state.get("_state_ts", 0):
+    if cached is not None and latest and latest[1] is not cached and latest[0] > st.session_state.get("_state_ts", 0):
         # another tab (phone vs laptop) saved after this one last loaded: use that, never a stale copy —
         # otherwise a daily ticked on one device shows unticked on the other, and the next save there undoes it
         st.session_state["_state"], st.session_state["_state_ts"] = latest[1], time.time()
@@ -2605,7 +2605,7 @@ def render_today(state: dict) -> None:
                             f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
         if m and len(done) == len(m):
             st.success("Mission complete. Anything else today is pure bonus. 🏆")
-        elif not stt["done_today"] and n_.hour >= 18:
+        elif not stt["done_today"] and n_.hour >= 18 and n_.weekday() not in daily.WEEKEND:
             st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
                        "Do the smallest one now.")
         with st.expander("➕ Add to today's mission"):
@@ -2900,7 +2900,7 @@ def render_journal(state: dict) -> None:
         head = (f"{d_:%a %b} {d_.day} · " + (f"{J.MOODS[am['mood']]}" if am else "·") + " → "
                 + (f"{J.MOODS[pm['mood']]}" if pm else "·") + f" · ⏱️ {J.focus_on(state, d_) / 60:.1f} h · ✅ {len(done)}")
         with st.expander(head, key=f"exp_jr_{d_.isoformat()}"):
-            if d_ == today and pm:
+            if (d_ == today and pm) or (d_.isoformat() in state.get("late_journal_ok", []) and not pm):
                 _journal_form(state, d_, f"je_{d_.isoformat()}")
                 continue
             qs = J.questions(state)
@@ -4096,11 +4096,14 @@ crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
 crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
+_made_good = daily.make_good(state, bank, DL)
+if _made_good:
+    st.session_state.setdefault("flash", []).extend(("info", m) for m in _made_good)
 rust_msg = process_rust(state)
 if _excused:
     crash_msgs = [m for m in crash_msgs if "MISSED QUALIFYING" not in m]
     st.session_state.setdefault("flash", []).extend(("info", m) for m in _excused)
-if crash_msgs or rust_msg or _excused or st.session_state.pop("_needs_save", False):
+if crash_msgs or rust_msg or _excused or _made_good or st.session_state.pop("_needs_save", False):
     save_state(state)
     if crash_msgs:
         st.session_state["sound"] = "fail"

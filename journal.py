@@ -78,7 +78,7 @@ def close_day(save: dict, d: date, entry: dict, at: datetime, bank) -> int:
                "mood": int(entry["mood"]), "energy": int(entry["energy"]), "at": at.isoformat(), "paid": paid, **keep}
     e["pm"].pop("notion_sig", None)  # changed → write it to Notion again
     owed = min(PM_MAX, pm_value(entry)) - paid
-    if owed > 0 and d == at.date():
+    if owed > 0 and (d == at.date() or d.isoformat() in save.get("late_journal_ok", [])):
         bank(save, owed, "📓 Journal")
         e["pm"]["paid"] = paid + owed
         return owed

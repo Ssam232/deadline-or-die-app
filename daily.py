@@ -192,6 +192,8 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
                 if SH.earn_shield(save):
                     msgs.append(f"🛡️ {save['day_streak']}-day streak → you earned a **streak shield** "
                                 f"({save['shields']}/{SH.SHIELD_MAX}). It saves the streak from one zero day.")
+            elif d.weekday() in WEEKEND:  # weekends are optional: an empty one costs nothing, the streak holds
+                e["settled"] = "weekend"
             elif charged >= MAX_CHARGED_ZERO_DAYS:
                 e["settled"] = "forgiven"
                 forgiven += 1
@@ -231,6 +233,60 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
         msgs.append(f"### 🚦 MISSED QUALIFYING\nNo mission by {c['qualify_by']}:00. −{c['qualify_penalty']} coins, "
                     f"rivals faster.\n\n🚨 **Safety car deployed:** 30 min of focused work, proof due "
                     f"{due:%I:%M %p}. You can still add your own mission below.")
+    return msgs
+
+
+SYNC_LOSS_DAYS = {"2026-10-31"}  # days a sync bug threw away your ticks: undone once, see make_good()
+
+
+def make_good(save: dict, bank, DL) -> list[str]:
+    """One-shot repair for a day whose ticks/journal were lost by a sync bug (the app showed an older copy of
+    your save and settled the day from it). Refunds that day's penalties, restores the streaks and car, marks
+    the dailies done (paid as normal) and lets you re-write that evening's journal for full coins."""
+    msgs = []
+    done = save.setdefault("made_good", [])
+    for iso in SYNC_LOSS_DAYS:
+        if iso in done:
+            continue
+        d = date.fromisoformat(iso)
+        e = save.get("days", {}).get(iso)
+        if not e or not e.get("settled"):
+            continue  # not settled yet: nothing to undo (and today's fixes keep it from happening)
+        done.append(iso)
+        back, notes = 0, []
+        tag_zero, tag_daily = f"💀 Zero day: {d:%a %b %d}", f"({d:%a})"
+        for x in save.get("ledger", []):
+            r = x.get("reason", "")
+            if x.get("delta", 0) < 0 and (r == tag_zero or (r.startswith("🔁 Missed daily") and r.endswith(tag_daily))):
+                back -= x["delta"]
+                x["refunded"] = True  # no longer counts toward today's damage cap
+        save["held"] = [h for h in save.get("held", []) if not (h.get("reason") == tag_zero or (
+            h.get("reason", "").startswith("🔁 Missed daily") and h.get("reason", "").endswith(tag_daily)))]
+        if e.get("settled") == "zero":
+            save["car"]["condition"] = min(100, save["car"]["condition"] + cfg(save)["zero_day_damage"])
+            save["rival_heat"] = max(0, save.get("rival_heat", 0) - 1)
+            if not save.get("day_streak"):
+                save["day_streak"] = save.get("best_day_streak", 0)
+            notes += ["car repaired", f"day streak back to {save['day_streak']}"]
+        e["settled"] = "weekend" if d.weekday() in WEEKEND else "ok"
+        if back:
+            bank(save, back, f"🛠️ Refund: sync bug lost {d:%a %b %d}")
+        fixed = []
+        for h in DL.habits(save):
+            if DL.active_on(h, d) and DL.count(save, h["id"], d) < h["target"]:
+                prior, k = 0, d - timedelta(days=1)  # the streak it had going in (from the days you claimed)
+                while DL.claimed(save, h["id"], k) or (not DL.active_on(h, k) and k >= date.fromisoformat(h["start"])):
+                    prior += DL.claimed(save, h["id"], k)
+                    k -= timedelta(days=1)
+                h["streak"] = max(h.get("streak", 0), prior)
+                DL.log(save, d)[h["id"]] = h["target"]
+                DL.claim(save, h["id"], d, bank, " (restored)")
+                fixed.append(h["name"])
+        save.setdefault("late_journal_ok", []).append(iso)
+        msgs.append(f"🛠️ Sorry: a sync bug lost your {d:%A} ticks and then charged you for them. "
+                    + ", ".join([f"+{back} refunded"] * bool(back) + notes + ([f"{', '.join(fixed)} marked done"]
+                                                                              if fixed else []))
+                    + f". Your {d:%A} journal didn't survive: write it again in Stats → Journal (it pays in full).")
     return msgs
 
 
