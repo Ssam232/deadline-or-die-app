@@ -82,6 +82,7 @@ import journal as J
 import nudges as NU
 import prep as P
 import roadmap as R
+import backups as BK
 import journal_notion as JN
 import quickparse as Q
 import raceviz as RV
@@ -387,10 +388,17 @@ def load_state() -> dict:
     if data is None:  # first run on Notion: carry over any local progress
         data = _load_local() or default_state()
         st.session_state["_needs_save"] = True
+    if cached is not None and int(cached.get("rev", 0)) > int(data.get("rev", 0)):
+        # Notion is behind this tab (a background save didn't land): keep the newer copy and send it again,
+        # instead of quietly rolling your progress back to the last save that made it
+        st.session_state["_state_ts"] = time.time()
+        st.session_state["_resave"] = True
+        return cached
     state = _merge(default_state(), data)
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
     _saver().latest = (time.time(), state)
     st.session_state["_fresh_load"] = True
+    st.session_state["_fresh_this_run"] = True
     return state
 
 
@@ -598,6 +606,7 @@ class _Saver:
         self.known_goals: dict[str, dict] = {}  # goal id -> Assignments card fields
         self.known_journal: dict[str, dict] = {}  # day -> Notion journal page fields
         self.latest: tuple[float, dict] | None = None  # (when, state) of the newest save from any session
+        self.dirty = False  # the last save didn't reach Notion → the next run sends it again
         self.last_dash, self.last_ok = 0.0, 0.0
         threading.Thread(target=self._run, daemon=True, name="dod-saver").start()
 
@@ -677,9 +686,11 @@ class _Saver:
                     self._apply_known_goals(live.get("goals", []))
                     self.errors += errs
                     self.last_ok = time.time()
+                    self.dirty = False
             except Exception as e:  # noqa: BLE001
                 with self.lock:
                     self.errors.append(f"save: {e}")
+                    self.dirty = True
             finally:
                 with self.lock:
                     self.busy = False
@@ -704,7 +715,58 @@ def _saver() -> _Saver:
     return _saver_for(_SAVER_V)
 
 
+def needs_settle(state: dict, n_: datetime) -> bool:
+    """Is this run about to charge or settle anything (a past day, a missed deadline, an expired hold)?"""
+    y = n_.date() - timedelta(days=1)
+    since = state.get("daily_since")
+    if since and since <= y.isoformat() and not (state.get("days", {}).get(y.isoformat()) or {}).get("settled"):
+        return True
+    if DL.habits(state) and (state.get("habits_settled") or "") < y.isoformat():
+        return True
+    grace = timedelta(minutes=state["settings"].get("grace_minutes", 30))
+    if any(t["status"] == "open" and n_ > parse_dt(t["deadline"]) + grace for t in state.get("tasks", [])):
+        return True
+    return any(parse_dt(h["until"]) <= n_ for h in state.get("held", []))
+
+
+def _backup_async(state: dict, label: str) -> None:
+    cfg = notion_cfg()
+    if not cfg:
+        return
+    snap = json.dumps(state, default=str)
+    threading.Thread(target=lambda: _safe(BK.snapshot, Notion(cfg[0]), cfg[1], snap, label, now()),
+                     daemon=True).start()
+
+
+def _safe(fn, *a):
+    try:
+        return fn(*a)
+    except Exception:  # noqa: BLE001 — a backup must never break the game
+        return None
+
+
+def fresh_for_settle(state: dict, fresh: bool) -> dict:
+    """Before anything is charged: make sure we're settling from your newest save, not a stale copy, and take a
+    backup first (once a day) so anything that goes wrong can be undone from Settings → Backup."""
+    if not fresh:
+        _saver().flush(15)
+        try:
+            n, ids = notion_ctx()
+            data = load_json(n, ids["save_page"])
+        except Exception:  # noqa: BLE001 — can't check: settle from what we have (penalties are capped anyway)
+            data = None
+        if data and int(data.get("rev", 0)) > int(state.get("rev", 0)):
+            state = _merge(default_state(), data)
+            st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
+            _saver().latest = (time.time(), state)
+    if state.get("backup_day") != now().date().isoformat():
+        state["backup_day"] = now().date().isoformat()
+        _backup_async(state, "before the day was settled")
+    return state
+
+
 def save_state(state: dict) -> None:
+    state["rev"] = int(state.get("rev", 0)) + 1  # newer copy = higher rev: a reload never trades it for an older one
     broadcast_lock(state)
     _refresh_alarms(state)
     snapshot = json.dumps(state, default=str)
@@ -726,7 +788,12 @@ def save_state(state: dict) -> None:
         in_map = _board_map(*bc) if bc else None
         jr_map = _journal_map(*jc) if jc else None
         if os.getenv("DOD_SYNC_SAVE"):  # tests: do it inline
-            errs = _notion_sync(n, ids, state, out_map, get_secret("APP_URL"), True, in_map, jr_map)
+            try:
+                errs = _notion_sync(n, ids, state, out_map, get_secret("APP_URL"), True, in_map, jr_map)
+                _saver().dirty = False
+            except Exception:
+                _saver().dirty = True
+                raise
             if errs:
                 flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
             return
@@ -4103,6 +4170,11 @@ if st.session_state.pop("_fresh_load", False) and notion_cfg():
 if _boot is not None:
     _boot.empty()
     st.session_state["_booted"] = True
+if notion_cfg() and needs_settle(state, now()):
+    state = fresh_for_settle(state, fresh=st.session_state.pop("_fresh_this_run", False))
+st.session_state.pop("_fresh_this_run", None)
+if st.session_state.pop("_resave", False) or (getattr(_saver(), "dirty", False) and not _saver().pending()):
+    st.session_state["_needs_save"] = True  # a save that didn't reach Notion goes again
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
@@ -5256,14 +5328,51 @@ with tab_set:
             restore = st.file_uploader("Restore from a save file", type=["json"], key="restore")
             if restore and st.button("Restore this save"):
                 try:
-                    save_state(_merge(default_state(), json.loads(restore.getvalue())))
+                    _backup_async(state, "before restoring a file")
+                    new_ = _merge(default_state(), json.loads(restore.getvalue()))
+                    new_["rev"] = int(state.get("rev", 0)) + 1
+                    save_state(new_)
                     flash("Save restored.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Couldn't read that file: {e}")
+        if notion_cfg():
+            with st.container(border=True, key="auto_backups"):
+                st.markdown("#### 🗄️ Automatic backups")
+                st.caption(f"A copy of your save is kept each day before anything is settled, and before any "
+                           f"restore or reset. The newest {BK.KEEP} are kept in Notion under “{BK.ROOT_TITLE}”.")
+                cfg_ = notion_cfg()
+                c1, c2 = st.columns(2)
+                if c1.button("📸 Back up now", use_container_width=True):
+                    _safe(BK.snapshot, Notion(cfg_[0]), cfg_[1], json.dumps(state, default=str), "manual", now())
+                    flash("📸 Backed up.")
+                    st.rerun()
+                if c2.button("↻ Show backups", use_container_width=True) or st.session_state.get("bk_list"):
+                    st.session_state["bk_list"] = _safe(BK.listing, Notion(cfg_[0]), cfg_[1]) or []
+                bl = st.session_state.get("bk_list")
+                if bl:
+                    pick = st.selectbox("Backup", [b["id"] for b in bl], key="bk_pick",
+                                        format_func=lambda i: next(b["title"] for b in bl if b["id"] == i))
+                    data_ = _safe(BK.load, Notion(cfg_[0]), pick)
+                    if data_:
+                        ds_ = sorted((data_.get("journal") or {}).keys())[-3:]
+                        st.caption(f"Coins {data_.get('coins', '?')} · {len(data_.get('tasks', []))} tasks · "
+                                   f"journal days {', '.join(ds_) or '—'}")
+                        if st.checkbox("Replace my current save with this backup", key="bk_ok") and \
+                                st.button("Restore backup", type="primary", key="bk_go"):
+                            _backup_async(state, "before restoring a backup")
+                            new_ = _merge(default_state(), data_)
+                            new_["rev"] = int(state.get("rev", 0)) + 1
+                            save_state(new_)
+                            st.session_state.pop("bk_list", None)
+                            flash("🗄️ Backup restored.")
+                            st.rerun()
         with st.expander("Reset everything"):
-            st.caption("Wipes coins, cars, tasks and history. Download a backup first.")
+            st.caption("Wipes coins, cars, tasks and history. A backup is taken first.")
             if st.checkbox("I want to wipe everything") and st.button("Reset game"):
-                save_state(default_state())
+                _backup_async(state, "before reset")
+                fresh_ = default_state()
+                fresh_["rev"] = int(state.get("rev", 0)) + 1
+                save_state(fresh_)
                 flash("Fresh start.", "warning")
                 st.rerun()
