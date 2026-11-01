@@ -14,16 +14,33 @@ from datetime import date, datetime, timedelta
 MOODS = {1: "😫", 2: "😕", 3: "😐", 4: "🙂", 5: "😄"}
 MOOD_WORDS = {1: "rough", 2: "meh", 3: "okay", 4: "good", 5: "great"}
 ENERGY = {1: "🪫", 2: "🔋", 3: "🔋🔋", 4: "⚡", 5: "⚡⚡"}
-QUESTIONS = [  # key, prompt, placeholder
-    ("win", "Best thing you got done today?", "Even small counts: 'sent the ethics form'"),
-    ("blocker", "What got in the way?", "Phone, a long meeting, tired, nothing…"),
-    ("tomorrow", "The one thing for tomorrow?", "Becomes a suggestion in tomorrow's mission"),
-    ("note", "Anything else on your mind?", "Optional"),
-]
+def _defaults():
+    import journal_notion as JN
+    return JN.merged_questions([])
+
+
+QUESTIONS = _defaults()  # your journal template + the win (see journal_notion.CORE)
 AM_COINS = 2
 PM_BASE = 3          # mood + energy
-PM_PER_ANSWER = 2    # per real answer (10+ characters), up to three
-PM_MAX = PM_BASE + 3 * PM_PER_ANSWER
+PM_PER_ANSWER = 2    # per real answer (10+ characters), up to four
+PM_ANSWERS = 4
+PM_MAX = PM_BASE + PM_ANSWERS * PM_PER_ANSWER
+
+
+def questions(save: dict) -> list[tuple[str, str, str]]:
+    """Your Notion journal template's prompts (in your words) merged with the app's core questions."""
+    prompts = (save.get("settings") or {}).get("journal_prompts")
+    if not prompts:
+        return QUESTIONS
+    import journal_notion as JN
+    return JN.merged_questions(prompts)
+
+
+MULTILINE = {"happened", "blocker", "tomorrow", "grateful", "vibe", "note"}
+
+
+def answer_keys(entry: dict) -> list[str]:
+    return [k for k in entry if k not in ("mood", "energy", "at", "paid") and not k.startswith("notion_")]
 PM_OPENS = 17        # the evening journal opens at 5 PM
 RECAP_DAY, RECAP_HOUR = 6, 19   # Sunday 7 PM
 
@@ -48,16 +65,18 @@ def check_in(save: dict, d: date, mood: int, energy: int, at: datetime, bank) ->
 
 
 def pm_value(answers: dict) -> int:
-    real = sum(1 for k in ("win", "blocker", "tomorrow", "note") if len((answers.get(k) or "").strip()) >= 10)
-    return PM_BASE + PM_PER_ANSWER * min(3, real)
+    real = sum(1 for k in answer_keys(answers) if len((answers.get(k) or "").strip()) >= 10)
+    return PM_BASE + PM_PER_ANSWER * min(PM_ANSWERS, real)
 
 
 def close_day(save: dict, d: date, entry: dict, at: datetime, bank) -> int:
     """Evening journal. Pays the difference if you add more later the same day, never more than PM_MAX."""
     e = day(save, d)
     paid = (e.get("pm") or {}).get("paid", 0)
-    e["pm"] = {**{k: (entry.get(k) or "").strip() for k in ("win", "blocker", "tomorrow", "note")},
-               "mood": int(entry["mood"]), "energy": int(entry["energy"]), "at": at.isoformat(), "paid": paid}
+    keep = {k: v for k, v in (e.get("pm") or {}).items() if k.startswith("notion_")}  # Notion page link survives edits
+    e["pm"] = {**{k: (entry.get(k) or "").strip() for k in answer_keys(entry)},
+               "mood": int(entry["mood"]), "energy": int(entry["energy"]), "at": at.isoformat(), "paid": paid, **keep}
+    e["pm"].pop("notion_sig", None)  # changed → write it to Notion again
     owed = min(PM_MAX, pm_value(entry)) - paid
     if owed > 0 and d == at.date():
         bank(save, owed, "📓 Journal")
@@ -118,6 +137,8 @@ def recap(save: dict, ws: date, tz, through: date | None = None) -> dict:
             "wins": [(r["date"], r["entry"]["pm"]["win"]) for r in rows if (r["entry"].get("pm") or {}).get("win")],
             "blockers": [(r["date"], r["entry"]["pm"]["blocker"]) for r in rows
                          if (r["entry"].get("pm") or {}).get("blocker")],
+            "grateful": [(r["date"], r["entry"]["pm"]["grateful"]) for r in rows
+                         if (r["entry"].get("pm") or {}).get("grateful")],
             "bailouts": [(d_, ((save.get("days") or {}).get(d_.isoformat()) or {}).get("bailout", {}).get("reason", ""))
                          for d_ in days_ if ((save.get("days") or {}).get(d_.isoformat()) or {}).get("bailout")],
             "focus_good_mood": sum(good) / len(good) if good else None,
@@ -141,6 +162,9 @@ def recap_text(r: dict) -> str:
     if r["wins"]:
         lines.append("\nWins")
         lines += [f"• {d_:%a}: {w}" for d_, w in r["wins"]]
+    if r.get("grateful"):
+        lines.append("\nGrateful for")
+        lines += [f"• {d_:%a}: {g.replace(chr(10), ' · ')}" for d_, g in r["grateful"]]
     if r["blockers"]:
         lines.append("\nWhat got in the way")
         lines += [f"• {d_:%a}: {b}" for d_, b in r["blockers"]]

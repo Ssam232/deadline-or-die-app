@@ -82,6 +82,7 @@ import journal as J
 import nudges as NU
 import prep as P
 import roadmap as R
+import journal_notion as JN
 import quickparse as Q
 import raceviz as RV
 import lounge as L
@@ -338,6 +339,17 @@ def board_cfg(state: dict) -> tuple[str, str] | None:
     return (token, db) if db and token else None
 
 
+def journal_cfg(state: dict) -> tuple[str, str] | None:
+    """Your Notion journal database (calendar): evening entries are written into it."""
+    db, token = state["settings"].get("journal_db"), get_secret("NOTION_TOKEN")
+    return (token, db) if db and token else None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _journal_map(token: str, db: str) -> dict:
+    return JN.detect(Notion(token), db)
+
+
 def out_cfg(state: dict) -> tuple[str, str] | None:
     """The write-only output board (e.g. Fortuna)."""
     db, token = state["settings"].get("out_db"), get_secret("NOTION_TOKEN")
@@ -515,8 +527,38 @@ SYNC_FIELDS = ("sync_page", "_sig", "out_page", "out_state", "out_sig", "out_arc
 DASH_EVERY = 45  # seconds between dashboard refreshes
 
 
+def _journal_header(state: dict, d: date, pm: dict) -> str:
+    done = J.done_on(state, d, TZ)
+    return (f"{J.MOODS.get(pm.get('mood'), '')} {J.MOOD_WORDS.get(pm.get('mood'), '')} · energy "
+            f"{J.ENERGY.get(pm.get('energy'), '')} · ⏱️ {J.focus_on(state, d) / 60:.1f} h focused · ✅ {len(done)} done"
+            + (f" ({', '.join(t['title'] for t in done[:4])})" if done else ""))
+
+
+def sync_journal(n: Notion, jm: dict, state: dict) -> list[str]:
+    """Evening entries → your Notion journal, one page per day (only days since you linked it)."""
+    errs, since = [], state["settings"].get("journal_since", "9999")
+    qs = J.questions(state)
+    for k, e in (state.get("journal") or {}).items():
+        pm = e.get("pm")
+        if not pm or k < since:
+            continue
+        sig = json.dumps({x: pm.get(x) for x in sorted(pm) if not x.startswith("notion_") and x != "paid"},
+                         sort_keys=True)
+        if pm.get("notion_sig") == sig:
+            continue
+        try:
+            d = date.fromisoformat(k)
+            at_ = parse_dt(pm["at"]) if pm.get("at") else None
+            pm.update(JN.write_day(n, jm, d, pm, qs, _journal_header(state, d, pm), J.MOOD_WORDS.get(pm.get("mood"), ""),
+                                   when=f"{at_:%A %b} {at_.day} · {at_:%I:%M %p}".replace(" 0", " ") if at_ else ""))
+            pm["notion_sig"] = sig
+        except Exception as ex:  # noqa: BLE001 — never block saving
+            errs.append(f"journal {k}: {ex}")
+    return errs
+
+
 def _notion_sync(n: Notion, ids: dict, state: dict, out_map: dict | None, app_url: str | None,
-                 dash: bool, in_map: dict | None = None) -> list[str]:
+                 dash: bool, in_map: dict | None = None, jr_map: dict | None = None) -> list[str]:
     """All the Notion round-trips for one save. Mutates `state` (adds page ids) — never touches Streamlit."""
     errs = _push_tasks(n, ids, state)
     try:  # board problems never block saving
@@ -525,6 +567,8 @@ def _notion_sync(n: Notion, ids: dict, state: dict, out_map: dict | None, app_ur
             errs += B.sync_out(n, out_map, state["tasks"], now())
         if in_map:  # long-term goals → one card each on the Assignments calendar
             errs += B.sync_goals(n, in_map, state.get("goals", []))
+        if jr_map:  # evening journal → that day's page in your Notion journal
+            errs += sync_journal(n, jr_map, state)
     except Exception as e:
         errs.append(f"board: {e}")
     save_json(n, ids["save_page"], state)
@@ -545,6 +589,7 @@ class _Saver:
         self.job, self.busy, self.errors = None, False, []
         self.known: dict[str, dict] = {}   # task id -> sync fields (None = removed)
         self.known_goals: dict[str, dict] = {}  # goal id -> Assignments card fields
+        self.known_journal: dict[str, dict] = {}  # day -> Notion journal page fields
         self.last_dash, self.last_ok = 0.0, 0.0
         threading.Thread(target=self._run, daemon=True, name="dod-saver").start()
 
@@ -567,6 +612,17 @@ class _Saver:
                 if v is not None:
                     g[f] = v
 
+    def _apply_known_journal(self, journal: dict) -> None:
+        for k, f in self.known_journal.items():
+            pm = (journal.get(k) or {}).get("pm")
+            if pm is not None:
+                for fk, v in f.items():
+                    if v is not None and fk != "notion_sig":
+                        pm[fk] = v
+                if f.get("notion_sig") and f.get("sig_for") == json.dumps(
+                        {x: pm.get(x) for x in sorted(pm) if not x.startswith("notion_") and x != "paid"}, sort_keys=True):
+                    pm["notion_sig"] = f["notion_sig"]
+
     def _apply_known(self, tasks: list[dict]) -> None:
         for t in tasks:
             for f, v in self.known.get(t["id"], {}).items():
@@ -585,13 +641,14 @@ class _Saver:
                 if not job:
                     continue
                 self.busy = True
-            live, snapshot, (token, ids, out_map, app_url, in_map) = job
+            live, snapshot, (token, ids, out_map, app_url, in_map, jr_map) = job
             try:
                 snap = json.loads(snapshot)
                 self._apply_known(snap["tasks"])
                 self._apply_known_goals(snap.get("goals", []))
+                self._apply_known_journal(snap.get("journal", {}))
                 dash = time.time() - self.last_dash > DASH_EVERY
-                errs = _notion_sync(Notion(token), ids, snap, out_map, app_url, dash, in_map)
+                errs = _notion_sync(Notion(token), ids, snap, out_map, app_url, dash, in_map, jr_map)
                 if dash:
                     self.last_dash = time.time()
                 with self.lock:
@@ -599,6 +656,15 @@ class _Saver:
                         self.known[t["id"]] = {f: t.get(f) for f in SYNC_FIELDS}
                     for g in snap.get("goals", []):
                         self.known_goals[g["id"]] = {f: g.get(f) for f in B.GOAL_FIELDS}
+                    for k_, e_ in (snap.get("journal") or {}).items():
+                        pm_ = e_.get("pm") or {}
+                        if pm_.get("notion_page"):
+                            self.known_journal[k_] = {
+                                "notion_page": pm_["notion_page"], "notion_blocks": pm_.get("notion_blocks"),
+                                "notion_sig": pm_.get("notion_sig"),
+                                "sig_for": json.dumps({x: pm_.get(x) for x in sorted(pm_)
+                                                       if not x.startswith("notion_") and x != "paid"}, sort_keys=True)}
+                    self._apply_known_journal(live.get("journal", {}))
                     self._apply_known(live.get("tasks", []))  # hand the new ids back to the live game
                     self._apply_known_goals(live.get("goals", []))
                     self.errors += errs
@@ -634,15 +700,17 @@ def save_state(state: dict) -> None:
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
     try:
         n, ids = notion_ctx()
-        oc, bc = out_cfg(state), board_cfg(state)
+        oc, bc, jc = out_cfg(state), board_cfg(state), journal_cfg(state)
         out_map = _board_map(*oc) if oc else None
         in_map = _board_map(*bc) if bc else None
+        jr_map = _journal_map(*jc) if jc else None
         if os.getenv("DOD_SYNC_SAVE"):  # tests: do it inline
-            errs = _notion_sync(n, ids, state, out_map, get_secret("APP_URL"), True, in_map)
+            errs = _notion_sync(n, ids, state, out_map, get_secret("APP_URL"), True, in_map, jr_map)
             if errs:
                 flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
             return
-        _saver().submit(state, snapshot, (get_secret("NOTION_TOKEN"), ids, out_map, get_secret("APP_URL"), in_map))
+        _saver().submit(state, snapshot, (get_secret("NOTION_TOKEN"), ids, out_map, get_secret("APP_URL"), in_map,
+                                          jr_map))
     except Exception as e:
         flash(f"⚠️ Couldn't save to Notion ({e}). Your progress is kept on this server for now.", "error")
 
@@ -2723,9 +2791,14 @@ def _journal_form(state: dict, d, key: str) -> None:
         with c2:
             energy = _scale_pills("Energy now", J.ENERGY, f"{key}_energy", pm.get("energy"))
         ans = {}
-        for k, q, ph in J.QUESTIONS:
-            ans[k] = st.text_input(q, value=pm.get(k, ""), placeholder=ph, key=f"{key}_{k}", max_chars=240)
-        to_q = st.checkbox("Put “the one thing” into tomorrow's mission queue", value=True, key=f"{key}_toq")
+        for k, q, ph in J.questions(state):
+            if k in J.MULTILINE or k.startswith("t:"):  # room for a few lines
+                ans[k] = st.text_area(q, value=pm.get(k, ""), placeholder=ph, key=f"{key}_{k}", max_chars=600,
+                                      height=84)
+            else:
+                ans[k] = st.text_input(q, value=pm.get(k, ""), placeholder=ph, key=f"{key}_{k}", max_chars=240)
+        to_q = st.checkbox("Put the first line of “tomorrow” into tomorrow's mission queue", value=True,
+                           key=f"{key}_toq")
         paid = pm.get("paid", 0)
         sub = st.form_submit_button("📓 Save the day" + (f" · up to +{J.PM_MAX - paid}" if paid < J.PM_MAX else ""),
                                     type="primary", use_container_width=True)
@@ -2734,7 +2807,7 @@ def _journal_form(state: dict, d, key: str) -> None:
             st.error("Pick a mood and an energy level first.")
             return
         got = J.close_day(state, d, {**ans, "mood": mood, "energy": energy}, now(), bank)
-        tmr = (ans.get("tomorrow") or "").strip()
+        tmr = next((x.strip(" -•") for x in (ans.get("tomorrow") or "").splitlines() if x.strip()), "")[:120]
         if to_q and tmr and d == now().date():
             p_ = Q.parse(tmr, now() + timedelta(days=1))
             state["draft"] = {"date": (d + timedelta(days=1)).isoformat(),
@@ -2821,9 +2894,12 @@ def render_journal(state: dict) -> None:
             if d_ == today and pm:
                 _journal_form(state, d_, f"je_{d_.isoformat()}")
                 continue
-            for k, q, _ in J.QUESTIONS:
+            qs = J.questions(state)
+            known = {k for k, _, _ in qs}
+            for k, q, _ in qs + [(k, k[2:].replace("-", " ").capitalize() if k.startswith("t:") else
+                                  JN.CORE.get(k, (k,))[0], "") for k in J.answer_keys(pm) if k not in known]:
                 if pm.get(k):
-                    st.markdown(f"**{q}**  \n{html.escape(pm[k])}")
+                    st.markdown(f"**{q}**  \n" + html.escape(pm[k]).replace("\n", "  \n"))
             if done:
                 st.caption("Finished: " + " · ".join(t["title"] for t in done[:8]))
             if not pm:
@@ -4923,9 +4999,9 @@ with tab_set:
     elif sec == "Boards":
         with st.container(border=True):
             st.markdown("#### DECK 12 boards")
-            st.caption("Input is read-only: its cards become suggestions and events to prep for. Output is "
-                       "write-only: your tasks land on it at the time they're set to happen. Neither is ever "
-                       "touched the other way.")
+            st.caption("Input: its cards become suggestions and events to prep for (the app only adds a card per "
+                       "long-term goal). Output: your tasks land on it at the time they're set to happen. Journal: "
+                       "your evening entry becomes that day's page, in your template's layout.")
             if not notion_cfg():
                 status_rows([(False, "Notion isn't connected", "add NOTION_TOKEN and NOTION_PARENT_PAGE to secrets")])
             else:
@@ -4943,7 +5019,36 @@ with tab_set:
                                      "writes " + ", ".join(x for x in (m_["title"], m_["date"], m_["weekday"], m_["time"]) if x)))
                     except Exception as e:
                         rows.append((False, f"{label_}: can't read it", str(e)[:90]))
+                if s.get("journal_db"):
+                    try:
+                        jm_ = _journal_map(tok, s["journal_db"])
+                        pr_ = s.get("journal_prompts") or []
+                        rows.append((True, f"Journal: {jm_['name']}",
+                                     f"writes each evening entry as that day's page · {len(pr_)} prompts from your "
+                                     "template" if pr_ else "writes each evening entry as that day's page · no template "
+                                     "prompts found (using the app's questions)"))
+                    except Exception as e:
+                        rows.append((False, "Journal: can't read it", str(e)[:90]))
+                else:
+                    rows.append((None, "Journal: not linked", "pick your Notion journal below → Use as journal"))
                 status_rows(rows)
+                if s.get("journal_db"):
+                    j1, j2 = st.columns(2)
+                    if j1.button("↻ Re-read journal template", use_container_width=True):
+                        try:
+                            s["journal_prompts"] = JN.read_prompts(Notion(tok), _journal_map(tok, s["journal_db"]))
+                            save_state(state)
+                            flash(f"📓 {len(s['journal_prompts'])} prompts from your journal template.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+                    if j2.button("Unlink journal", use_container_width=True):
+                        s["journal_db"] = ""
+                        s.pop("journal_prompts", None)
+                        save_state(state)
+                        st.rerun()
+                    if s.get("journal_prompts"):
+                        st.caption("Tonight's questions: " + " · ".join(q for _, q, _ in J.questions(state)))
                 if s.get("board_db") and s.get("board_db") == s.get("out_db"):
                     st.warning("Input and output are the same board. Pick a separate board for output.")
                 c1, c2, c3 = st.columns(3)
@@ -4969,7 +5074,21 @@ with tab_set:
                     else:
                         pick = st.selectbox("Board", [d["id"] for d in dbs],
                                             format_func=lambda i: next(d["title"] for d in dbs if d["id"] == i))
-                        c1, c2, c3 = st.columns(3)
+                        c1, c2, c3, c4 = st.columns(4)
+                        if c4.button("Use as journal", use_container_width=True,
+                                     help="Your Notion journal (calendar). Evening entries are written into it, laid "
+                                          "out like your template."):
+                            try:
+                                jm_ = JN.detect(Notion(tok), pick)
+                                s.update(journal_db=pick, journal_since=now().date().isoformat(),
+                                         journal_prompts=JN.read_prompts(Notion(tok), jm_))
+                                save_state(state)
+                                st.session_state.pop("board_list", None)
+                                flash(f"📓 Journal linked: **{jm_['name']}** · {len(s['journal_prompts'])} prompts from "
+                                      "your template merged into tonight's questions.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(str(e))
                         if c1.button("Preview", use_container_width=True):
                             try:
                                 m = B.detect(Notion(tok), pick)
