@@ -301,7 +301,10 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             fut = [h for h in held if h.get("time", 0) > now.timestamp()]
             jr = sorted(datetime.fromtimestamp(h["time"], TZ).strftime("%a %H:%M") for h in fut
                         if "notebook" in (h.get("tags") or []))
-            print(f"::notice title=ntfy holds::{len(fut)} scheduled · journal: {', '.join(jr) or 'NONE'}")
+            bl = sorted(datetime.fromtimestamp(h["time"], TZ).strftime("%a %H:%M") for h in fut
+                        if "world_map" in (h.get("tags") or []))
+            print(f"::notice title=ntfy holds::{len(fut)} scheduled · journal: {', '.join(jr) or 'NONE'}"
+                  f" · roadmap blocks: {', '.join(bl) or 'none'}")
         except Exception as e_:  # noqa: BLE001
             print(f"::notice title=ntfy holds::check failed ({type(e_).__name__})")
 
