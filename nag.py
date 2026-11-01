@@ -294,6 +294,16 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     if save:  # backup sync of the exact-time alarms (the app does this on every change)
         mem["alarms"], made, fails = AL.sync(save, topic, now, mem.get("alarms", {}), click=app_url, prof=prof)
         print(f"::notice title=alarms::{made} queued/cancelled, {fails} failed")
+        try:  # health check (public log, so times + kinds only): which reminders ntfy is actually holding
+            import json as _j, requests as _rq
+            r_ = _rq.get(f"{AL.SERVER}/{topic}/json", params={"poll": "1", "sched": "1"}, timeout=15)
+            held = [_j.loads(x) for x in r_.text.splitlines() if x.strip()]
+            fut = [h for h in held if h.get("time", 0) > now.timestamp()]
+            jr = sorted(datetime.fromtimestamp(h["time"], TZ).strftime("%a %H:%M") for h in fut
+                        if "notebook" in (h.get("tags") or []))
+            print(f"::notice title=ntfy holds::{len(fut)} scheduled · journal: {', '.join(jr) or 'NONE'}")
+        except Exception as e_:  # noqa: BLE001
+            print(f"::notice title=ntfy holds::check failed ({type(e_).__name__})")
 
     day_mem = mem.setdefault("day", {})
     if save and not quiet and not (save.get("tasks") is not None and daily.status(save, now)["rest"]):
