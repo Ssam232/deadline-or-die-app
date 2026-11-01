@@ -303,8 +303,12 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                         if "notebook" in (h.get("tags") or []))
             bl = sorted(datetime.fromtimestamp(h["time"], TZ).strftime("%a %H:%M") for h in fut
                         if "world_map" in (h.get("tags") or []))
+            want = sorted(a["at"].strftime("%a %H:%M") for a in AL.plan(save, now, prof)
+                          if "world_map" in a["tags"] and a["wanted"])
+            nb = sum(1 for t in save.get("tasks", []) if t.get("block") and t.get("status") == "open")
             print(f"::notice title=ntfy holds::{len(fut)} scheduled · journal: {', '.join(jr) or 'NONE'}"
-                  f" · roadmap blocks: {', '.join(bl) or 'none'}")
+                  f" · roadmap blocks: {', '.join(bl) or 'none'} (planned: {', '.join(want) or 'none'}; "
+                  f"{nb} open blocks)")
         except Exception as e_:  # noqa: BLE001
             print(f"::notice title=ntfy holds::check failed ({type(e_).__name__})")
 
