@@ -32,7 +32,7 @@ import locks as LK
 from notify import push
 from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, pull_rows, save_json, update_dashboard
 
-TZ = ZoneInfo(os.getenv("DOD_TZ", "America/Edmonton"))
+from tzfix import TZ  # Alberta: UTC-6 all year (safe against stale tz data on a server)
 QUIET_HOURS = os.getenv("QUIET_HOURS", "23-7")
 BRIEF_HOUR = int(os.getenv("BRIEF_HOUR", "8"))
 EVENING_HOUR = int(os.getenv("EVENING_HOUR", "20"))

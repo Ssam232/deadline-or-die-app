@@ -93,7 +93,7 @@ from notion_store import (Notion, NotionError, STATUS, archive_page, due_to_dt, 
                           pull_rows, save_json, task_props, update_dashboard, upload_proof, upsert_task)
 
 # ─────────────────────────── config ───────────────────────────
-TZ = ZoneInfo(os.getenv("DOD_TZ", "America/Edmonton"))
+from tzfix import TZ  # Alberta: UTC-6 all year (safe against stale tz data on a server)
 DATA_DIR = Path(os.getenv("DOD_DATA_DIR", Path(__file__).parent / "data"))
 PROOF_DIR = DATA_DIR / "proofs"
 STATE_FILE = DATA_DIR / "state.json"
@@ -366,6 +366,12 @@ def load_state() -> dict:
     if not notion_cfg():
         return _load_local() or default_state()
     cached = st.session_state.get("_state")
+    latest = _saver().latest  # the newest game state ANY tab/device on this server has saved
+    if latest and latest[1] is not cached and latest[0] > st.session_state.get("_state_ts", 0):
+        # another tab (phone vs laptop) saved after this one last loaded: use that, never a stale copy —
+        # otherwise a daily ticked on one device shows unticked on the other, and the next save there undoes it
+        st.session_state["_state"], st.session_state["_state_ts"] = latest[1], time.time()
+        return latest[1]
     if cached is not None and (time.time() - st.session_state.get("_state_ts", 0) < SESSION_TTL
                                or _saver().pending()):
         return cached
@@ -383,6 +389,7 @@ def load_state() -> dict:
         st.session_state["_needs_save"] = True
     state = _merge(default_state(), data)
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
+    _saver().latest = (time.time(), state)
     st.session_state["_fresh_load"] = True
     return state
 
@@ -590,6 +597,7 @@ class _Saver:
         self.known: dict[str, dict] = {}   # task id -> sync fields (None = removed)
         self.known_goals: dict[str, dict] = {}  # goal id -> Assignments card fields
         self.known_journal: dict[str, dict] = {}  # day -> Notion journal page fields
+        self.latest: tuple[float, dict] | None = None  # (when, state) of the newest save from any session
         self.last_dash, self.last_ok = 0.0, 0.0
         threading.Thread(target=self._run, daemon=True, name="dod-saver").start()
 
@@ -698,6 +706,7 @@ def save_state(state: dict) -> None:
     if not notion_cfg():
         return
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
+    _saver().latest = (time.time(), state)
     try:
         n, ids = notion_ctx()
         oc, bc, jc = out_cfg(state), board_cfg(state), journal_cfg(state)
