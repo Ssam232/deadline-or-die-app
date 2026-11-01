@@ -366,7 +366,7 @@ def load_state() -> dict:
     if not notion_cfg():
         return _load_local() or default_state()
     cached = st.session_state.get("_state")
-    latest = _saver().latest  # the newest game state ANY tab/device on this server has saved
+    latest = getattr(_saver(), "latest", None)  # the newest game state ANY tab/device on this server has saved
     if cached is not None and latest and latest[1] is not cached and latest[0] > st.session_state.get("_state_ts", 0):
         # another tab (phone vs laptop) saved after this one last loaded: use that, never a stale copy —
         # otherwise a daily ticked on one device shows unticked on the other, and the next save there undoes it
@@ -687,9 +687,21 @@ class _Saver:
                     self.ev.set()
 
 
+# The saver lives across reruns (one per server). Key it on the class's own code: when an update changes how
+# saving works, a NEW saver starts instead of the old one (whose thread still runs the old code) being handed
+# jobs it can't read, which made saves fail and later reloads roll your progress back.
+_SAVER_V = hashlib.md5(b"".join(getattr(_Saver, f).__code__.co_code for f in
+                                ("__init__", "_run", "_apply_known", "_apply_known_goals", "_apply_known_journal"))
+                       ).hexdigest()[:12]
+
+
 @st.cache_resource(show_spinner=False)
-def _saver() -> _Saver:
+def _saver_for(version: str) -> _Saver:
     return _Saver()
+
+
+def _saver() -> _Saver:
+    return _saver_for(_SAVER_V)
 
 
 def save_state(state: dict) -> None:
