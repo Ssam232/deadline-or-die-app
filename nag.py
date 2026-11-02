@@ -294,6 +294,15 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     if save:  # backup sync of the exact-time alarms (the app does this on every change)
         mem["alarms"], made, fails = AL.sync(save, topic, now, mem.get("alarms", {}), click=app_url, prof=prof)
         print(f"::notice title=alarms::{made} queued/cancelled, {fails} failed")
+        try:  # sweep vestigial alerts: whatever ntfy holds that the plan doesn't want goes
+            n_held, stale, n_ids = AL.reconcile(save, topic, now, prof)
+            if stale:  # a wanted alarm that sat at the wrong time was just removed: forget it so it's re-posted right
+                for q in stale:
+                    mem["alarms"].pop(q, None)
+                mem["alarms"], _m2, _f2 = AL.sync(save, topic, now, mem["alarms"], click=app_url, prof=prof)
+            print(f"::notice title=sweep::{n_held} held ({n_ids} ours) · {len(stale)} vestigial removed")
+        except Exception as e_:  # noqa: BLE001
+            print(f"::notice title=sweep::failed ({type(e_).__name__})")
         try:  # health check (public log, so times + kinds only): which reminders ntfy is actually holding
             import json as _j, requests as _rq
             r_ = _rq.get(f"{AL.SERVER}/{topic}/json", params={"poll": "1", "sched": "1"}, timeout=15)

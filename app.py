@@ -530,10 +530,26 @@ def _refresh_alarms(state: dict) -> bool:
     except Exception:  # noqa: BLE001 — alarms are best-effort, never break the app
         return False
     state["alarms"] = m
+    sw = _saver()
+    if globals().get("PROFILE") is not None and time.time() - getattr(sw, "last_sweep", 0) > SWEEP_EVERY:  # 🧹 vestigial alerts: what ntfy holds but no
+        sw.last_sweep = time.time()                                 # plan wants (moved, finished, deleted…) goes
+        snap, n_ = json.loads(json.dumps(state, default=str)), now()
+        threading.Thread(target=lambda: _quiet(AL.reconcile, snap, topic, n_, globals().get("PROFILE"),
+                                               ghosts_only=True), daemon=True).start()
     if not (post or cancel):
         return False
     threading.Thread(target=AL.send, args=(topic, post, cancel, app_link()), daemon=True).start()
     return True
+
+
+SWEEP_EVERY = 300  # seconds between sweeps of ntfy's queue from the app (the nagger also sweeps every run)
+
+
+def _quiet(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except Exception:  # noqa: BLE001 — a sweep must never break the app
+        return None
 
 
 # ── saving: instant on screen, synced to Notion in the background ──
@@ -4684,15 +4700,16 @@ with tab_today:
 # ── Tasks ──
 with tab_tasks:
   if tab_tasks.open is not False:
-    points_guide()
+    st.subheader(f"Open ({len(open_tasks)})")
+    if not open_tasks:
+        st.caption("Nothing open. Add one below.")
+    for t in open_tasks:
+        render_task_row(state, t, "tt_")
     with st.expander("➕ New task", expanded=not open_tasks):
         task_form(state, "new_task_form")
     with st.expander("📥 Import from Notion"):
         notion_import(state)
-
-    st.subheader(f"Open ({len(open_tasks)})")
-    for t in open_tasks:
-        render_task_row(state, t, "tt_")
+    points_guide()
 
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                   and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]

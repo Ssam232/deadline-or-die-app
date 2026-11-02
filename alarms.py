@@ -362,3 +362,44 @@ def sync(save: dict, topic: str | None, now: datetime, posted: dict, click: str 
     for q in bad:  # forget them so the next sync retries
         m.pop(q, None)
     return m, len(post) + len(cancel), len(bad)
+
+
+def held(topic: str, server: str = SERVER) -> list[dict]:
+    """What ntfy is actually holding for us right now (scheduled, not yet delivered)."""
+    import json as _j
+    import requests
+    r = requests.get(f"{server.rstrip('/')}/{topic}/json", params={"poll": "1", "sched": "1"}, timeout=15)
+    out = []
+    for line in r.text.splitlines():
+        try:
+            m = _j.loads(line)
+        except ValueError:
+            continue
+        if m.get("event", "message") == "message":
+            out.append(m)
+    return out
+
+
+def reconcile(save: dict, topic: str | None, now: datetime, prof: dict | None = None,
+              server: str = SERVER, ghosts_only: bool = False) -> tuple[int, list[str], int]:
+    """Sweep out vestigial alerts: anything ntfy is holding for us that today's plan doesn't want (a task that was
+    moved, renamed, finished or deleted; a block that was dropped; an alert type an update removed; anything a lost
+    or rolled-back posted-map no longer remembers). The plan is the truth.
+    Returns (held, the sequence ids taken back, how many held ones carried an id we could check)."""
+    if not topic:
+        return 0, [], 0
+    wanted = {a["seq"]: a for a in plan(save, now, prof) if a["wanted"]}
+    soon = now.timestamp() + MIN_LEAD + 5
+    stale = []
+    msgs = held(topic, server)
+    for m in msgs:
+        seq = m.get("sequence_id") or ""
+        if not seq.startswith("dod") or m.get("time", 0) <= soon:
+            continue  # not one of our queued alarms, or about to fire anyway
+        a = wanted.get(seq)
+        if a is None or (not ghosts_only and abs(a["at"].timestamp() - m.get("time", 0)) > 90):
+            stale.append({"seq": seq, "at": datetime.fromtimestamp(m.get("time", 0), now.tzinfo),
+                          "title": "", "message": ""})
+    if stale:
+        send(topic, [], stale, None, server)
+    return len(msgs), [x["seq"] for x in stale], sum(1 for m in msgs if (m.get("sequence_id") or "").startswith("dod"))
