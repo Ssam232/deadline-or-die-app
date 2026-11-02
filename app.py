@@ -1110,18 +1110,35 @@ def fail_task(state: dict, t: dict, reason: str) -> str:
     return msg
 
 
+def last_active(state: dict) -> date:
+    """The last day you did ANYTHING real: finished a task, logged a focus session, claimed a daily, or journaled."""
+    days = [state.get("last_done_date") or "2000-01-01"]
+    days += [x.get("date", "") for x in state.get("focus_log", [])[-50:]]
+    days += [c.split("#", 1)[0] for c in state.get("habit_claims", [])[-60:]]
+    days += [d for d, lg in (state.get("habit_log") or {}).items() if any(int(v or 0) > 0 for v in lg.values())]
+    days += [k for k, e in (state.get("journal") or {}).items() if e.get("pm") or e.get("am")]
+    today = now().date().isoformat()
+    return date.fromisoformat(max(d for d in days if d and d <= today))
+
+
 def process_rust(state: dict) -> str | None:
-    """Loss aversion: an idle car rusts. Finishing anything resets the clock."""
-    idle = (now().date() - date.fromisoformat(state["last_done_date"])).days
+    """Loss aversion: an idle car rusts. ANY real activity holds it off (a finish, a focus session, ticking a daily,
+    the journal). Rust charged under the old finishes-only rule is given back."""
+    idle = (now().date() - last_active(state)).days
     due = max(0, idle - IDLE_GRACE_DAYS)
+    if due < state["rust_days"]:  # you were active after all: the rust comes off
+        back = RUST_PER_DAY * (state["rust_days"] - due)
+        state["rust_days"] = due
+        state["car"]["condition"] = min(100, state["car"]["condition"] + back)
+        return f"🧽 Rust cleaned off: +{back}% condition. Your dailies and sessions count as keeping the car moving."
     new = due - state["rust_days"]
     if new <= 0:
         return None
     state["rust_days"] = due
     loss = RUST_PER_DAY * new
     state["car"]["condition"] = max(0, state["car"]["condition"] - loss)
-    return (f"🟫 Nothing finished in {idle} days. Your car's been sitting in the garage rusting: "
-            f"−{loss}% condition. Finish *anything* to stop it.")
+    return (f"🟫 Nothing done in {idle} days (no finish, session, daily or journal). Your car's been sitting in the "
+            f"garage rusting: −{loss}% condition. Do *anything* real to stop it.")
 
 
 def open_crate(state: dict, t: dict) -> str:
@@ -3950,8 +3967,10 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
     rest = [t for t in open_tasks if t["id"] not in in_mission
             and not (t.get("block") and t["block"]["date"] > today)]
     with st.container(border=True, key="task_board"):
-        st.markdown(f"<div class='dod-sec'>📋 Everything else <span>{len(rest)} open</span></div>",
-                    unsafe_allow_html=True)
+        _rd = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
+               and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
+        st.markdown(f"<div class='dod-sec'>📋 Everything else <span>{len(rest)} open"
+                    + (f" · {len(_rd)} to redeem" if _rd else "") + "</span></div>", unsafe_allow_html=True)
         render_quick_add(state, "qa_top", boxed=False)
         if rest and (parse_dt(rest[0]["deadline"]) - now()) < timedelta(hours=6):
             st.warning(f"⏱️ **{rest[0]['title']}** dies in {fmt_left(parse_dt(rest[0]['deadline']) - now())} — "
@@ -4222,6 +4241,26 @@ CSS = """<style>
 .dod-meter{font-size:.85rem;color:var(--muted);padding:6px 10px;border-radius:10px;background:#141821;
   border:1px solid var(--line);margin:.35rem 0 .1rem}
 .dod-meter b{color:#ece8df}.dod-meter.ok{border-color:rgba(46,196,182,.4)}.dod-meter.low{border-color:rgba(225,6,0,.45)}
+@media (max-width:640px){
+  .st-key-fx_row [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.25rem}
+  .st-key-fx_row [data-testid="stColumn"]{min-width:0!important}
+  .st-key-fx_row [data-testid="stColumn"]:nth-child(1){flex:1 1 auto!important}
+  .st-key-fx_row [data-testid="stColumn"]:nth-child(2),.st-key-fx_row [data-testid="stColumn"]:nth-child(3){
+    flex:0 0 2.1rem!important;width:2.1rem!important}
+  .st-key-fx_row [data-testid="stColumn"]:nth-child(2) button,.st-key-fx_row [data-testid="stColumn"]:nth-child(3) button{
+    padding-left:0;padding-right:0}
+  .st-key-fx_row [data-testid="stColumn"]:nth-child(4){flex:0 0 4.3rem!important;width:4.3rem!important;font-size:.78rem}
+  .st-key-fx_row [data-testid="stButtonGroup"] button{padding-left:.55rem;padding-right:.55rem}
+  .dod-cluster{grid-template-columns:repeat(4,1fr)!important}
+  .dod-cluster .dod-cell{padding:8px 8px!important;border-left:1px solid var(--line)!important}
+  .dod-cluster .dod-cell:first-child{border-left:0!important}
+  .dod-cluster .dod-v{font-size:1.25rem!important}
+  .dod-cluster .dod-k{font-size:.68rem!important}
+  .dod-cluster .dod-s{display:none}
+  .dod-mini-car{width:70%!important;top:4px!important;right:4px!important;opacity:.55}
+  .dod-hero h1{font-size:1.6rem!important}
+  .dod-next{padding:12px 14px 10px}.dod-next .t{font-size:1.25rem}
+}
 .dod-sec{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 .4rem;
   display:flex;align-items:baseline;gap:10px}
 .dod-sec span{font-family:inherit;font-weight:500;font-size:.85rem;color:var(--muted)}
@@ -4602,7 +4641,7 @@ if notion_cfg():
 for m in crash_msgs:
     st.error(m)
 if rust_msg:
-    st.warning(rust_msg)
+    (st.success if rust_msg.startswith("🧽") else st.warning)(rust_msg)
 TOAST_ICON = {"success": "✅", "info": "💬"}
 for kind, m in st.session_state.pop("flash", []):
     if kind in TOAST_ICON and len(m) <= 170 and "\n" not in m:
@@ -4680,17 +4719,22 @@ tab_today, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, ta
 # ── Today: the cockpit. Do-now on the left, instruments on the right; stacks on a phone. ──
 with tab_today:
   if tab_today.open is not False:
+    # two rows, so on a phone (where columns stack) the timer and dailies come right after the mission,
+    # not under every other section
     c_main, c_rail = st.columns([1.55, 1], gap="large")
     with c_main:
         render_checkin(state)
         render_today(state)
-        render_goals_today(state)
-        render_close_day(state)
-        render_task_board(state, open_tasks)
     with c_rail:
         render_car_card(state)
         render_timer(state)
         render_dailies(state)
+    c_main2, c_rail2 = st.columns([1.55, 1], gap="large")
+    with c_main2:
+        render_goals_today(state)
+        render_close_day(state)
+        render_task_board(state, open_tasks)
+    with c_rail2:
         render_race_status(state)
         _stt = daily.status(state, now())
         if _stt["qualified"] and not _stt["rest"] and not _stt["bailout"]:
@@ -4862,12 +4906,32 @@ def render_roadmap_draft(state: dict, g: dict) -> None:
     at = c2.time_input("Usual start", value=dtime(10, 0), step=900, key=f"rd_at_{gid}")
     stage_names = ["🏁 The goal"] + [n["title"] for n in R.stages(g)]
     steps = P.plan(kind, target, today)
-    df = pd.DataFrame([{"add": True, "step": x["title"], "day": x["due"], "start": at, "minutes": x["minutes"],
+    if get_secret("ANTHROPIC_API_KEY"):  # 🤖 or let Claude draft the steps for THIS goal
+        with st.popover("🤖 Let Claude draft it instead"):
+            extra = st.text_area("Anything Claude should know (constraints, busy weeks…)", key=f"rd_ctx_{gid}", height=70)
+            if st.button("Draft with Claude", key=f"rd_ai_go_{gid}"):
+                with st.spinner("Planning…"):
+                    try:
+                        st.session_state[f"rd_ai_{gid}"] = [
+                            {"title": x.get("title", ""), "due": max(today, min(target, to_date(x.get("due")) or target)),
+                             "minutes": V.minutes_for_size(x.get("difficulty") if x.get("difficulty") in DIFFICULTY
+                                                           else "Medium"), "category": None}
+                            for x in ai_plan(state, g, extra) if x.get("title")]
+                    except Exception as e:
+                        st.error(str(e))
+        if st.session_state.get(f"rd_ai_{gid}"):
+            steps = st.session_state[f"rd_ai_{gid}"]
+            st.caption("🤖 Claude's draft. " + ("" if True else ""))
+            if st.button("↺ Back to the starter plan", key=f"rd_ai_x_{gid}", type="tertiary"):
+                st.session_state.pop(f"rd_ai_{gid}", None)
+                st.rerun()
+    df = pd.DataFrame([{"add": True, "step": x["title"], "day": x["due"], "start": at,
+                        "minutes": min(BLOCK_LENGTHS, key=lambda m: abs(m - int(x["minutes"] or 30))),
                         "stage": stage_names[0]} for x in steps])
     st.caption(f"Worked back from {target:%a %b} {target.day} ({(target - today).days} days). Change anything, "
                "untick what you don't need, then book it. Every row becomes a block on the chart, in Fortuna, "
                "and on the day it's booked for.")
-    ed = st.data_editor(df, hide_index=True, key=f"rd_ed_{gid}_{kind}", use_container_width=True, column_config={
+    ed = st.data_editor(df, hide_index=True, key=f"rd_ed_{gid}_{kind}_{len(steps)}", use_container_width=True, column_config={
         "add": st.column_config.CheckboxColumn("✔", width="small"),
         "step": st.column_config.TextColumn("Step", width="large"),
         "day": st.column_config.DateColumn("Day", min_value=today, max_value=target),
@@ -5175,50 +5239,6 @@ with tab_goals:
                           celebrate=True)
                     st.rerun()
 
-            with st.expander("➕ Add a milestone"):
-                task_form(state, f"ms_form_{g['id']}", goal_id=g["id"])
-
-            with st.expander("🤖 Break it down with Claude"):
-                if not has_key:
-                    st.caption("Add an Anthropic API key in ⚙️ Settings to let Claude draft milestones.")
-                else:
-                    extra = st.text_area("Anything Claude should know (constraints, busy weeks…)",
-                                         key=f"ctx_{g['id']}", height=70)
-                    if st.button("Draft milestones", key=f"plan_{g['id']}"):
-                        with st.spinner("Planning…"):
-                            try:
-                                st.session_state[f"plan_{g['id']}"] = ai_plan(state, g, extra)
-                            except Exception as e:
-                                st.error(str(e))
-                    plan = st.session_state.get(f"plan_{g['id']}")
-                    if plan:
-                        df = pd.DataFrame([{
-                            "add": True, "title": p.get("title", ""), "due": to_date(p.get("due")),
-                            "size": p.get("difficulty") if p.get("difficulty") in DIFFICULTY else "Medium",
-                            "proof": p.get("proof_hint", ""), "consequence": "",
-                        } for p in plan])
-                        ed = st.data_editor(df, hide_index=True, key=f"plan_ed_{g['id']}", column_config={
-                            "add": st.column_config.CheckboxColumn("✔"),
-                            "due": st.column_config.DateColumn("Due"),
-                            "size": st.column_config.SelectboxColumn("Size", options=list(DIFFICULTY)),
-                            "proof": st.column_config.TextColumn("Proof idea"),
-                        })
-                        if st.button("Add selected as deadlines", key=f"plan_add_{g['id']}", type="primary"):
-                            n = 0
-                            for r in ed.to_dict("records"):
-                                d = to_date(r["due"])
-                                if r["add"] and d and str(r["title"]).strip():
-                                    dl = datetime.combine(d, dtime(23, 59), TZ)
-                                    if dl > now():
-                                        state["tasks"].append(make_task(
-                                            r["title"], f"Proof: {r['proof']}" if r["proof"] else "", dl,
-                                            r["size"] or "Medium", r["consequence"] or "", g["id"]))
-                                        n += 1
-                            save_state(state)
-                            st.session_state.pop(f"plan_{g['id']}", None)
-                            flash(f"Added {n} deadline(s) to **{g['title']}**.")
-                            st.rerun()
-
             if not any(t["status"] == "open" for t in gtasks):
                 if st.checkbox("Delete this goal", key=f"gdel_chk_{g['id']}") and \
                         st.button("Delete", key=f"gdel_{g['id']}"):
@@ -5261,7 +5281,7 @@ def render_focus_periods(state: dict) -> None:
     acc = accent(state)[0]
     light = _mix(acc, "#ffffff", .55)
     today = now().date()
-    c1, c2, c3, c4 = st.columns([2.4, .45, .45, 2], vertical_alignment="center")
+    c1, c2, c3, c4 = st.container(key="fx_row").columns([2.4, .45, .45, 2], vertical_alignment="center")
     kind = c1.segmented_control("Period", PERIODS, default="Week", key="fx_kind",
                                 label_visibility="collapsed") or "Week"
     if st.session_state.get("_fx_kind") != kind:
