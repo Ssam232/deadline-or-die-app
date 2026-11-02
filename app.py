@@ -2385,7 +2385,8 @@ def render_qualify_form(state: dict) -> None:
     # ── pick from what you already have: tap to select. Grouped by where it came from, short labels. ──
     opts, groups = {}, {"t": [], "b": [], "z": []}
     default_t = []
-    for t in sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"]):
+    for t in sorted([t for t in state["tasks"] if t["status"] == "open"
+                     and not ((t.get("block") or {}).get("date", "") > today.isoformat())], key=lambda t: t["deadline"]):
         k = f"t:{t['id']}"
         opts[k] = (f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(parse_dt(t['deadline']), today)}", t)
         groups["t"].append(k)
@@ -2414,40 +2415,54 @@ def render_qualify_form(state: dict) -> None:
         except Exception as e:
             st.caption(f"(Couldn't read Zotero: {e})")
     picked = []
-    heads = {"t": "✅ Your tasks", "b": "📅 On your board (prep / work on it)", "z": "📄 Reading list"}
+    qualified_ = daily.peek_day(state, today).get("qualified")
+    heads = {"t": "Your tasks", "b": "From your board · an hour of prep on it", "z": "Reading list"}
+    if any(groups.values()):
+        st.markdown("<div class='dod-step'><b>1</b> Pick what you'll do today</div>", unsafe_allow_html=True)
     for g, keys in groups.items():
         if keys:
             picked += st.pills(heads[g], keys, selection_mode="multi", key=f"q_pick_{g}{fk}",
                                default=default_t if g == "t" else None, format_func=lambda k: opts[k][0]) or []
     _q_restore(state)
     pending = st.session_state["q_pending"]
-    c1, c2 = st.columns([1.15, 1])
-    with c1:
-        start_dt = start_picker(f"q_start{fk}", default="30m")
-    with c2:
-        due_t = due_picker(f"q_due{fk}")
-    start_t = (start_dt or now()).time()
-    n_sel = len(picked) + len(pending)
-    go_top = False
-    if picked or pending:  # selected ≠ locked in: put the button right here, not below the fold
-        sel_min = (sum((opts[k][1].get("minutes") or 60) for k in picked if k.startswith("t:"))
-                   + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
-                   + sum(_qi(x)[1] for x in pending))
-        verb = "Add" if daily.peek_day(state, today).get("qualified") else "🚦 Lock in"
-        go_top = st.button(f"{verb} {n_sel} · {min_label(sel_min)}", type="primary", use_container_width=True,
-                           key=f"q_top{fk}", help="Selected isn't locked in until you tap this.")
     queue_slot = st.container()  # drawn after the form runs, so a new entry shows without a second redraw
-    # one mini-form: type → tap a time → Enter (or Add). Nothing is taken until you add it, so tapping a time chip
-    # never grabs half-typed text — and Lock it in is part of the form, so half-typed text gets locked in too.
+    # timing lives in one small popover: start + done-by, with the current choice on its label
+    sk, dk = f"q_start{fk}_chip", f"q_due{fk}_chip"
+    s_chip, d_chip = st.session_state.get(sk, "30m"), st.session_state.get(dk, "9 PM")
+    s_lbl = ("now" if s_chip == "Now" else f"in {s_chip}" if s_chip in START_CHIPS and START_CHIPS[s_chip] else "at a set time")
+    with st.popover(f"🕐 Start {s_lbl} · done by {d_chip}", use_container_width=False):
+        start_dt = start_picker(f"q_start{fk}", default="30m")
+        due_t = due_picker(f"q_due{fk}")
+    st.markdown(f"<div class='dod-step'><b>{2 if any(groups.values()) else 1}</b> "
+                f"{'Or add something new' if any(groups.values()) else 'What will you do today?'}</div>",
+                unsafe_allow_html=True)
+    # how much real work is picked: the 30-min floor shown live, instead of an error after you tap
+    real = (sum((opts[k][1].get("minutes") or 60) for k in picked
+                if k.startswith("t:") and V.counts_for_qualifying(opts[k][1]))
+            + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
+            + sum(_qi(x)[1] for x in pending if _qi(x)[2] != "pit"))
+    n_sel = len(picked) + len(pending)
+    need = daily.min_mission_minutes(state)
     with st.form(f"q_form{fk}", clear_on_submit=True, border=False, enter_to_submit=True):
         c1, c2, c3 = st.columns([0.8, 1.05, 0.3], vertical_alignment="bottom")
-        txt_ = c1.text_input("Add a task" if not opts else "Or add a new one", key=f"q_new{fk}",
+        txt_ = c1.text_input("New task", key=f"q_new{fk}", label_visibility="collapsed",
                              placeholder="e.g. Write 300 words of methods — Enter to add")
         min_ = c2.segmented_control("Time", list(TIME_CHIPS), default=None, key=f"q_min{fk}",
                                     label_visibility="collapsed",
                                     help="Leave it unpicked for an honest estimate (inbox/email = 10 min)")
         add_ = c3.form_submit_button("＋ Add", use_container_width=True, help="Or press Enter")
-        go_ = st.form_submit_button("🚦 Lock it in", type="primary", use_container_width=True)
+        if n_sel:
+            ok_ = qualified_ or real >= need
+            st.markdown(f"<div class='dod-meter {'ok' if ok_ else 'low'}'><b>{n_sel}</b> picked · "
+                        f"<b>{min_label(real) if real else '0 min'}</b> of real work"
+                        + ("" if qualified_ else (" ✅" if ok_ else f" · needs {need}+ (🔧 pit checks don't count)"))
+                        + "</div>", unsafe_allow_html=True)
+        verb = "Add" if qualified_ else "🚦 Lock in"
+        go_ = st.form_submit_button(f"{verb} {n_sel} · {min_label(real)}" if n_sel and real else
+                                    ("➕ Add to today" if qualified_ else "🚦 Lock it in"),
+                                    type="primary", use_container_width=True, key=f"q_lock{fk}")  # stable id: the label changes
+    start_t = (start_dt or now()).time()
+    go_top = False
     go_ = go_ or go_top
     if (add_ or go_) and (txt_ or "").strip():
         _q_put(txt_, TIME_CHIPS.get(min_) if min_ else None, state)
@@ -2623,9 +2638,13 @@ def render_today(state: dict) -> None:
         if not stt["qualified"]:
             left = stt["deadline"] - n_
             if left.total_seconds() > 0:
-                st.markdown(f"### 🚦 Qualifying closes in {fmt_left(left)}")
-                st.caption(f"Lock in today's mission before **{stt['deadline']:%I:%M %p}** for +{c['qualify_fuel']} fuel. "
-                           f"Miss it and the safety car picks for you (−{c['qualify_penalty']}).")
+                mins_left = int(left.total_seconds() // 60)
+                urgent = mins_left <= 30
+                st.markdown(
+                    f"<div class='dod-mh'><div class='dod-mt'>🚦 Qualify by {stt['deadline']:%I:%M %p}</div>".replace("by 0", "by ")
+                    + f"<div class='dod-mb' style='color:{'#ff6a5c' if urgent else 'var(--muted)'}'>{fmt_left(left)} left</div></div>"
+                    f"<div class='dod-pills'><span>⛽ <b>+{c['qualify_fuel']}</b> fuel</span>"
+                    f"<span>Miss it: the safety car picks (−{c['qualify_penalty']})</span></div>", unsafe_allow_html=True)
             else:
                 if daily.peek_day(state, n_.date()).get("excused"):
                     st.markdown("### 🚦 Lock in today's mission")
@@ -4055,6 +4074,12 @@ CSS = """<style>
 .dod-mini-car svg{width:100%;height:auto;display:block;filter:drop-shadow(0 6px 8px rgba(0,0,0,.4))}
 @media (max-width:640px){.st-key-car_card,.st-key-car_card+div{display:none!important}
   .dod-mini-car{width:46%;top:10px;bottom:auto;right:8px}}
+.dod-step{display:flex;align-items:center;gap:8px;font-weight:600;color:#ece8df;margin:.5rem 0 .2rem;font-size:.95rem}
+.dod-step b{width:1.35rem;height:1.35rem;border-radius:50%;background:var(--y);color:#111;display:inline-flex;
+  align-items:center;justify-content:center;font-size:.78rem}
+.dod-meter{font-size:.85rem;color:var(--muted);padding:6px 10px;border-radius:10px;background:#141821;
+  border:1px solid var(--line);margin:.35rem 0 .1rem}
+.dod-meter b{color:#ece8df}.dod-meter.ok{border-color:rgba(46,196,182,.4)}.dod-meter.low{border-color:rgba(225,6,0,.45)}
 .dod-sec{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 .4rem;
   display:flex;align-items:baseline;gap:10px}
 .dod-sec span{font-family:inherit;font-weight:500;font-size:.85rem;color:var(--muted)}
