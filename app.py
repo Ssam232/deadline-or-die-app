@@ -2651,15 +2651,10 @@ def render_today(state: dict) -> None:
         left_min = sum(t.get("minutes") or 30 for t in open_m)
         segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
                        "</i>" for t in m)
-        pills = [f"🔥 Day streak <b>{stt['day_streak']}</b>" + ("" if stt["done_today"] else " · +1 on your first finish")]
+        pills = [f"🔥 <b>{stt['day_streak']}</b>-day streak" + ("" if stt["done_today"] else " · +1 on your first finish")]
         if stt["start_at"]:
             pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
-        if stt.get("booked"):
-            pills.append(f"🗺️ <b>{len(stt['booked'])}</b> booked from your roadmap")
         pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
-        _am = J.peek(state, n_.date()).get("am")
-        if _am:
-            pills.append(f"☀️ {J.MOODS[_am['mood']]} {J.ENERGY[_am['energy']]}")
         st.markdown(
             f"<div class='dod-mh'><div class='dod-mt'>🏁 Today's mission</div><div class='dod-mb'>{len(done)}/{len(m)}"
             + (f" · {_hm_left(left_min)} to go" if open_m else " · done") + "</div></div>"
@@ -2703,7 +2698,144 @@ def render_today(state: dict) -> None:
             st.caption("🗺️ Your booked blocks got you qualified. Anything else today? Add it below.")
         with st.expander("➕ Add to today's mission", expanded=_only_booked and n_ < stt["deadline"]):
             render_qualify_form(state)
-        _bail_button(state, stt)
+
+
+# ── Today: up next · your goals · the car ──
+def _go_tab(label: str) -> None:
+    st.session_state["nav"] = label
+
+
+def _next_up(state: dict, stt: dict) -> dict | None:
+    """The one thing to do now: the earliest open mission item (booked blocks by their time first)."""
+    m = sorted((t for t in stt["mission"] if t["status"] == "open"),
+               key=lambda t: (0, t["block"]["start"]) if t.get("block") else (1, t["deadline"]))
+    return m[0] if m else None
+
+
+def render_up_next(state: dict) -> None:
+    """🎯 The focal card: what's next, when, what it's for, and one big Start."""
+    n_ = now()
+    stt = daily.status(state, n_)
+    if not stt["qualified"] or stt["rest"] or stt["bailout"]:
+        return
+    tm = state.get("timer")
+    if tm:
+        t = next((x for x in state["tasks"] if x["id"] == tm.get("task_id")), None)
+        st.markdown(f"<div class='dod-next run'><div class='k'>⏱️ In the zone</div>"
+                    f"<div class='t'>{html.escape(t['title'] if t else 'Focus session')}</div>"
+                    "<div class='m'>The timer's running on the right. Phone face-down.</div></div>",
+                    unsafe_allow_html=True)
+        return
+    t = _next_up(state, stt)
+    if not t:
+        st.markdown("<div class='dod-next done'><div class='k'>🏆 Mission complete</div>"
+                    "<div class='t'>Everything you planned today is done.</div>"
+                    "<div class='m'>Anything else is pure bonus. Or book time on a goal below.</div></div>",
+                    unsafe_allow_html=True)
+        return
+    b = t.get("block")
+    if b:
+        at = datetime.strptime(b["start"], "%H:%M")
+        when = f"{at:%I:%M %p}".lstrip("0")
+        start_dt = datetime.combine(n_.date(), at.time(), TZ)
+        rel = ("now" if start_dt <= n_ <= start_dt + timedelta(minutes=int(b["minutes"])) else
+               f"in {fmt_left(start_dt - n_)}" if start_dt > n_ else "running late")
+        kick = f"⏰ {when} · {rel}"
+    else:
+        kick = f"⏳ due {_when(parse_dt(t['deadline']))}"
+    g = goal_title(state, t.get("goal_id"))
+    mins = Q.session_length(t)
+    with st.container(key="up_next"):
+        st.markdown(f"<div class='dod-next'><div class='k'>Up next · {kick}</div>"
+                    f"<div class='t'>{html.escape(t['title'])}</div>"
+                    f"<div class='m'>{min_label(t.get('minutes') or 30)} · +{t['reward']} 🪙"
+                    + (f" · 🗺️ {html.escape(g)}" if g else "") + "</div></div>", unsafe_allow_html=True)
+        if st.button(f"▶ Start {mins} min", key="upn_go", type="primary", use_container_width=True):
+            _start_timer(state, t, mins)
+            flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
+            st.rerun()
+
+
+def _book_now(state: dict, g: dict, mins: int = 45) -> dict | None:
+    n_ = now()
+    start = (n_ + timedelta(minutes=5)).replace(second=0, microsecond=0)
+    start += timedelta(minutes=(30 - start.minute % 30) % 30)
+    if start.date() != n_.date() or start.hour >= 23:
+        return None
+    t = make_task(f"Work on: {g['title']}", f"🗺️ {g['title']}", n_, None, "", g["id"], minutes=mins)
+    t.update(R.block_fields(n_.date(), start.strftime("%H:%M"), mins, TZ), node=None)
+    state["tasks"].append(t)
+    daily.auto_qualify(state, n_, bank)
+    return t
+
+
+def render_goals_today(state: dict) -> None:
+    """🗺️ Your long-term goals, in today's terms: how far along, what's next and when, one tap to book time."""
+    n_ = now()
+    today = n_.date()
+    live = [g for g in state["goals"] if not g.get("claimed") and date.fromisoformat(g["target"]) >= today]
+    if not live:
+        return
+    with st.container(border=True, key="goals_today"):
+        st.markdown("<div class='dod-sec'>🗺️ Your goals</div>", unsafe_allow_html=True)
+        for g in sorted(live, key=lambda g: g["target"])[:4]:
+            gt = R.goal_tasks(g, state["tasks"])
+            d_, n_all = R.progress(gt)
+            days = (date.fromisoformat(g["target"]) - today).days
+            nxt = min((t for t in gt if t["status"] == "open"),
+                      key=lambda t: t.get("scheduled") or t["deadline"], default=None)
+            if nxt and R.block_at(nxt, TZ):
+                nx = f"next: {html.escape(nxt['title'])} · {_when(R.block_at(nxt, TZ))}"
+            elif nxt:
+                nx = f"next: {html.escape(nxt['title'])} · due {_when(parse_dt(nxt['deadline']))}"
+            else:
+                nx = "nothing booked yet"
+            pct = int(100 * d_ / n_all) if n_all else 0
+            today_bl = [t for t in gt if (t.get("block") or {}).get("date") == today.isoformat()]
+            c1, c2 = st.columns([5, 2], vertical_alignment="center")
+            c1.markdown(f"<div class='dod-goal'><div class='h'><b>{html.escape(g['title'])}</b>"
+                        f"<span>{'today' if days == 0 else f'{days} d'}</span></div>"
+                        f"<div class='bar'><i style='width:{pct}%'></i></div>"
+                        f"<div class='m'>{d_}/{n_all} done · {nx}</div></div>", unsafe_allow_html=True)
+            if today_bl:
+                c2.markdown(f"<div class='dod-goal-tag'>✅ {len(today_bl)} booked today</div>", unsafe_allow_html=True)
+            elif c2.button("🗓️ Book 45 min", key=f"gbook_{g['id']}", use_container_width=True,
+                           help="Books the next half hour for this goal: it joins today's mission and Fortuna."):
+                t = _book_now(state, g)
+                if t:
+                    save_state(state)
+                    flash(f"🗓️ Booked **{t['title']}** at {R.block_at(t, TZ):%I:%M %p}. It's in today's mission.")
+                    st.rerun()
+                else:
+                    st.toast("Too late to book today. Plan tomorrow in the Goals tab.")
+        st.button("Open the roadmaps →", key="goals_open", type="tertiary", on_click=_go_tab, args=("🎯 Goals",))
+
+
+def render_car_card(state: dict) -> None:
+    """🏎️ Your car, front and centre: condition, level, flag status."""
+    car = state["car"]
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    cond = int(car["condition"])
+    reasons = black_flag_reasons(state)
+    lvl = level_of(state["xp"])
+    into, span = state["xp"] - xp_for_level(lvl), xp_for_level(lvl + 1) - xp_for_level(lvl)
+    left = max(0, PITY_AFTER - state["since_rare"])
+    flag = (f"<span class='bad'>⬛ Black flag</span>" if reasons else "<span class='ok'>🟢 Green flag</span>")
+    col = "#2ec4b6" if cond >= 60 else "#f5c518" if cond >= 30 else "#e10600"
+    with st.container(key="car_card"):
+        st.markdown(
+            f"<div class='dod-car'><div class='img'>{carart.car_svg(CAR_BY_ID[mid]['body'], car['color'], car['number'], G.effective(car['parts'], mid), cond, width=360)}</div>"
+            f"<div class='nm'><b>{html.escape(car.get('name') or CAR_BY_ID[mid]['name'])}</b> <span>#{html.escape(str(car['number']))} · "
+            f"Level {lvl}</span>{flag}</div>"
+            f"<div class='cond'><span>Condition</span><div class='bar'><i style='width:{cond}%;background:{col}'></i></div>"
+            f"<b>{cond}%</b></div>"
+            f"<div class='cond'><span>XP</span><div class='bar'><i style='width:{100 * into / max(1, span):.0f}%'></i></div>"
+            f"<b>{into}/{span}</b></div>"
+            f"<div class='chips'><span>🔥 heat {state['rival_heat']}</span><span>🛡️ {state['shields']}</span>"
+            f"<span>📦 rare {'NEXT' if not left else f'≤{left}'}</span></div>"
+            + (f"<div class='why'>{html.escape('; '.join(reasons))}</div>" if reasons else "") + "</div>",
+            unsafe_allow_html=True)
+        st.button("Garage →", key="car_garage", type="tertiary", on_click=_go_tab, args=("🔧 Garage",))
 
 
 # ── 📓 journal: morning check-in, evening questionnaire, weekly recap ──
@@ -3614,15 +3746,10 @@ def render_race_status(state: dict) -> None:
     """Right-rail status: flag, rivals, penalty box, contracts, ledger, rules — compact."""
     reasons = black_flag_reasons(state)
     left = max(0, PITY_AFTER - state["since_rare"])
-    with st.container(border=True):
-        flag = ("<span style='color:#ff6a5c'>⬛ <b>Black flag</b> — " + html.escape("; ".join(reasons)) + "</span>"
-                if reasons else "<span style='color:#2ec4b6'>🟢 <b>Green flag</b> — clear to race</span>")
-        st.markdown(f"{flag}<div class='dod-row' style='border:0;padding:8px 0 0'><div class='m'>"
-                    f"🔥 Rival heat <b style='color:#ece8df'>{state['rival_heat']}</b> &nbsp; "
-                    f"🛡️ Shields <b style='color:#ece8df'>{state['shields']}</b> &nbsp; "
-                    f"📦 Rare drop <b style='color:#ece8df'>{'NEXT' if not left else f'≤{left}'}</b></div></div>",
-                    unsafe_allow_html=True)
-        unserved = [p for p in state["penalty_box"] if not p["served"]]
+    unserved = [p for p in state["penalty_box"] if not p["served"]]
+    if unserved:
+      with st.container(border=True):
+        st.markdown("<div class='dod-sec'>🚨 Penalty box</div>", unsafe_allow_html=True)
         for p in unserved:
             st.markdown(f"🚨 **{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
                         unsafe_allow_html=True)
@@ -3634,7 +3761,8 @@ def render_race_status(state: dict) -> None:
                 save_state(state)
                 flash("Penalty served. Back on track.")
                 st.rerun()
-    render_contracts(state)
+    with st.expander("📜 This week's contracts", key="exp_contracts"):
+        render_contracts(state)
     with st.expander("📜 Ledger"):
         if not state["ledger"]:
             st.caption("Nothing yet.")
@@ -3667,14 +3795,13 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
     # booked roadmap blocks show up on their own day, not as clutter before then
     rest = [t for t in open_tasks if t["id"] not in in_mission
             and not (t.get("block") and t["block"]["date"] > today)]
-    with st.container(border=True):
-        st.markdown(f"#### Tasks · {len(open_tasks)} open")
+    with st.container(border=True, key="task_board"):
+        st.markdown(f"<div class='dod-sec'>📋 Everything else <span>{len(rest)} open</span></div>",
+                    unsafe_allow_html=True)
         render_quick_add(state, "qa_top", boxed=False)
         if rest and (parse_dt(rest[0]["deadline"]) - now()) < timedelta(hours=6):
             st.warning(f"⏱️ **{rest[0]['title']}** dies in {fmt_left(parse_dt(rest[0]['deadline']) - now())} — "
                        f"−{rest[0]['penalty']} and {MISS_DAMAGE}% of your car. Start for 10 minutes.")
-        if in_mission and rest:
-            st.caption("Also on your plate")
         for t in rest:
             render_task_row(state, t, "tb_")
         if not open_tasks:
@@ -3922,6 +4049,58 @@ CSS = """<style>
 /* roadmap flow chart: readable on a phone — it keeps its size and you swipe sideways */
 @media (max-width:640px){[data-testid="stGraphVizChart"]{overflow-x:auto;-webkit-overflow-scrolling:touch}
   [data-testid="stGraphVizChart"] svg{min-width:660px;height:auto}}
+/* ── Today, redesigned: one focal card, quiet sections, the car up top on the right ── */
+.dod-cell.carcell{position:relative;overflow:hidden}
+.dod-mini-car{position:absolute;right:6px;bottom:4px;width:46%;max-width:150px;opacity:.95;pointer-events:none}
+.dod-mini-car svg{width:100%;height:auto;display:block;filter:drop-shadow(0 6px 8px rgba(0,0,0,.4))}
+@media (max-width:640px){.st-key-car_card,.st-key-car_card+div{display:none!important}
+  .dod-mini-car{width:46%;top:10px;bottom:auto;right:8px}}
+.dod-sec{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 .4rem;
+  display:flex;align-items:baseline;gap:10px}
+.dod-sec span{font-family:inherit;font-weight:500;font-size:.85rem;color:var(--muted)}
+.dod-next{position:relative;border-radius:16px;padding:16px 18px 14px;margin:0 0 .5rem;overflow:hidden;
+  background:linear-gradient(135deg,rgba(245,197,24,.16),rgba(245,197,24,.03) 55%,transparent),#141821;
+  border:1px solid rgba(245,197,24,.35);animation:dodIn .35s ease-out both}
+.dod-next::after{content:"";position:absolute;right:-30px;top:-30px;width:140px;height:140px;opacity:.07;
+  background:repeating-conic-gradient(#fff 0 25%,transparent 0 50%) 0 0/22px 22px;transform:rotate(12deg)}
+.dod-next .k{color:var(--y);font-size:.8rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.dod-next .t{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.6rem;line-height:1.15;
+  margin:.2rem 0 .25rem;color:#ece8df}
+.dod-next .m{color:var(--muted);font-size:.9rem}
+.dod-next.run{border-color:rgba(46,196,182,.45);background:linear-gradient(135deg,rgba(46,196,182,.16),transparent 60%),#141821}
+.dod-next.run .k{color:var(--t)}
+.dod-next.done{border-color:rgba(46,196,182,.35);background:linear-gradient(135deg,rgba(46,196,182,.12),transparent 60%),#141821}
+.dod-next.done .k{color:var(--t)}
+.st-key-up_next [data-testid^="stBaseButton-primary"]{font-size:1.05rem;padding:.6rem 0;border-radius:12px}
+.dod-goal{padding:4px 0 2px}
+.dod-goal .h{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.dod-goal .h b{color:#ece8df;font-weight:600}.dod-goal .h span{color:var(--muted);font-size:.8rem;white-space:nowrap}
+.dod-goal .bar{height:6px;border-radius:4px;background:#262b36;overflow:hidden;margin:6px 0 4px}
+.dod-goal .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--y),var(--t));border-radius:4px;
+  animation:dodGrow .9s cubic-bezier(.2,.7,.2,1) both;--from:0%}
+.dod-goal .m{color:var(--muted);font-size:.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dod-goal-tag{color:var(--t);font-size:.82rem;text-align:center}
+.st-key-goals_today [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.6rem}
+.st-key-goals_today [data-testid="stColumn"]{min-width:0!important}
+.st-key-goals_today [data-testid="stColumn"]:last-child{flex:0 0 7.6rem!important;width:7.6rem!important}
+.dod-car{border:1px solid var(--line);border-radius:16px;padding:10px 14px 12px;margin:0 0 .5rem;
+  background:radial-gradient(120% 90% at 50% 0%,#1e2330,#121620 70%)}
+.dod-car .img svg{width:100%;height:auto;display:block;filter:drop-shadow(0 10px 14px rgba(0,0,0,.45))}
+.dod-car .nm{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:2px 0 6px}
+.dod-car .nm b{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-size:1.1rem;color:#ece8df}
+.dod-car .nm span{color:var(--muted);font-size:.82rem}
+.dod-car .nm .ok,.dod-car .nm .bad{margin-left:auto;font-size:.8rem;font-weight:600}
+.dod-car .nm .ok{color:var(--t)}.dod-car .nm .bad{color:#ff6a5c}
+.dod-car .cond{display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);margin:3px 0}
+.dod-car .cond span{width:4.6rem}.dod-car .cond b{color:#ece8df;font-weight:600;min-width:3.4rem;text-align:right}
+.dod-car .cond .bar{flex:1;height:5px;border-radius:3px;background:#262b36;overflow:hidden}
+.dod-car .cond .bar i{display:block;height:100%;background:var(--y);border-radius:3px}
+.dod-car .chips{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.dod-car .chips span{font-size:.75rem;color:var(--muted);background:#141821;border:1px solid var(--line);border-radius:999px;
+  padding:2px 9px}
+.dod-car .why{color:#ff6a5c;font-size:.8rem;margin-top:6px}
+.st-key-car_card [data-testid^="stBaseButton-tertiary"],.st-key-goals_today [data-testid^="stBaseButton-tertiary"]{
+  color:var(--muted);font-size:.85rem;padding:0;min-height:0}
 .st-key-drop_reveal{animation:dodDropOut .6s ease-in 4.8s both;overflow:hidden}
 .dod-drop{display:flex;gap:14px;align-items:center;padding:12px 16px;border:1px solid var(--y);border-radius:14px;
   background:radial-gradient(120% 160% at 0% 50%,rgba(245,197,24,.16),transparent 60%),#141821;
@@ -4088,9 +4267,14 @@ def render_cluster(state: dict) -> None:
     st.session_state["_cluster_prev"] = {**{k: v for k, v, _, _ in cells}, "xp_pct": pct}
     intro = "" if st.session_state.get("_cluster_seen") else " intro"
     st.session_state["_cluster_seen"] = True
+    car = state["car"]
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    mini = carart.car_svg(CAR_BY_ID[mid]["body"], car["color"], car["number"], G.effective(car["parts"], mid),
+                          cond, width=150)
     st.markdown(
         f"<div class='dod-cluster{intro}'>" + "".join(
-            f"<div class='dod-cell'><div class='dod-k'>{k}</div>"
+            f"<div class='dod-cell{' carcell' if k == 'Car' else ''}'>"
+            + (f"<div class='dod-mini-car'>{mini}</div>" if k == "Car" else "") + f"<div class='dod-k'>{k}</div>"
             f"<div class='dod-v{' bad' if bad else ''}{' chg' if k in prev and prev[k] != v else ''}'>{v}</div>"
             f"<div class='dod-s'>{sub or '&nbsp;'}</div></div>" for k, v, sub, bad in cells)
         + f"<div class='dod-xp'><b>Level {lvl}</b><div class='dod-bar'>"
@@ -4314,13 +4498,19 @@ with tab_today:
     c_main, c_rail = st.columns([1.55, 1], gap="large")
     with c_main:
         render_checkin(state)
+        render_up_next(state)
         render_today(state)
+        render_goals_today(state)
         render_close_day(state)
         render_task_board(state, open_tasks)
     with c_rail:
+        render_car_card(state)
         render_timer(state)
         render_dailies(state)
         render_race_status(state)
+        _stt = daily.status(state, now())
+        if _stt["qualified"] and not _stt["rest"] and not _stt["bailout"]:
+            _bail_button(state, _stt)  # (before qualifying it sits in the qualifying card)
 
 # ── Pit Wall ──
 # ── Tasks ──
