@@ -2817,16 +2817,21 @@ def render_arrange(state: dict, stt: dict) -> None:
     if not m:
         st.caption("Nothing open to arrange.")
         return
-    st.caption("Top = up next. A start time is optional: leave it empty and the day's plan decides.")
-    for i, t in enumerate(m):
-        with st.container(key=f"arr_{t['id']}"):
-            c0, c1, c2, c3 = st.columns([0.5, 0.5, 4, 2.2], vertical_alignment="center")
-            c0.button("↑", key=f"arr_up_{t['id']}", disabled=i == 0, on_click=_mv, args=(state, t["id"], -1),
-                      use_container_width=True)
-            c1.button("↓", key=f"arr_dn_{t['id']}", disabled=i == len(m) - 1, on_click=_mv,
-                      args=(state, t["id"], 1), use_container_width=True)
-            c2.markdown(f"<div class='dod-arr'><b>{i + 1}</b> {html.escape(t['title'])} "
-                        f"<span>{min_label(t.get('minutes') or 30)}</span></div>", unsafe_allow_html=True)
+    st.caption("Drag to reorder (press and hold on a phone): the top one is Up next.")
+    got = sortable([{"id": "m", "items": [{"id": t["id"], "label": t["title"],
+                                           "sub": " · ".join(x for x in (min_label(t.get("minutes") or 30),
+                                                             (f"⏰ {datetime.strptime(t.get('start_set') or t['block']['start'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
+                                                              if (t.get("start_set") or t.get("block")) else "")) if x)}
+                                          for t in m]}], key=f"arr_sort_{now().date()}", numbered=True)
+    if got and got.get("m") and got["m"] != [t["id"] for t in m]:
+        daily.day(state, now().date())["order"] = got["m"]
+        save_state(state)
+        st.rerun()
+    with st.expander("⏰ Start times (optional)", expanded=any(t.get("start_set") for t in m)):
+        st.caption("Leave one on “any” and the day's plan decides. A set time gets a phone heads-up and a ▶ Start.")
+        for t in m:
+            c2, c3 = st.columns([3, 2], vertical_alignment="center")
+            c2.markdown(f"<div class='dod-arr'>{html.escape(t['title'])}</div>", unsafe_allow_html=True)
             cur = t.get("start_set") or ((t.get("block") or {}).get("start"))
             k = f"arr_t_{t['id']}"
             opts_ = ARR_TIMES if not cur or cur in ARR_TIMES else sorted(ARR_TIMES + [cur])
@@ -2840,7 +2845,16 @@ def render_up_next(state: dict) -> None:
     """🎯 The focal card: what's next, when, what it's for, and one big Start."""
     n_ = now()
     stt = daily.status(state, n_)
-    if not stt["qualified"] or stt["rest"] or stt["bailout"]:
+    if stt["rest"] or stt["bailout"]:
+        return
+    if not stt["qualified"]:
+        if stt["optional"] or n_ >= stt["deadline"] or st.session_state.get("nav", "🏁 Today") == "🏁 Today":
+            return  # (on Today the qualifying card itself is right there)
+        c1, c2 = st.columns([3, 1], vertical_alignment="center")
+        c1.markdown(f"<div class='dod-next slim'><div class='k'>🚦 Qualify by {stt['deadline']:%I:%M %p}".replace("by 0", "by ")
+                    + f" · {fmt_left(stt['deadline'] - n_)} left</div></div>", unsafe_allow_html=True)
+        c2.button("Lock in →", key="upn_q", type="primary", use_container_width=True, on_click=_go_tab,
+                  args=("🏁 Today",))
         return
     tm = state.get("timer")
     if tm:
@@ -4204,6 +4218,7 @@ CSS = """<style>
 .dod-next .t{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.6rem;line-height:1.15;
   margin:.2rem 0 .25rem;color:#ece8df}
 .dod-next .m{color:var(--muted);font-size:.9rem}
+.dod-next.slim{padding:10px 14px}.dod-next.slim::after{display:none}
 .dod-next.run{border-color:rgba(46,196,182,.45);background:linear-gradient(135deg,rgba(46,196,182,.16),transparent 60%),#141821}
 .dod-next.run .k{color:var(--t)}
 .dod-next.done{border-color:rgba(46,196,182,.35);background:linear-gradient(135deg,rgba(46,196,182,.12),transparent 60%),#141821}
@@ -4432,6 +4447,22 @@ if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
 # Log in once per device: the key is kept in a cookie + localStorage (components/keeper), so links without ?k=,
 # notification taps and the app waking from sleep all skip the password.
 _pw = get_secret("APP_PASSWORD")
+_SORT = components.declare_component("sortable", path=str(Path(__file__).parent / "components" / "sortable"))
+
+
+def sortable(groups: list[dict], key: str, cross: bool = False, numbered: bool = False) -> dict | None:
+    """Drag-to-reorder lists (mouse or touch). Returns {group id: [item ids]} once per drag, else None."""
+    try:
+        ev = _SORT(groups=groups, cross=cross, numbered=numbered, accent=accent(globals().get("state") or {})[0]
+                   if globals().get("state") else "#f5c518", key=key, default=None)
+    except Exception:  # noqa: BLE001
+        return None
+    if ev and ev.get("t") != st.session_state.get(f"{key}_t"):
+        st.session_state[f"{key}_t"] = ev.get("t")
+        return ev.get("groups")
+    return None
+
+
 _KEEPER = components.declare_component("keeper", path=str(Path(__file__).parent / "components" / "keeper"))
 
 
@@ -4622,6 +4653,7 @@ if snd and state["settings"].get("sounds", True):
         st.audio(tone_wav(SOUNDS[snd]), format="audio/wav", autoplay=True)
 
 
+render_up_next(state)  # 🎯 on every page, above the tabs
 lvl = level_of(state["xp"])
 
 open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
@@ -4635,7 +4667,6 @@ with tab_today:
     c_main, c_rail = st.columns([1.55, 1], gap="large")
     with c_main:
         render_checkin(state)
-        render_up_next(state)
         render_today(state)
         render_goals_today(state)
         render_close_day(state)
@@ -4907,6 +4938,47 @@ def render_task_quick_edit(state: dict, g: dict, tid: str) -> None:
 _FLOW = components.declare_component("flow", path=str(Path(__file__).parent / "components" / "flow"))
 
 
+def render_roadmap_arrange(state: dict, g: dict) -> None:
+    """↕ The roadmap as drag lists: one per stage (and the goal itself). Drag a step into another stage to move it
+    there; drag it up or down to do it sooner or later: booked steps trade their time slots, in order."""
+    gid = g["id"]
+    tasks = [t for t in R.goal_tasks(g, state["tasks"]) if t["status"] == "open"]
+    when = lambda t: t.get("scheduled") or t["deadline"]  # noqa: E731
+    sub = lambda t: (_when(R.block_at(t, TZ)) + f" · {min_label(t['block']['minutes'])}" if t.get("block")  # noqa: E731
+                     else "due " + _when(parse_dt(t["deadline"])))
+    groups = [{"id": "__goal", "title": f"🏁 <b>{html.escape(g['title'])}</b> (straight into the goal)",
+               "items": [{"id": t["id"], "label": t["title"], "sub": sub(t)}
+                         for t in sorted((t for t in tasks if not t.get("node")), key=when)]}]
+    for n in R.stages(g):
+        groups.append({"id": n["id"], "title": "&nbsp;" * 3 * R.depth(g, n["id"]) + f"🧩 <b>{html.escape(n['title'])}</b>",
+                       "items": [{"id": t["id"], "label": t["title"], "sub": sub(t)}
+                                 for t in sorted((t for t in tasks if t.get("node") == n["id"]), key=when)]})
+    st.caption("Press and drag (hold first on a phone). Moving a booked step up or down swaps it into an earlier "
+               "or later slot; its length stays the same.")
+    got = sortable(groups, key=f"rm_sort_{gid}", cross=True)
+    if not got:
+        return
+    by_id = {t["id"]: t for t in tasks}
+    changed = False
+    for grp, ids in got.items():
+        node = None if grp == "__goal" else grp
+        mine = [by_id[i] for i in ids if i in by_id]
+        for t in mine:
+            if (t.get("node") or None) != node:
+                t["node"] = node
+                changed = True
+        bl = [t for t in mine if t.get("block")]
+        slots = sorted((t["block"]["date"], t["block"]["start"]) for t in bl)
+        for t, (d_, s_) in zip(bl, slots):
+            if (t["block"]["date"], t["block"]["start"]) != (d_, s_):
+                t.update(R.block_fields(date.fromisoformat(d_), s_, int(t["block"]["minutes"]), TZ))
+                changed = True
+    if changed:
+        save_state(state)
+        flash("↕ Roadmap rearranged. The chart, Fortuna and your phone alerts follow.")
+        st.rerun()
+
+
 def render_flow(state: dict, g: dict) -> None:
     """The roadmap as a flow chart you can tap: the box you tap opens for editing right underneath."""
     gid = g["id"]
@@ -5057,6 +5129,9 @@ with tab_goals:
             big = R.goal_bonus(g, state["tasks"])
             if R.stages(g) or any(t.get("block") for t in gtasks):
                 render_flow(state, g)
+                if st.toggle("↕ Drag to rearrange", key=f"rm_arr_{g['id']}",
+                             help="Drag steps between stages, or up/down to change which comes first."):
+                    render_roadmap_arrange(state, g)
                 st.caption(f"🪙 Each block pays its own coins · 🧩 a cleared stage +{R.STAGE_BASE}–{R.STAGE_MAX} · "
                            f"🏆 the whole goal **+{big}**")
             else:

@@ -1,0 +1,75 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;background:transparent;font-family:"Source Sans Pro",system-ui,sans-serif;color:#ece8df;
+  -webkit-user-select:none;user-select:none}
+.grp{margin:0 0 10px}
+.gh{font-size:13px;font-weight:700;color:#8b909c;letter-spacing:.03em;margin:2px 2px 6px;display:flex;gap:6px;align-items:center}
+.gh b{color:#ece8df}
+.list{min-height:38px;border-radius:12px;padding:2px 0}
+.list.empty{border:1px dashed #2c313c}
+.it{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:0 0 6px;border:1px solid #2c313c;border-radius:12px;
+  background:#141821;cursor:grab;touch-action:none}
+.it .grip{color:#5b6070;font-size:18px;line-height:1;flex:none}
+.it .n{color:var(--y,#f5c518);font-weight:700;font-size:14px;min-width:16px;flex:none}
+.it .tx{flex:1;min-width:0}
+.it .t{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .s{font-size:12px;color:#8b909c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ghost{opacity:.35}
+.chosen{border-color:var(--y,#f5c518);box-shadow:0 8px 24px rgba(0,0,0,.45);background:#1b1f27}
+.drag{transform:rotate(1.5deg)}
+</style>
+<script src="Sortable.min.js"></script>
+</head>
+<body><div id="root"></div>
+<script>
+// Drag-to-reorder lists for the app (SortableJS, MIT). Works with a mouse and with touch (press, then drag).
+// args: groups=[{id,title,items:[{id,label,sub}]}], cross=bool (items can move between groups), numbered=bool
+const send = (type, extra) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, extra), "*");
+let lastSig = null, acc = "#f5c518";
+const height = () => send("streamlit:setFrameHeight", {height: document.body.scrollHeight + 6});
+function emit() {
+  const out = {};
+  document.querySelectorAll(".list").forEach(l => {
+    out[l.dataset.g] = [...l.querySelectorAll(".it")].map(e => e.dataset.id);
+    l.classList.toggle("empty", !l.children.length);
+  });
+  renumber();
+  send("streamlit:setComponentValue", {value: {groups: out, t: Date.now()}, dataType: "json"});
+}
+function renumber() {
+  document.querySelectorAll(".list").forEach(l => l.querySelectorAll(".it .n").forEach((n, i) => n.textContent = i + 1));
+}
+function draw(a) {
+  const root = document.getElementById("root"); root.innerHTML = "";
+  (a.groups || []).forEach(g => {
+    const wrap = document.createElement("div"); wrap.className = "grp";
+    if (g.title) { const h = document.createElement("div"); h.className = "gh"; h.innerHTML = g.title; wrap.appendChild(h); }
+    const l = document.createElement("div"); l.className = "list" + ((g.items || []).length ? "" : " empty"); l.dataset.g = g.id;
+    (g.items || []).forEach(x => {
+      const e = document.createElement("div"); e.className = "it"; e.dataset.id = x.id;
+      e.innerHTML = '<span class="grip">⠿</span>' + (a.numbered ? '<span class="n"></span>' : "") +
+        '<div class="tx"><div class="t"></div><div class="s"></div></div>';
+      e.querySelector(".t").textContent = x.label; e.querySelector(".s").textContent = x.sub || "";
+      if (!x.sub) e.querySelector(".s").remove();
+      l.appendChild(e);
+    });
+    wrap.appendChild(l); root.appendChild(wrap);
+    new Sortable(l, {group: a.cross ? "dod" : g.id, animation: 160, ghostClass: "ghost", chosenClass: "chosen",
+      dragClass: "drag", delay: 120, delayOnTouchOnly: true, touchStartThreshold: 4, forceFallback: true,
+      fallbackOnBody: true, onEnd: emit});
+  });
+  renumber(); height(); setTimeout(height, 80);
+}
+window.addEventListener("message", ev => {
+  const d = ev.data || {};
+  if (d.type !== "streamlit:render") return;
+  const a = d.args || {};
+  const sig = JSON.stringify(a.groups) + "|" + a.cross + "|" + a.numbered;
+  if (a.accent) document.documentElement.style.setProperty("--y", a.accent);
+  if (sig !== lastSig) { lastSig = sig; draw(a); }
+});
+window.addEventListener("resize", height);
+send("streamlit:componentReady", {apiVersion: 1});
+</script>
+</body></html>
