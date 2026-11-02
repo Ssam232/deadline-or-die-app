@@ -1453,6 +1453,19 @@ def proof_open(key: str) -> bool:
     return st.session_state.get("proof_open") == key
 
 
+def fold(k: str, label: str, default: bool = True, card: bool = False):
+    """A collapsible section that remembers whether you left it open or closed (saved with your data, so it
+    sticks across reloads and devices). card=True styles it as one of the big section cards."""
+    wk = ("card_" if card else "fold_") + k
+    folds = state.setdefault("folds", {})
+    cur = st.session_state.get(wk)
+    if isinstance(cur, bool) and folds.get(k, default) != cur:
+        folds[k] = cur  # you just opened/closed it
+        save_state(state)
+    # always hand Streamlit the state it's already in: a changed `expanded` would snap it back
+    return st.expander(label, expanded=folds.get(k, default), key=wk, on_change="rerun")
+
+
 def _when(d: datetime) -> str:
     """A due time that doesn't tick: 'today 6:30 PM', 'Sat 11:59 PM'."""
     day = "today" if d.date() == now().date() else "tomorrow" if d.date() == now().date() + timedelta(days=1) \
@@ -1633,7 +1646,7 @@ def min_label(m: int) -> str:
 
 
 def points_guide() -> None:
-    with st.expander("💰 What's it worth? (points guide)"):
+    with fold("points", "💰 What's it worth? (points guide)", False):
         st.markdown(V.guide_markdown())
 
 
@@ -2168,18 +2181,18 @@ def render_dailies(state: dict) -> None:
         st.rerun(scope="app")
     today = now().date()
     rows = DL.today_status(state, today)
-    with st.container(border=True):
+    _dn = sum(r["done"] for r in rows)
+    with fold("dailies", "🔁 **Dailies**" + (f" :gray[{_dn}/{len(rows)}]" if rows else ""), card=True):
         if rows:
-            done = sum(r["done"] for r in rows)
+            done = _dn
             stake, _ = DL.at_stake(state, today)
-            st.markdown(f"#### 🔁 Dailies · {done}/{len(rows)}")
             if done == len(rows):
-                note = "<div style='color:#2ec4b6;font-size:.88rem;margin-top:-.6rem'>All done today ✅</div>"
+                note = "<div style='color:#2ec4b6;font-size:.88rem'>All done today ✅</div>"
             elif stake:
-                note = (f"<div style='color:#ff6a5c;font-size:.88rem;margin-top:-.6rem'>−{stake} 🪙 at midnight if "
+                note = (f"<div style='color:#ff6a5c;font-size:.88rem'>−{stake} 🪙 at midnight if "
                         "these aren't done</div>")
             else:
-                note = ("<div style='color:#8b909c;font-size:.88rem;margin-top:-.6rem'>Day one is free: misses start "
+                note = ("<div style='color:#8b909c;font-size:.88rem'>Day one is free: misses start "
                         "costing tomorrow</div>")
             st.markdown(note, unsafe_allow_html=True)
             for r in rows:
@@ -2206,8 +2219,8 @@ def render_dailies(state: dict) -> None:
                 else:
                     c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True,
                               on_click=_dl_tap, args=(state, h, today, 1))
-        with st.expander("⚙️ Manage dailies" if rows else
-                         "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)", key="exp_dl_manage"):
+        with fold("dl_manage", "⚙️ Manage dailies" if rows else
+                  "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)", False):
             live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
             views = ["Your dailies", "＋ Add new"]
             if "_dl_view_next" in st.session_state:
@@ -2676,7 +2689,16 @@ def render_today(state: dict) -> None:
     n_ = now()
     stt = daily.status(state, n_)
     c = daily.cfg(state)
-    with st.container(border=True, key="live_card"):
+    if stt["bailout"]:
+        _lab = "🪂 **Bailed out**"
+    elif stt["rest"]:
+        _lab = "🛌 **Pit stop day**"
+    elif not stt["qualified"]:
+        _lab = "🚦 **Qualifying**" + (" :gray[optional today]" if stt["optional"] else "")
+    else:
+        _m = [t for t in stt["mission"] if t["status"] != "cancelled"]
+        _lab = f"🏁 **Today's mission** :gray[{len(stt['mission_done'])}/{len(_m)}]"
+    with fold("live_card", _lab, card=True):
         render_coming_up(state)
         _shield_strip(state, n_)
         if stt["bailout"]:
@@ -2739,8 +2761,8 @@ def render_today(state: dict) -> None:
             pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
         pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
         st.markdown(
-            f"<div class='dod-mh'><div class='dod-mt'>🏁 Today's mission</div><div class='dod-mb'>{len(done)}/{len(m)}"
-            + (f" · {_hm_left(left_min)} to go" if open_m else " · done") + "</div></div>"
+            f"<div class='dod-mh'><div class='dod-mb'>{len(done)}/{len(m)} done"
+            + (f" · {_hm_left(left_min)} to go" if open_m else "") + "</div></div>"
             f"<div class='dod-seg'>{segs}</div>"
             "<div class='dod-pills'>" + "".join(f"<span>{x}</span>" for x in pills) + "</div>", unsafe_allow_html=True)
         tm = state.get("timer")
@@ -2783,7 +2805,7 @@ def render_today(state: dict) -> None:
         _only_booked = bool(m) and all(t.get("block") for t in m)
         if _only_booked:
             st.caption("🗺️ Your booked blocks got you qualified. Anything else today? Add it below.")
-        with st.expander("➕ Add to today's mission", expanded=_only_booked and n_ < stt["deadline"]):
+        with fold("add_mission", "➕ Add to today's mission", _only_booked and n_ < stt["deadline"]):
             render_qualify_form(state)
 
 
@@ -2860,7 +2882,7 @@ def render_arrange(state: dict, stt: dict) -> None:
         daily.day(state, now().date())["order"] = got["m"]
         save_state(state)
         st.rerun()
-    with st.expander("⏰ Start times (optional)", expanded=any(t.get("start_set") for t in m)):
+    with fold("start_times", "⏰ Start times (optional)", any(t.get("start_set") for t in m)):
         st.caption("Leave one on “any” and the day's plan decides. A set time gets a phone heads-up and a ▶ Start.")
         for t in m:
             c2, c3 = st.columns([3, 2], vertical_alignment="center")
@@ -2947,8 +2969,7 @@ def render_goals_today(state: dict) -> None:
     live = [g for g in state["goals"] if not g.get("claimed") and date.fromisoformat(g["target"]) >= today]
     if not live:
         return
-    with st.container(border=True, key="goals_today"):
-        st.markdown("<div class='dod-sec'>🗺️ Your goals</div>", unsafe_allow_html=True)
+    with fold("goals_today", f"🗺️ **Your goals** :gray[{len(live)}]", card=True):
         for g in sorted(live, key=lambda g: g["target"])[:4]:
             gt = R.goal_tasks(g, state["tasks"])
             d_, n_all = R.progress(gt)
@@ -3171,9 +3192,7 @@ def render_checkin(state: dict) -> None:
     d = now().date()
     if J.peek(state, d).get("am") or now().hour >= 15:
         return
-    with st.container(border=True, key="checkin"):
-        st.markdown("<div class='dod-ci'>☀️ <b>How are you starting today?</b> <span class='m'>+2 · one tap each</span>"
-                    "</div>", unsafe_allow_html=True)
+    with fold("checkin", "☀️ **How are you starting today?** :gray[+2 · one tap each]", card=True):
         c1, c2 = st.columns(2)
         with c1:
             mood = _scale_pills("Mood", J.MOODS, "ci_mood")
@@ -3233,8 +3252,7 @@ def render_close_day(state: dict) -> None:
                     f"{J.MOODS[pm['mood']]} <span class='m'>· +{pm.get('paid', 0)} · edit in Stats → Journal</span></div>"
                     "</div>", unsafe_allow_html=True)
         return
-    with st.container(border=True, key="closeday"):
-        st.markdown(f"### 📓 Close the day")
+    with fold("closeday", "📓 **Close the day**", card=True):
         st.caption(f"Two taps and a few lines. +{J.PM_BASE} for the taps, +{J.PM_PER_ANSWER} per real answer "
                    f"(up to +{J.PM_MAX}). It all lands in Stats → Journal and your weekly recap.")
         _journal_form(state, d, "cd")
@@ -3281,11 +3299,11 @@ def render_journal(state: dict) -> None:
         st.markdown("**🧱 What got in the way**")
         st.markdown("\n".join(f"- *{d_:%a}* {html.escape(b)}" for d_, b in r["blockers"]) or "<span class='m'>"
                     "Nothing logged.</span>", unsafe_allow_html=True)
-    with st.expander("📋 Recap to paste"):
+    with fold("jr_recap", "📋 Recap to paste", False):
         st.code(J.recap_text(r), language=None)
     st.markdown("#### 📓 Days")
     if not J.peek(state, today).get("pm"):
-        with st.expander(f"✏️ Today, {today:%a %b} {today.day} · not journaled yet"):
+        with fold("jr_today", f"✏️ Today, {today:%a %b} {today.day} · not journaled yet", False):
             _journal_form(state, today, "jt")
     ents = J.entries(state)
     if not ents:
@@ -3358,7 +3376,7 @@ def render_scrapbook(state: dict) -> None:
     st.markdown(f"<div class='dod-pills'><span>✅ <b>{len(ts)}</b> done</span><span>🕒 <b>{mins / 60:.1f} h</b> of work"
                 f"</span><span>⏱️ <b>{timed / 60:.1f} h</b> on the timer</span><span>🪙 <b>+{sum(t.get('reward', 0) for t in ts)}"
                 f"</b></span></div>", unsafe_allow_html=True)
-    with st.expander("📋 Recap to paste (supervisor meeting, journal, thesis log)"):
+    with fold("stats_recap", "📋 Recap to paste (supervisor meeting, journal, thesis log)", False):
         st.code(_recap_text(ts, per), language=None)
     cfg = notion_cfg()
     cols = st.columns(3)
@@ -3530,9 +3548,9 @@ def render_timer(state: dict) -> None:
     tm = state.get("timer")
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
                     key=lambda t: (t.get("mission_day") != now().date().isoformat(), t["deadline"]))
-    with st.container(border=True):
+    with fold("timer", "⏱️ **Focus timer**" + (" :red[● running]" if tm and not tm.get("paused") else
+                                              " :orange[❚❚ paused]" if tm else ""), card=True):
         if not tm:
-            st.markdown("#### ⏱️ Focus timer")
             labels = {t["id"]: t["title"] for t in open_t}
             labels[NEW_SESSION] = "✏️ New task…"
             c1, c2 = st.columns([1.6, 1])
@@ -3919,8 +3937,7 @@ def render_race_status(state: dict) -> None:
     left = max(0, PITY_AFTER - state["since_rare"])
     unserved = [p for p in state["penalty_box"] if not p["served"]]
     if unserved:
-      with st.container(border=True):
-        st.markdown("<div class='dod-sec'>🚨 Penalty box</div>", unsafe_allow_html=True)
+      with fold("penalty", f"🚨 **Penalty box** :gray[{len(unserved)}]", card=True):
         for p in unserved:
             st.markdown(f"🚨 **{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
                         unsafe_allow_html=True)
@@ -3932,15 +3949,15 @@ def render_race_status(state: dict) -> None:
                 save_state(state)
                 flash("Penalty served. Back on track.")
                 st.rerun()
-    with st.expander("📜 This week's contracts", key="exp_contracts"):
+    with fold("contracts", "📜 This week's contracts", False):
         render_contracts(state)
-    with st.expander("📜 Ledger"):
+    with fold("ledger", "📜 Ledger", False):
         if not state["ledger"]:
             st.caption("Nothing yet.")
         for e in state["ledger"][:15]:
             st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
                         f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
-    with st.expander("📖 Rules"):
+    with fold("rules", "📖 Rules", False):
         st.markdown(f"""
 - **Every task** has a deadline, a reward and a penalty (set by its size).
 - **Finish it → submit proof** (file and/or link + a note). With an Anthropic key, an AI race steward checks it; otherwise it's on your honor. The same file can never be reused.
@@ -3966,11 +3983,10 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
     # booked roadmap blocks show up on their own day, not as clutter before then
     rest = [t for t in open_tasks if t["id"] not in in_mission
             and not (t.get("block") and t["block"]["date"] > today)]
-    with st.container(border=True, key="task_board"):
-        _rd = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
-               and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
-        st.markdown(f"<div class='dod-sec'>📋 Everything else <span>{len(rest)} open"
-                    + (f" · {len(_rd)} to redeem" if _rd else "") + "</span></div>", unsafe_allow_html=True)
+    _rd = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
+           and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
+    with fold("task_board", f"📋 **Everything else** :gray[{len(rest)} open"
+              + (f" · {len(_rd)} to redeem" if _rd else "") + "]", card=True):
         render_quick_add(state, "qa_top", boxed=False)
         if rest and (parse_dt(rest[0]["deadline"]) - now()) < timedelta(hours=6):
             st.warning(f"⏱️ **{rest[0]['title']}** dies in {fmt_left(parse_dt(rest[0]['deadline']) - now())} — "
@@ -4161,7 +4177,7 @@ CSS = """<style>
 .block-container{max-width:1280px;padding-top:2.6rem}
 .st-key-rail [data-testid="stVerticalBlockBorderWrapper"],.st-key-rail>div{gap:.9rem}
 [data-testid="stBaseButton-primary"] *,[data-testid="stBaseButton-primaryFormSubmit"] *{color:#14171d!important;font-weight:700}
-.st-key-live_card{border-left:4px solid var(--y)!important}
+.st-key-card_live_card > [data-testid="stExpander"] > details{border-left:4px solid var(--y)!important}
 [data-testid="stMultiSelectTagsContainer"] [data-tag],[data-baseweb="tag"]{background:#2a2f3a!important;
   border:1px solid #3a404d!important}
 [data-testid="stMultiSelectTagsContainer"] [data-tag] *,[data-baseweb="tag"] *{color:#ece8df!important}
@@ -4289,16 +4305,22 @@ CSS = """<style>
 .dod-sec{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 .4rem;
   display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:0}
 .dod-sec span{font-family:inherit;font-weight:500;font-size:.85rem;color:var(--muted)}
-.st-key-tasks_open_box{border-left:3px solid var(--accent,#f5c518)!important}
-.st-key-tasks_redeem_box,.st-key-tb_redeem_box{border-color:rgba(225,6,0,.35)!important;border-left:3px solid #e10600!important;
-  background:rgba(225,6,0,.05)}
-.st-key-tasks_recent_box{border-color:rgba(46,196,182,.3)!important;border-left:3px solid #2ec4b6!important;
-  background:rgba(46,196,182,.04)}
-.st-key-tasks_open_box,.st-key-tasks_redeem_box,.st-key-tasks_recent_box{margin-bottom:.5rem}
-.st-key-tasks_recent_box [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem!important}
-.st-key-tasks_recent_box [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child{min-width:0!important;flex:1 1 auto!important}
-.st-key-tasks_recent_box [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child{min-width:92px!important;flex:0 0 92px!important}
-.st-key-tasks_recent_box [data-testid="stHorizontalBlock"] p{margin:0}
+/* section cards: collapsible, remembered (fold(..., card=True)) */
+[class*="st-key-card_"] > [data-testid="stExpander"] > details{border-radius:14px}
+[class*="st-key-card_"] > [data-testid="stExpander"] > details > summary{padding-top:.7rem;padding-bottom:.7rem}
+[class*="st-key-card_"] > [data-testid="stExpander"] > details > summary p{font-family:'Saira Semi Condensed',system-ui,sans-serif;
+  font-size:1.12rem;line-height:1.3}
+[class*="st-key-card_"] > [data-testid="stExpander"] > details > summary p strong{font-weight:700}
+.st-key-card_tasks_open > [data-testid="stExpander"] > details{border-left:3px solid var(--y,#f5c518)!important}
+.st-key-card_tasks_redeem > [data-testid="stExpander"] > details{border-color:rgba(225,6,0,.35)!important;
+  border-left:3px solid #e10600!important;background:rgba(225,6,0,.05)}
+.st-key-card_tasks_recent > [data-testid="stExpander"] > details{border-color:rgba(46,196,182,.3)!important;
+  border-left:3px solid #2ec4b6!important;background:rgba(46,196,182,.04)}
+.st-key-tb_redeem_box{border-color:rgba(225,6,0,.35)!important;border-left:3px solid #e10600!important;background:rgba(225,6,0,.05)}
+.st-key-card_tasks_recent [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem!important}
+.st-key-card_tasks_recent [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child{min-width:0!important;flex:1 1 auto!important}
+.st-key-card_tasks_recent [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child{min-width:92px!important;flex:0 0 92px!important}
+.st-key-card_tasks_recent [data-testid="stHorizontalBlock"] p{margin:0}
 .dod-sub{font-weight:700;font-size:.9rem;display:flex;gap:8px;align-items:baseline;margin:0 0 .2rem}
 .dod-sub.red{color:#ff6b63}.dod-sub span{font-weight:500;color:var(--muted)}
 .dod-next{position:relative;border-radius:16px;padding:16px 18px 14px;margin:0 0 .5rem;overflow:hidden;
@@ -4324,9 +4346,9 @@ CSS = """<style>
   animation:dodGrow .9s cubic-bezier(.2,.7,.2,1) both;--from:0%}
 .dod-goal .m{color:var(--muted);font-size:.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dod-goal-tag{color:var(--t);font-size:.82rem;text-align:center}
-.st-key-goals_today [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.6rem}
-.st-key-goals_today [data-testid="stColumn"]{min-width:0!important}
-.st-key-goals_today [data-testid="stColumn"]:last-child{flex:0 0 7.6rem!important;width:7.6rem!important}
+.st-key-card_goals_today [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.6rem}
+.st-key-card_goals_today [data-testid="stColumn"]{min-width:0!important}
+.st-key-card_goals_today [data-testid="stColumn"]:last-child{flex:0 0 7.6rem!important;width:7.6rem!important}
 .dod-car{border:1px solid var(--line);border-radius:16px;padding:10px 14px 12px;margin:0 0 .5rem;
   background:radial-gradient(120% 90% at 50% 0%,#1e2330,#121620 70%)}
 .dod-car .img svg{width:100%;height:auto;display:block;filter:drop-shadow(0 10px 14px rgba(0,0,0,.45))}
@@ -4343,7 +4365,7 @@ CSS = """<style>
 .dod-car .chips span{font-size:.75rem;color:var(--muted);background:#141821;border:1px solid var(--line);border-radius:999px;
   padding:2px 9px}
 .dod-car .why{color:#ff6a5c;font-size:.8rem;margin-top:6px}
-.st-key-car_card [data-testid^="stBaseButton-tertiary"],.st-key-goals_today [data-testid^="stBaseButton-tertiary"]{
+.st-key-car_card [data-testid^="stBaseButton-tertiary"],.st-key-card_goals_today [data-testid^="stBaseButton-tertiary"]{
   color:var(--muted);font-size:.85rem;padding:0;min-height:0}
 .st-key-drop_reveal{animation:dodDropOut .6s ease-in 4.8s both;overflow:hidden}
 .dod-drop{display:flex;gap:14px;align-items:center;padding:12px 16px;border:1px solid var(--y);border-radius:14px;
@@ -4358,7 +4380,7 @@ CSS = """<style>
 .dod-shield span.hot{border-color:var(--y);color:#ece8df;background:rgba(245,197,24,.08)}
 .st-key-audio_session{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
 .dod-ci{margin:-.2rem 0 .1rem}.dod-ci .m{color:var(--muted);font-size:.85rem;margin-left:4px}
-.st-key-checkin [data-testid="stButtonGroup"] button,.st-key-closeday [data-testid="stButtonGroup"] button,
+.st-key-card_checkin [data-testid="stButtonGroup"] button,.st-key-card_closeday [data-testid="stButtonGroup"] button,
 [class*="st-key-jf_"] [data-testid="stButtonGroup"] button{font-size:1.15rem;min-width:2.6rem}
 /* working… : a slim racing-stripe bar while the app thinks (only shows if it takes > ~0.2 s) */
 [data-testid="stApp"][data-test-script-state="running"]::before{content:"";position:fixed;top:0;left:0;right:0;height:3px;
@@ -4788,8 +4810,7 @@ with tab_today:
 # ── Tasks ──
 with tab_tasks:
   if tab_tasks.open is not False:
-    with st.container(border=True, key="tasks_open_box"):
-        st.markdown(f"<div class='dod-sec'>📋 Open tasks <span>{len(open_tasks)}</span></div>", unsafe_allow_html=True)
+    with fold("tasks_open", f"📋 **Open tasks** :gray[{len(open_tasks)}]", card=True):
         if not open_tasks:
             st.caption("Nothing open. Add one below.")
         for t in open_tasks:
@@ -4797,9 +4818,8 @@ with tab_tasks:
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                   and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
     if redeemable:
-        with st.container(border=True, key="tasks_redeem_box"):
-            st.markdown(f"<div class='dod-sec'>🩹 Redeemable <span>{len(redeemable)} missed · finish within "
-                        f"{REDEEM_WINDOW_H}h of the miss for half the penalty back</span></div>", unsafe_allow_html=True)
+        with fold("tasks_redeem", f"🩹 **Redeemable** :gray[{len(redeemable)}]", card=True):
+            st.caption(f"Missed — finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
             for t in redeemable:
                 left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
                 with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
@@ -4831,24 +4851,23 @@ with tab_tasks:
             st.rerun()
 
     if recents:
-        with st.container(border=True, key="tasks_recent_box"):
-            st.markdown(f"<div class='dod-sec'>🕘 Recent · do it again <span>done before, not open now</span></div>",
-                        unsafe_allow_html=True)
+        with fold("tasks_recent", f"🕘 **Recent · do it again** :gray[{len(recents)}]", card=True):
+            st.caption("Done before, not open now. One tap brings it back for today.")
             for t in recents[:4]:
                 _again_row(t)
             if len(recents) > 4:
-                with st.expander(f"More ({len(recents) - 4})", key="exp_recent"):
+                with fold("recent_more", f"More ({len(recents) - 4})", False):
                     for t in recents[4:]:
                         _again_row(t)
 
     st.markdown("<div class='dod-sec' style='margin-top:1.2rem'>🧰 Add &amp; manage</div>", unsafe_allow_html=True)
-    with st.expander("➕ New task", expanded=not open_tasks):
+    with fold("new_task", "➕ New task", not open_tasks):
         task_form(state, "new_task_form")
-    with st.expander("📥 Import from Notion"):
+    with fold("import", "📥 Import from Notion", False):
         notion_import(state)
     points_guide()
     if done:
-        with st.expander(f"🏆 Completed ({len(done)})", key="exp_completed"):
+        with fold("completed", f"🏆 Completed ({len(done)})", False):
             for t in sorted(done, key=lambda t: t["completed_at"], reverse=True)[:30]:
                 icon = "🏁" if t["status"] == "done" else "🩹"
                 st.markdown(f"{icon} **{t['title']}** · +{t.get('earned', 0)} 🪙 "
@@ -5245,7 +5264,7 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
 # ── Goals ──
 with tab_goals:
   if tab_goals.open is not False:
-    with st.expander("🗺️ New goal", expanded=not state["goals"], key="exp_new_goal"):
+    with fold("new_goal", "🗺️ New goal", not state["goals"]):
         render_new_goal(state)
 
 
@@ -5516,7 +5535,7 @@ with tab_stats:
               "and ⚡ live events are up to **4×** likelier to land here, and 💡 phone suggestions aim here too."
             + f"\n- ☀️ **Morning briefing** lands at {_hlabel(I.brief_hour(PROFILE, 8))} (an hour before you usually start)."
             + "\n\nBuilt from history up to yesterday, so today's surprises stay put while you work.")
-    with st.expander("📋 Table view"):
+    with fold("table_view", "📋 Table view", False):
         st.dataframe(pd.DataFrame({"Hour": [_hlabel(h_) for h_ in range(24)],
                                    "Minutes (28d)": [round(x) for x in full["hour_min"]]}), hide_index=True)
 
@@ -5545,7 +5564,7 @@ with tab_garage:
             else:
                 st.caption("Can't afford repairs. Go finish something.")
 
-    with st.expander("🎨 Paint shop — colour the whole app", expanded=False):
+    with fold("paint", "🎨 Paint shop — colour the whole app", False):
         st.caption("Unlock Honda colours for the app itself: buttons, timer, instrument cluster, everything.")
         owned_t = state.setdefault("themes_owned", ["phoenix"])
         cur_t = state.get("ui_theme", "phoenix")
@@ -5576,7 +5595,7 @@ with tab_garage:
                     flash(f"🎨 **{name}** unlocked and applied.", celebrate=True, sound="jackpot")
                     st.rerun()
 
-    with st.expander("🏢 Showroom — the Honda ladder", expanded=False):
+    with fold("showroom", "🏢 Showroom — the Honda ladder", False):
         lvl_now = level_of(state["xp"])
         owned = car.setdefault("owned", ["civic_si"])
         for m in CARS:
@@ -5642,7 +5661,7 @@ with tab_garage:
                         n_, why = G.UPGRADES[key][i]
                         st.markdown(f"**L{i + 1} {n_}** — {why}")
 
-    with st.expander("🎨 Livery"):
+    with fold("livery", "🎨 Livery", False):
         with st.form("livery"):
             name = st.text_input("Car name", value=car["name"], max_chars=24)
             num = st.number_input("Number", 1, 99, value=int(car["number"]))
@@ -5706,7 +5725,7 @@ with tab_race:
 
         _hide = 1 if (st.session_state.get("race_replay") or {}).get("revealed") is False else 0
         if state["races"][_hide:]:
-            with st.expander("Race history"):
+            with fold("race_history", "Race history", False):
                 for r in state["races"][_hide:15]:
                     pos = r["pos"] if r["pos"] == "DNF" else f"P{r['pos']}"
                     st.markdown(f"**{pos}** {r['track']} · +{r['payout']} 🪙 "
@@ -5978,7 +5997,7 @@ with tab_set:
             else:
                 st.caption("Add ZOTERO_USER_ID and ZOTERO_API_KEY to secrets. Both are on zotero.org/settings/keys; "
                            "the user ID is at the top of that page.")
-        with st.expander("Claude model and Notion import"):
+        with fold("adv", "Claude model and Notion import", False):
             with st.form("set_adv", border=False):
                 model = st.text_input("Claude model", value=s["model"])
                 db = st.text_input("Import tasks from another Notion database (link or ID)", value=s["notion_db"])
