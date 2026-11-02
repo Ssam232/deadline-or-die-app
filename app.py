@@ -2379,6 +2379,16 @@ def _render_queue(where, pending: list, fk: int, state: dict) -> None:
 
 
 @st.fragment
+def _q_tpl(key: str, state: dict) -> None:
+    """One tap on a preset (📨 Clear inbox, 🧠 Write 300 words…) queues it for today's mission."""
+    label = st.session_state.get(key)
+    if not label:
+        return
+    _, mins, _cat = next(x for x in Q.TEMPLATES if x[0] == label)
+    _q_put(label.split(" ", 1)[1], mins, state)
+    st.session_state[key] = None
+
+
 def render_qualify_form(state: dict) -> None:
     today = now().date()
     fk = st.session_state.setdefault("_qf_n", 0)  # bumped after a lock-in to reset every field
@@ -2414,9 +2424,23 @@ def render_qualify_form(state: dict) -> None:
                 groups["z"].append(k)
         except Exception as e:
             st.caption(f"(Couldn't read Zotero: {e})")
+    # 🕘 recents: things you did (or planned) on earlier days, to reuse with one tap
+    open_titles = {t["title"].strip().lower() for t in state["tasks"] if t["status"] == "open"}
+    seen = set()
+    for t in sorted(state["tasks"], key=lambda t: t.get("completed_at") or t.get("created") or "", reverse=True):
+        ttl = t["title"].strip()
+        if (t["status"] in ("done", "redeemed", "failed") and ttl.lower() not in open_titles and ttl.lower() not in seen
+                and not t.get("block") and not ttl.startswith(("🚨", "Work on:"))):
+            seen.add(ttl.lower())
+            k = f"r:{t['id']}"
+            opts[k] = (f"{ttl[:48]} · {min_label(t.get('minutes') or 30)}", t)
+            groups.setdefault("r", []).append(k)
+        if len(groups.get("r", [])) >= 8:
+            break
     picked = []
     qualified_ = daily.peek_day(state, today).get("qualified")
-    heads = {"t": "Your tasks", "b": "From your board · an hour of prep on it", "z": "Reading list"}
+    heads = {"t": "Your tasks", "b": "From your board · an hour of prep on it", "z": "Reading list",
+             "r": "🕘 Recent · do it again"}
     if any(groups.values()):
         st.markdown("<div class='dod-step'><b>1</b> Pick what you'll do today</div>", unsafe_allow_html=True)
     for g, keys in groups.items():
@@ -2438,11 +2462,13 @@ def render_qualify_form(state: dict) -> None:
                 unsafe_allow_html=True)
     # how much real work is picked: the 30-min floor shown live, instead of an error after you tap
     real = (sum((opts[k][1].get("minutes") or 60) for k in picked
-                if k.startswith("t:") and V.counts_for_qualifying(opts[k][1]))
+                if k[:2] in ("t:", "r:") and V.counts_for_qualifying(opts[k][1]))
             + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
             + sum(_qi(x)[1] for x in pending if _qi(x)[2] != "pit"))
     n_sel = len(picked) + len(pending)
     need = daily.min_mission_minutes(state)
+    st.pills("Quick add", [x[0] for x in Q.TEMPLATES], key=f"q_tpl{fk}", selection_mode="single",
+             label_visibility="collapsed", on_change=_q_tpl, args=(f"q_tpl{fk}", state))
     with st.form(f"q_form{fk}", clear_on_submit=True, border=False, enter_to_submit=True):
         c1, c2, c3 = st.columns([0.8, 1.05, 0.3], vertical_alignment="bottom")
         txt_ = c1.text_input("New task", key=f"q_new{fk}", label_visibility="collapsed",
@@ -2478,7 +2504,7 @@ def render_qualify_form(state: dict) -> None:
         p_["minutes"], p_["category"] = mins_, cat_
         parsed.append(p_)
     minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked
-                   if k.startswith("t:") and V.counts_for_qualifying(opts[k][1]))
+                   if k[:2] in ("t:", "r:") and V.counts_for_qualifying(opts[k][1]))
                + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
                + sum(p_["minutes"] for p_ in parsed if V.counts_for_qualifying(p_)))  # 🔧 pit checks don't count
     if dl <= now() + timedelta(minutes=5):  # late at night (or a time that's gone by): same time tomorrow
@@ -2498,6 +2524,11 @@ def render_qualify_form(state: dict) -> None:
         kind, obj = k[0], opts[k][1]
         if kind == "t":
             ids.append(obj["id"])
+        elif kind == "r":  # 🕘 a recent one, again: a fresh task with the same name, size and type
+            t = make_task(obj["title"], obj.get("details", ""), late_dl, None, obj.get("consequence", ""),
+                          obj.get("goal_id"), category=obj.get("category"), minutes=obj.get("minutes"))
+            state["tasks"].append(t)
+            ids.append(t["id"])
         elif kind == "b":
             b = obj
             if b["date"] and b["date"] > today.isoformat():  # future card → an hour of work on it today
@@ -2665,7 +2696,7 @@ def render_today(state: dict) -> None:
                 _bail_button(state, stt)
             return
         m, done = stt["mission"], stt["mission_done"]
-        m = sorted(m, key=lambda t: (0, t["block"]["start"]) if t.get("block") else (1, t["deadline"]))
+        m = mission_sorted(state, m)
         open_m = [t for t in m if t["status"] == "open"]
         left_min = sum(t.get("minutes") or 30 for t in open_m)
         segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
@@ -2680,6 +2711,8 @@ def render_today(state: dict) -> None:
             f"<div class='dod-seg'>{segs}</div>"
             "<div class='dod-pills'>" + "".join(f"<span>{x}</span>" for x in pills) + "</div>", unsafe_allow_html=True)
         tm = state.get("timer")
+        if st.toggle("↕ Arrange & set start times", key="arrange_on"):
+            render_arrange(state, stt)
         for t in m:
             if t["status"] in ("done", "redeemed"):
                 st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>{html.escape(t['title'])}</s>"
@@ -2693,7 +2726,9 @@ def render_today(state: dict) -> None:
                 _bk = t.get("block")
                 _lbl = (f"⏰ {datetime.strptime(_bk['start'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
                         + f" · {t['title']} · {min_label(t.get('minutes') or 30)} · 🗺️ {goal_title(state, t.get('goal_id'))[:28]}"
-                        if _bk else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
+                        if _bk else (f"⏰ {datetime.strptime(t['start_set'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
+                                     + f" · {t['title']} · {min_label(t.get('minutes') or 30)}") if t.get("start_set")
+                        else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
                 with c1.expander(_lbl + f" · +{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
                                  expanded=proof_open(f"today_open_{t['id']}")):
                     render_proof_form(state, t, "open", scope="today_")
@@ -2724,11 +2759,81 @@ def _go_tab(label: str) -> None:
     st.session_state["nav"] = label
 
 
+def mission_sorted(state: dict, m: list[dict], d: date | None = None) -> list[dict]:
+    """Today's mission in YOUR order (↕ Arrange) if you've set one; otherwise booked blocks by time, then the rest."""
+    order = (daily.peek_day(state, d or now().date()).get("order") or [])
+    pos = {tid: i for i, tid in enumerate(order)}
+
+    def key(t):
+        default = (0, t["block"]["start"]) if t.get("block") else (0, t["start_set"]) if t.get("start_set") \
+            else (1, t["deadline"])
+        return (pos.get(t["id"], len(pos)),) + default
+    return sorted(m, key=key)
+
+
 def _next_up(state: dict, stt: dict) -> dict | None:
-    """The one thing to do now: the earliest open mission item (booked blocks by their time first)."""
-    m = sorted((t for t in stt["mission"] if t["status"] == "open"),
-               key=lambda t: (0, t["block"]["start"]) if t.get("block") else (1, t["deadline"]))
+    """The one thing to do now: the first open item in your mission order."""
+    m = mission_sorted(state, [t for t in stt["mission"] if t["status"] == "open"])
     return m[0] if m else None
+
+
+def _mv(state: dict, tid: str, step: int) -> None:
+    """↑/↓ in Arrange: move one mission item (callback, so the list redraws already moved)."""
+    stt = daily.status(state, now())
+    ids = [t["id"] for t in mission_sorted(state, [t for t in stt["mission"] if t["status"] == "open"])]
+    if tid not in ids:
+        return
+    i = ids.index(tid)
+    j = max(0, min(len(ids) - 1, i + step))
+    ids[i], ids[j] = ids[j], ids[i]
+    daily.day(state, now().date())["order"] = ids
+    save_state(state)
+
+
+def _set_start(state: dict, tid: str, key: str) -> None:
+    """A start time for a mission item (optional). Clearing it falls back to the planned schedule."""
+    t = next((x for x in state["tasks"] if x["id"] == tid), None)
+    if not t:
+        return
+    v = st.session_state.get(key)
+    if not v or v == "—":
+        t.pop("start_set", None)  # back to the day's plan
+    else:
+        t["start_set"] = v
+        t.update(scheduled=datetime.combine(now().date(), datetime.strptime(v, "%H:%M").time(), TZ).isoformat(),
+                 scheduled_time=True)
+        if t.get("block"):
+            t.update(R.block_fields(now().date(), t["start_set"], int(t["block"]["minutes"]), TZ))
+    save_state(state)
+
+
+ARR_TIMES = [f"{h:02d}:{m:02d}" for h in range(6, 24) for m in (0, 15, 30, 45)]
+
+
+def render_arrange(state: dict, stt: dict) -> None:
+    """↕ Arrange: put today's mission in the order you'll do it (the top one is Up next) and, optionally, a start
+    time on any of them (the phone gives you a heads-up and a ▶ Start)."""
+    m = mission_sorted(state, [t for t in stt["mission"] if t["status"] == "open"])
+    if not m:
+        st.caption("Nothing open to arrange.")
+        return
+    st.caption("Top = up next. A start time is optional: leave it empty and the day's plan decides.")
+    for i, t in enumerate(m):
+        with st.container(key=f"arr_{t['id']}"):
+            c0, c1, c2, c3 = st.columns([0.5, 0.5, 4, 2.2], vertical_alignment="center")
+            c0.button("↑", key=f"arr_up_{t['id']}", disabled=i == 0, on_click=_mv, args=(state, t["id"], -1),
+                      use_container_width=True)
+            c1.button("↓", key=f"arr_dn_{t['id']}", disabled=i == len(m) - 1, on_click=_mv,
+                      args=(state, t["id"], 1), use_container_width=True)
+            c2.markdown(f"<div class='dod-arr'><b>{i + 1}</b> {html.escape(t['title'])} "
+                        f"<span>{min_label(t.get('minutes') or 30)}</span></div>", unsafe_allow_html=True)
+            cur = t.get("start_set") or ((t.get("block") or {}).get("start"))
+            k = f"arr_t_{t['id']}"
+            opts_ = ARR_TIMES if not cur or cur in ARR_TIMES else sorted(ARR_TIMES + [cur])
+            c3.selectbox("Start", ["—"] + opts_, index=(["—"] + opts_).index(cur) if cur else 0, key=k,
+                         format_func=lambda v: "start: any" if v == "—" else
+                         datetime.strptime(v, "%H:%M").strftime("%I:%M %p").lstrip("0"),
+                         label_visibility="collapsed", on_change=_set_start, args=(state, t["id"], k))
 
 
 def render_up_next(state: dict) -> None:
@@ -2752,7 +2857,7 @@ def render_up_next(state: dict) -> None:
                     "<div class='m'>Anything else is pure bonus. Or book time on a goal below.</div></div>",
                     unsafe_allow_html=True)
         return
-    b = t.get("block")
+    b = t.get("block") or ({"start": t["start_set"], "minutes": t.get("minutes") or 30} if t.get("start_set") else None)
     if b:
         at = datetime.strptime(b["start"], "%H:%M")
         when = f"{at:%I:%M %p}".lstrip("0")
@@ -4074,6 +4179,13 @@ CSS = """<style>
 .dod-mini-car svg{width:100%;height:auto;display:block;filter:drop-shadow(0 6px 8px rgba(0,0,0,.4))}
 @media (max-width:640px){.st-key-car_card,.st-key-car_card+div{display:none!important}
   .dod-mini-car{width:46%;top:10px;bottom:auto;right:8px}}
+.dod-arr{font-size:.92rem;color:#ece8df;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dod-arr b{color:var(--y);margin-right:4px}.dod-arr span{color:var(--muted);font-size:.8rem;margin-left:4px}
+[class*="st-key-arr_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.35rem}
+[class*="st-key-arr_"] [data-testid="stColumn"]{min-width:0!important}
+[class*="st-key-arr_"] [data-testid="stColumn"]:nth-child(1),[class*="st-key-arr_"] [data-testid="stColumn"]:nth-child(2){
+  flex:0 0 2.4rem!important;width:2.4rem!important}
+[class*="st-key-arr_"] [data-testid="stColumn"]:nth-child(4){flex:0 0 7.2rem!important;width:7.2rem!important}
 .dod-step{display:flex;align-items:center;gap:8px;font-weight:600;color:#ece8df;margin:.5rem 0 .2rem;font-size:.95rem}
 .dod-step b{width:1.35rem;height:1.35rem;border-radius:50%;background:var(--y);color:#111;display:inline-flex;
   align-items:center;justify-content:center;font-size:.78rem}
@@ -4564,6 +4676,28 @@ with tab_tasks:
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
     if done:
+        recents, seen_ = [], {t["title"].strip().lower() for t in open_tasks}
+        for t in sorted(done, key=lambda t: t["completed_at"], reverse=True):
+            if t["title"].strip().lower() not in seen_ and not t.get("block"):
+                seen_.add(t["title"].strip().lower())
+                recents.append(t)
+        if recents:
+            with st.expander(f"🕘 Recent · do it again ({min(len(recents), 15)})", key="exp_recent"):
+                for t in recents[:15]:
+                    c1, c2 = st.columns([5, 1.3], vertical_alignment="center")
+                    c1.markdown(f"{html.escape(t['title'])} <small style='color:#8b909c'>· {min_label(t.get('minutes') or 30)}"
+                                f" · last {parse_dt(t['completed_at']):%a %b %d}</small>", unsafe_allow_html=True)
+                    if c2.button("↻ Again", key=f"again_{t['id']}", use_container_width=True,
+                                 help="A fresh copy, due tonight. Lock it into today's mission from Today."):
+                        nt = make_task(t["title"], t.get("details", ""), datetime.combine(now().date(), dtime(23, 59), TZ),
+                                       None, t.get("consequence", ""), t.get("goal_id"), category=t.get("category"),
+                                       minutes=t.get("minutes"))
+                        if daily.peek_day(state, now().date()).get("qualified"):
+                            nt["mission_day"] = now().date().isoformat()
+                        state["tasks"].append(nt)
+                        save_state(state)
+                        flash(f"↻ **{nt['title']}** again, due tonight" + (" · in today's mission" if nt.get("mission_day") else "") + ".")
+                        st.rerun()
         with st.expander(f"🏆 Completed ({len(done)})", key="exp_completed"):
             for t in sorted(done, key=lambda t: t["completed_at"], reverse=True)[:30]:
                 icon = "🏁" if t["status"] == "done" else "🩹"

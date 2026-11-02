@@ -133,8 +133,8 @@ def _blocks(save: dict, now: datetime) -> list[dict]:
     out = []
     goals = {g["id"]: g.get("title", "") for g in save.get("goals", [])}
     for t in save.get("tasks", []):
-        b = t.get("block")
-        if not b or not t.get("scheduled"):
+        b = t.get("block") or ({"minutes": t.get("minutes") or 30} if t.get("start_set") else None)
+        if not b or not t.get("scheduled"):  # booked roadmap time, or a start time you set in ↕ Arrange
             continue
         at = datetime.fromisoformat(t["scheduled"])
         at = at if at.tzinfo else at.replace(tzinfo=now.tzinfo)
@@ -143,8 +143,8 @@ def _blocks(save: dict, now: datetime) -> list[dict]:
         g = goals.get(t.get("goal_id"), "")
         live = t.get("status") == "open" and not t.get("focus_min")
         for lead, prio, title, msg in (
-                (10, 3, f"🗺️ In 10 min: {t['title']}", f"{b['minutes']} min booked at {_hm(at)} for {g}."),
-                (0, 4, f"▶️ Now: {t['title']}", f"Your {b['minutes']}-min block for {g} starts now. "
+                (10, 3, f"{'🗺️' if t.get('block') else '⏰'} In 10 min: {t['title']}", f"{b['minutes']} min booked at {_hm(at)}" + (f" for {g}." if g else ".")),
+                (0, 4, f"▶️ Now: {t['title']}", f"Your {b['minutes']}-min block" + (f" for {g}" if g else "") + " starts now. "
                                                  f"Tap ▶️ and the timer runs.")):
             out.append(_alarm(("block", t["id"], t["scheduled"], lead), at - timedelta(minutes=lead), title, msg,
                               prio, ["world_map"], live, (t["id"], b["minutes"])))
