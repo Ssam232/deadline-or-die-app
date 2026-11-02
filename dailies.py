@@ -120,6 +120,32 @@ def claim(save: dict, hid: str, d: date, bank, why: str = "") -> int:
     return paid
 
 
+def unclaim(save: dict, hid: str, d: date, bank) -> int:
+    """Undo a claim when you tap ↩ below the target after claiming: the day's coins (and a streak bonus, if that
+    claim earned one) are billed back, the streak steps back. Returns coins billed."""
+    key = f"{d.isoformat()}#{hid}"
+    h = next((x for x in habits(save) if x["id"] == hid), None)
+    if not h or key not in save.get("habit_claims", []):
+        return 0
+    save["habit_claims"].remove(key)
+    back = reward(h) + (STREAK_BONUS if h.get("streak", 0) and h["streak"] % STREAK_BONUS_EVERY == 0 else 0)
+    if h.get("best") == h.get("streak"):
+        h["best"] = max(0, h["best"] - 1)
+    h["streak"] = max(0, h.get("streak", 0) - 1)
+    bank(save, -back, f"↩️ Unclaimed: {h['name']}")
+    save["xp"] = max(0, save.get("xp", 0) - 2)
+    return back
+
+
+def fix_claims(save: dict, d: date, bank) -> list[str]:
+    """Claimed but no longer at the target (an undo from before this rule existed): bill it back now."""
+    out = []
+    for h in habits(save):
+        if claimed(save, h["id"], d) and count(save, h["id"], d) < h["target"]:
+            out.append(f"↩️ {h['name']} is back under target, so its claim was undone (−{unclaim(save, h['id'], d, bank)}).")
+    return out
+
+
 def today_status(save: dict, d: date) -> list[dict]:
     out = []
     for h in habits(save):

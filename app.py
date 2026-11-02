@@ -2050,6 +2050,9 @@ def _prayer_line(state: dict, count: int) -> str:
 def _dl_tap(state: dict, h: dict, d, delta: int) -> None:
     """+1 / ↩ as a click callback: the dailies card redraws already updated, without rerunning the page."""
     n_ = DL.tap(state, h["id"], d, delta)
+    if delta < 0 and n_ < h["target"] and DL.claimed(state, h["id"], d):
+        back = DL.unclaim(state, h["id"], d, bank)
+        flash(f"↩️ **{h['name']}** is under target again: claim undone, −{back} coins.", "info")
     save_state(state)
     if delta > 0 and n_ >= h["target"]:
         flash(f"🔁 **{h['name']}** {n_}/{h['target']} — claim it!", sound="win")
@@ -4193,6 +4196,7 @@ crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
 _made_good = daily.make_good(state, bank, DL)
 _auto_q = daily.auto_qualify(state, now(), bank)
+_made_good = _made_good + DL.fix_claims(state, now().date(), bank)
 if _auto_q:
     _made_good = _made_good + [_auto_q]
 if _made_good:
