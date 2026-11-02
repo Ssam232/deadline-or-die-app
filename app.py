@@ -4241,6 +4241,27 @@ CSS = """<style>
 .dod-meter{font-size:.85rem;color:var(--muted);padding:6px 10px;border-radius:10px;background:#141821;
   border:1px solid var(--line);margin:.35rem 0 .1rem}
 .dod-meter b{color:#ece8df}.dod-meter.ok{border-color:rgba(46,196,182,.4)}.dod-meter.low{border-color:rgba(225,6,0,.45)}
+/* Today on a phone: flatten the two columns into one list and put the sections in a phone-friendly order */
+@media (max-width:640px){
+  .st-key-today_grid > [data-testid="stHorizontalBlock"],
+  .st-key-today_grid [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]{display:flex!important;flex-direction:column!important;gap:0!important}
+  .st-key-today_grid [data-testid="stColumn"],
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"]{display:contents!important}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *{order:50;margin-bottom:1rem}
+  .st-key-today_grid .st-key-tg_checkin{order:1}.st-key-today_grid .st-key-tg_today{order:2}
+  .st-key-today_grid .st-key-tg_timer{order:3}.st-key-today_grid .st-key-tg_dailies{order:4}
+  .st-key-today_grid .st-key-tg_goals{order:5}.st-key-today_grid .st-key-tg_close{order:6}
+  .st-key-today_grid .st-key-tg_board{order:7}.st-key-today_grid .st-key-tg_status{order:8}
+  .st-key-today_grid .st-key-tg_car{order:9;display:none!important}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_checkin){order:1}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_today){order:2}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_timer){order:3}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_dailies){order:4}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_goals){order:5}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_close){order:6}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_board){order:7}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_status){order:8}
+}
 @media (max-width:640px){
   .st-key-fx_row [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.25rem}
   .st-key-fx_row [data-testid="stColumn"]{min-width:0!important}
@@ -4264,6 +4285,8 @@ CSS = """<style>
 .dod-sec{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 .4rem;
   display:flex;align-items:baseline;gap:10px}
 .dod-sec span{font-family:inherit;font-weight:500;font-size:.85rem;color:var(--muted)}
+.st-key-tasks_open_box{border-left:3px solid var(--accent,#f5c518)!important}
+.st-key-tasks_redeem_box{border-color:rgba(225,6,0,.35)!important;border-left:3px solid #e10600!important}
 .dod-next{position:relative;border-radius:16px;padding:16px 18px 14px;margin:0 0 .5rem;overflow:hidden;
   background:linear-gradient(135deg,rgba(245,197,24,.16),rgba(245,197,24,.03) 55%,transparent),#141821;
   border:1px solid rgba(245,197,24,.35);animation:dodIn .35s ease-out both}
@@ -4719,36 +4742,45 @@ tab_today, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, ta
 # ── Today: the cockpit. Do-now on the left, instruments on the right; stacks on a phone. ──
 with tab_today:
   if tab_today.open is not False:
-    # two rows, so on a phone (where columns stack) the timer and dailies come right after the mission,
-    # not under every other section
-    c_main, c_rail = st.columns([1.55, 1], gap="large")
-    with c_main:
-        render_checkin(state)
-        render_today(state)
-    with c_rail:
-        render_car_card(state)
-        render_timer(state)
-        render_dailies(state)
-    c_main2, c_rail2 = st.columns([1.55, 1], gap="large")
-    with c_main2:
-        render_goals_today(state)
-        render_close_day(state)
-        render_task_board(state, open_tasks)
-    with c_rail2:
-        render_race_status(state)
-        _stt = daily.status(state, now())
-        if _stt["qualified"] and not _stt["rest"] and not _stt["bailout"]:
-            _bail_button(state, _stt)  # (before qualifying it sits in the qualifying card)
+    # one row of two columns (no gaps on a wide screen); on a phone the CSS interleaves the sections so the
+    # timer and dailies come right after the mission (see .st-key-today_grid)
+    with st.container(key="today_grid"):
+        c_main, c_rail = st.columns([1.55, 1], gap="large")
+        with c_main:
+            with st.container(key="tg_checkin"):
+                render_checkin(state)
+            with st.container(key="tg_today"):
+                render_today(state)
+            with st.container(key="tg_goals"):
+                render_goals_today(state)
+            with st.container(key="tg_close"):
+                render_close_day(state)
+            with st.container(key="tg_board"):
+                render_task_board(state, open_tasks)
+        with c_rail:
+            with st.container(key="tg_car"):
+                render_car_card(state)
+            with st.container(key="tg_timer"):
+                render_timer(state)
+            with st.container(key="tg_dailies"):
+                render_dailies(state)
+            with st.container(key="tg_status"):
+                render_race_status(state)
+                _stt = daily.status(state, now())
+                if _stt["qualified"] and not _stt["rest"] and not _stt["bailout"]:
+                    _bail_button(state, _stt)  # (before qualifying it sits in the qualifying card)
 
 # ── Pit Wall ──
 # ── Tasks ──
 with tab_tasks:
   if tab_tasks.open is not False:
-    st.subheader(f"Open ({len(open_tasks)})")
-    if not open_tasks:
-        st.caption("Nothing open. Add one below.")
-    for t in open_tasks:
-        render_task_row(state, t, "tt_")
+    with st.container(border=True, key="tasks_open_box"):
+        st.markdown(f"<div class='dod-sec'>📋 Open tasks <span>{len(open_tasks)}</span></div>", unsafe_allow_html=True)
+        if not open_tasks:
+            st.caption("Nothing open. Add one below.")
+        for t in open_tasks:
+            render_task_row(state, t, "tt_")
+    st.markdown("<div class='dod-sec' style='margin-top:1.2rem'>🧰 Add &amp; manage</div>", unsafe_allow_html=True)
     with st.expander("➕ New task", expanded=not open_tasks):
         task_form(state, "new_task_form")
     with st.expander("📥 Import from Notion"):
@@ -4758,13 +4790,16 @@ with tab_tasks:
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                   and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
     if redeemable:
-        st.subheader("🩹 Redeemable")
-        st.caption(f"Missed — but finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
-        for t in redeemable:
-            left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-            with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
-                             expanded=proof_open(f"redeem_{t['id']}")):
-                render_proof_form(state, t, "redeem")
+        st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
+        with st.container(border=True, key="tasks_redeem_box"):
+            st.markdown(f"<div class='dod-sec'>🩹 Redeemable <span>{len(redeemable)}</span></div>",
+                        unsafe_allow_html=True)
+            st.caption(f"Missed — but finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
+            for t in redeemable:
+                left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
+                with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
+                                 expanded=proof_open(f"redeem_{t['id']}")):
+                    render_proof_form(state, t, "redeem")
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
     if done:
