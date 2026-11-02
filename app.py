@@ -3981,11 +3981,15 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
             st.caption("Nothing open. Type one above, or tap a one-tap task.")
         redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                       and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
-        for t in redeemable:
-            left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-            with st.expander(f"🩹 {t['title']} · redeem by {_when(now() + left)} for half back", key=f"exp_tb_{t['id']}",
-                             expanded=proof_open(f"tb_redeem_{t['id']}")):
-                render_proof_form(state, t, "redeem", scope="tb_")
+        if redeemable:
+            with st.container(border=True, key="tb_redeem_box"):
+                st.markdown(f"<div class='dod-sub red'>🩹 Missed · redeem for half back <span>{len(redeemable)}</span></div>",
+                            unsafe_allow_html=True)
+                for t in redeemable:
+                    left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
+                    with st.expander(f"💀 {t['title']} · by {_when(now() + left)}", key=f"exp_tb_{t['id']}",
+                                     expanded=proof_open(f"tb_redeem_{t['id']}")):
+                        render_proof_form(state, t, "redeem", scope="tb_")
 
 
 def render_contracts(state: dict) -> None:
@@ -4283,10 +4287,20 @@ CSS = """<style>
   .dod-next{padding:12px 14px 10px}.dod-next .t{font-size:1.25rem}
 }
 .dod-sec{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 .4rem;
-  display:flex;align-items:baseline;gap:10px}
+  display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:0}
 .dod-sec span{font-family:inherit;font-weight:500;font-size:.85rem;color:var(--muted)}
 .st-key-tasks_open_box{border-left:3px solid var(--accent,#f5c518)!important}
-.st-key-tasks_redeem_box{border-color:rgba(225,6,0,.35)!important;border-left:3px solid #e10600!important}
+.st-key-tasks_redeem_box,.st-key-tb_redeem_box{border-color:rgba(225,6,0,.35)!important;border-left:3px solid #e10600!important;
+  background:rgba(225,6,0,.05)}
+.st-key-tasks_recent_box{border-color:rgba(46,196,182,.3)!important;border-left:3px solid #2ec4b6!important;
+  background:rgba(46,196,182,.04)}
+.st-key-tasks_open_box,.st-key-tasks_redeem_box,.st-key-tasks_recent_box{margin-bottom:.5rem}
+.st-key-tasks_recent_box [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem!important}
+.st-key-tasks_recent_box [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child{min-width:0!important;flex:1 1 auto!important}
+.st-key-tasks_recent_box [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child{min-width:92px!important;flex:0 0 92px!important}
+.st-key-tasks_recent_box [data-testid="stHorizontalBlock"] p{margin:0}
+.dod-sub{font-weight:700;font-size:.9rem;display:flex;gap:8px;align-items:baseline;margin:0 0 .2rem}
+.dod-sub.red{color:#ff6b63}.dod-sub span{font-weight:500;color:var(--muted)}
 .dod-next{position:relative;border-radius:16px;padding:16px 18px 14px;margin:0 0 .5rem;overflow:hidden;
   background:linear-gradient(135deg,rgba(245,197,24,.16),rgba(245,197,24,.03) 55%,transparent),#141821;
   border:1px solid rgba(245,197,24,.35);animation:dodIn .35s ease-out both}
@@ -4780,21 +4794,12 @@ with tab_tasks:
             st.caption("Nothing open. Add one below.")
         for t in open_tasks:
             render_task_row(state, t, "tt_")
-    st.markdown("<div class='dod-sec' style='margin-top:1.2rem'>🧰 Add &amp; manage</div>", unsafe_allow_html=True)
-    with st.expander("➕ New task", expanded=not open_tasks):
-        task_form(state, "new_task_form")
-    with st.expander("📥 Import from Notion"):
-        notion_import(state)
-    points_guide()
-
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                   and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
     if redeemable:
-        st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
         with st.container(border=True, key="tasks_redeem_box"):
-            st.markdown(f"<div class='dod-sec'>🩹 Redeemable <span>{len(redeemable)}</span></div>",
-                        unsafe_allow_html=True)
-            st.caption(f"Missed — but finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
+            st.markdown(f"<div class='dod-sec'>🩹 Redeemable <span>{len(redeemable)} missed · finish within "
+                        f"{REDEEM_WINDOW_H}h of the miss for half the penalty back</span></div>", unsafe_allow_html=True)
             for t in redeemable:
                 left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
                 with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
@@ -4802,29 +4807,47 @@ with tab_tasks:
                     render_proof_form(state, t, "redeem")
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
+    recents, seen_ = [], {t["title"].strip().lower() for t in open_tasks}
+    for t in sorted(done, key=lambda t: t["completed_at"], reverse=True):
+        if t["title"].strip().lower() not in seen_ and not t.get("block"):
+            seen_.add(t["title"].strip().lower())
+            recents.append(t)
+    recents = recents[:15]
+
+    def _again_row(t: dict) -> None:
+        c1, c2 = st.columns([5, 1.3], vertical_alignment="center")
+        c1.markdown(f"{html.escape(t['title'])} <small style='color:#8b909c'>· {min_label(t.get('minutes') or 30)}"
+                    f" · last {parse_dt(t['completed_at']):%a %b %d}</small>", unsafe_allow_html=True)
+        if c2.button("↻ Again", key=f"again_{t['id']}", use_container_width=True,
+                     help="A fresh copy, due tonight. Lock it into today's mission from Today."):
+            nt = make_task(t["title"], t.get("details", ""), datetime.combine(now().date(), dtime(23, 59), TZ),
+                           None, t.get("consequence", ""), t.get("goal_id"), category=t.get("category"),
+                           minutes=t.get("minutes"))
+            if daily.peek_day(state, now().date()).get("qualified"):
+                nt["mission_day"] = now().date().isoformat()
+            state["tasks"].append(nt)
+            save_state(state)
+            flash(f"↻ **{nt['title']}** again, due tonight" + (" · in today's mission" if nt.get("mission_day") else "") + ".")
+            st.rerun()
+
+    if recents:
+        with st.container(border=True, key="tasks_recent_box"):
+            st.markdown(f"<div class='dod-sec'>🕘 Recent · do it again <span>done before, not open now</span></div>",
+                        unsafe_allow_html=True)
+            for t in recents[:4]:
+                _again_row(t)
+            if len(recents) > 4:
+                with st.expander(f"More ({len(recents) - 4})", key="exp_recent"):
+                    for t in recents[4:]:
+                        _again_row(t)
+
+    st.markdown("<div class='dod-sec' style='margin-top:1.2rem'>🧰 Add &amp; manage</div>", unsafe_allow_html=True)
+    with st.expander("➕ New task", expanded=not open_tasks):
+        task_form(state, "new_task_form")
+    with st.expander("📥 Import from Notion"):
+        notion_import(state)
+    points_guide()
     if done:
-        recents, seen_ = [], {t["title"].strip().lower() for t in open_tasks}
-        for t in sorted(done, key=lambda t: t["completed_at"], reverse=True):
-            if t["title"].strip().lower() not in seen_ and not t.get("block"):
-                seen_.add(t["title"].strip().lower())
-                recents.append(t)
-        if recents:
-            with st.expander(f"🕘 Recent · do it again ({min(len(recents), 15)})", key="exp_recent"):
-                for t in recents[:15]:
-                    c1, c2 = st.columns([5, 1.3], vertical_alignment="center")
-                    c1.markdown(f"{html.escape(t['title'])} <small style='color:#8b909c'>· {min_label(t.get('minutes') or 30)}"
-                                f" · last {parse_dt(t['completed_at']):%a %b %d}</small>", unsafe_allow_html=True)
-                    if c2.button("↻ Again", key=f"again_{t['id']}", use_container_width=True,
-                                 help="A fresh copy, due tonight. Lock it into today's mission from Today."):
-                        nt = make_task(t["title"], t.get("details", ""), datetime.combine(now().date(), dtime(23, 59), TZ),
-                                       None, t.get("consequence", ""), t.get("goal_id"), category=t.get("category"),
-                                       minutes=t.get("minutes"))
-                        if daily.peek_day(state, now().date()).get("qualified"):
-                            nt["mission_day"] = now().date().isoformat()
-                        state["tasks"].append(nt)
-                        save_state(state)
-                        flash(f"↻ **{nt['title']}** again, due tonight" + (" · in today's mission" if nt.get("mission_day") else "") + ".")
-                        st.rerun()
         with st.expander(f"🏆 Completed ({len(done)})", key="exp_completed"):
             for t in sorted(done, key=lambda t: t["completed_at"], reverse=True)[:30]:
                 icon = "🏁" if t["status"] == "done" else "🩹"
