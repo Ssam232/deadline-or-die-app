@@ -30,7 +30,7 @@ import events as EV
 import insights as I
 import locks as LK
 from notify import push
-from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, save_shape, pull_rows, save_json, update_dashboard
+from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, save_shape, tidy, pull_rows, save_json, update_dashboard
 
 from tzfix import TZ  # Alberta: UTC-6 all year (safe against stale tz data on a server)
 QUIET_HOURS = os.getenv("QUIET_HOURS", "23-7")
@@ -248,10 +248,6 @@ def suggestion_candidates(n: Notion, save: dict, now: datetime) -> list[tuple[st
 def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(TZ)
     ids = ensure_workspace(n, parent)
-    try:
-        print(f"::notice title=save shape::{save_shape(n, ids['save_page'])}")
-    except Exception as e_:  # noqa: BLE001
-        print(f"::notice title=save shape::check failed ({type(e_).__name__})")
     save = load_json(n, ids["save_page"]) or {}
     # repair: journal entries once carried a nested copy of their own signature ("sig_for") that doubled the save
     # on every write (Nov 2026). Strip it and write the save back at its real size.
@@ -260,9 +256,14 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         for k in bad:
             save["journal"][k]["pm"].pop("sig_for", None)
         save["rev"] = int(save.get("rev", 0)) + 1
-        save_json(n, ids["save_page"], save)
-        print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s) · "
-              f"{save_shape(n, ids['save_page'])[:120]}")
+        save_json(n, ids["save_page"], save, budget=120)  # leftover blocks are ignored on load; next run tidies more
+        print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s)")
+    try:
+        gone = tidy(n, ids["save_page"], budget=90)
+        if gone:
+            print(f"::notice title=save repair::deleted {gone} leftover block(s)")
+    except Exception as e_:  # noqa: BLE001
+        print(f"::notice title=save repair::tidy failed ({type(e_).__name__})")
     app_url = app_url or save.get("settings", {}).get("app_url")  # tap a push → open the app
     prof = I.profile(save, now.date(), TZ) if save else None  # same history-before-today profile as the app
     EV.set_profile(prof)

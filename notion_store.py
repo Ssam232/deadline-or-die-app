@@ -296,10 +296,28 @@ def ensure_workspace(n: Notion, parent_page: str) -> dict:
 
 
 # ─────────────── JSON stored in code blocks ───────────────
+def _first_json(text: str):
+    """The complete JSON value at the start of `text`; anything after it is leftover from a bigger, older save
+    whose extra blocks weren't all deleted yet (a shrink that got interrupted) and is ignored."""
+    obj, _end = json.JSONDecoder().raw_decode(text.lstrip())
+    return obj
+
+
 def load_json(n: Notion, page_id: str):
-    blocks = [b for b in n.children(page_id) if b.get("type") == "code"]
-    text = "".join(plain(b["code"]["rich_text"]) for b in blocks)
-    return json.loads(text) if text.strip() else None
+    text, cur = "", None
+    while True:  # page by page, and stop as soon as a complete save has been read
+        q = "?page_size=100" + (f"&start_cursor={cur}" if cur else "")
+        d = n.req("GET", f"/blocks/{page_id}/children{q}")
+        text += "".join(plain(b["code"]["rich_text"]) for b in d.get("results", []) if b.get("type") == "code")
+        if text.strip():
+            try:
+                return _first_json(text)
+            except ValueError:
+                if not d.get("has_more"):
+                    raise
+        if not d.get("has_more"):
+            return None
+        cur = d.get("next_cursor")
 
 
 def save_shape(n: Notion, page_id: str) -> str:
@@ -308,13 +326,37 @@ def save_shape(n: Notion, page_id: str) -> str:
     parts = [f"{len(b['code']['rich_text'])}pc/{len(plain(b['code']['rich_text']))}ch" for b in blocks]
     text = "".join(plain(b["code"]["rich_text"]) for b in blocks)
     try:
-        json.loads(text)
-        ok = "parses"
+        dec, end = json.JSONDecoder().raw_decode(text.lstrip())
+        ok = "parses" + (f" (+{len(text.lstrip()) - end} chars of leftover blocks)" if end < len(text.lstrip()) else "")
+        text = text.lstrip()[:end]
     except ValueError as e:
         ok = f"BROKEN ({type(e).__name__} at {getattr(e, 'pos', '?')})"
     if len(parts) > 6:
         parts = parts[:3] + [f"… {len(parts) - 3} more"]
-    return f"{len(blocks)} block(s) [{', '.join(parts)}] · {len(text)} chars · {ok} · biggest: {_key_sizes(text)}"
+    big = _key_sizes(text) if len(text) < 20_000_000 else "(too big to scan)"
+    return f"{len(blocks)} block(s) [{', '.join(parts)}] · {len(text)} chars · {ok} · biggest: {big}"
+
+
+def tidy(n: Notion, page_id: str, budget: float = 90) -> int:
+    """Delete code blocks left over after the complete save (an interrupted shrink). Returns how many went."""
+    import time as _t
+    blocks = [b for b in n.children(page_id) if b.get("type") == "code"]
+    text, keep = "", len(blocks)
+    for i, b in enumerate(blocks):
+        text += plain(b["code"]["rich_text"])
+        try:
+            _first_json(text)
+            keep = i + 1
+            break
+        except ValueError:
+            continue
+    t0, gone = _t.time(), 0
+    for b in reversed(blocks[keep:]):
+        if _t.time() - t0 > budget:
+            break
+        n.req("DELETE", f"/blocks/{b['id']}")
+        gone += 1
+    return gone
 
 
 def _key_sizes(text: str, top: int = 8) -> str:
@@ -373,12 +415,12 @@ def _save_lock():
     return sys._dod_save_lock
 
 
-def save_json(n: Notion, page_id: str, data) -> None:
+def save_json(n: Notion, page_id: str, data, budget: float | None = None) -> None:
     with _save_lock():  # two writers interleaving blocks is how a save gets torn
-        _save_json(n, page_id, data)
+        _save_json(n, page_id, data, budget)
 
 
-def _save_json(n: Notion, page_id: str, data) -> None:
+def _save_json(n: Notion, page_id: str, data, budget: float | None = None) -> None:
     text = json.dumps(data, separators=(",", ":"), default=str)
     pieces = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)] or [""]
     groups = [pieces[i:i + BLOCK_ITEMS] for i in range(0, len(pieces), BLOCK_ITEMS)]
@@ -393,7 +435,11 @@ def _save_json(n: Notion, page_id: str, data) -> None:
         else:
             n.req("PATCH", f"/blocks/{page_id}/children",
                   json={"children": [{"object": "block", "type": "code", "code": code(g)}]})
-    for b in existing[len(groups):]:
+    import time as _t
+    t0 = _t.time()
+    for b in reversed(existing[len(groups):]):  # leftovers after the new save are ignored on load, so this can stop
+        if budget is not None and _t.time() - t0 > budget:  # early and finish next time
+            break
         n.req("DELETE", f"/blocks/{b['id']}")
 
 
