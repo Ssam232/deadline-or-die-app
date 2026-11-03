@@ -258,6 +258,16 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         save["rev"] = int(save.get("rev", 0)) + 1
         save_json(n, ids["save_page"], save, budget=45)  # leftover blocks are ignored on load; next run tidies more
         print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s)")
+    try:  # where the weight is: field names and sizes only
+        def _sz(v):
+            return len(json.dumps(v, default=str))
+        heavy = sorted(((f"journal.{k}.{sec}.{f}", _sz(v)) for k, e in (save.get("journal") or {}).items()
+                        if isinstance(e, dict) for sec, d in e.items() if isinstance(d, dict) for f, v in d.items()),
+                       key=lambda x: -x[1])[:5]
+        print(f"::notice title=save weight::top-level {sorted(((k, _sz(v)) for k, v in save.items()), key=lambda x: -x[1])[:4]}"
+              f" · journal fields {heavy}")
+    except Exception as e_:  # noqa: BLE001
+        print(f"::notice title=save weight::failed ({type(e_).__name__})")
     try:
         gone = tidy(n, ids["save_page"], budget=60)
         if gone:
