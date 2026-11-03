@@ -259,8 +259,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             save["journal"][k]["pm"].pop("sig_for", None)
             if len(str(save["journal"][k]["pm"].get("notion_sig") or "")) > 200_000:
                 save["journal"][k]["pm"].pop("notion_sig", None)
-        save["rev"] = int(save.get("rev", 0)) + 1
-        save_json(n, ids["save_page"], save, budget=45)  # leftover blocks are ignored on load; next run tidies more
+        save_json(n, ids["save_page"], save, budget=45)  # same rev: the app's own newer copy still wins  # leftover blocks are ignored on load; next run tidies more
         print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s)")
     try:  # is the app's saving landing? (counts and times only)
         led = save.get("ledger") or []

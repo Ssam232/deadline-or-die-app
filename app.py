@@ -391,7 +391,7 @@ def _scrub(state: dict) -> dict:
 def _recover_save(n, ids) -> tuple[dict | None, str]:
     """Newest good copy of the game: (data, where it came from) or (None, "")."""
     import gc
-    best = None  # the newest in-memory copy held by this saver or one from before the last update
+    best = _mem_latest()  # the newest in-memory copy: the registry, this saver, or one from before the last update
     for o in [_saver()] + [o for o in gc.get_objects() if type(o).__name__ == "_Saver"]:
         lt = getattr(o, "latest", None)
         if lt and isinstance(lt[1], dict) and lt[1].get("tasks") is not None and (not best or lt[0] > best[0]):
@@ -406,13 +406,35 @@ def _recover_save(n, ids) -> tuple[dict | None, str]:
     return None, ""
 
 
+def _mem_latest() -> tuple[float, dict] | None:
+    """The newest game state any tab/device on this server has saved or loaded (survives code updates)."""
+    import sys
+    return getattr(sys, "_dod_latest", None) or getattr(_saver(), "latest", None)
+
+
+def _offer_latest(state: dict, saved: bool = False) -> bool:
+    """Publish `state` as the newest copy. A copy that was only *loaded* can't displace one with a higher save
+    number (rev): a page that loaded an older copy from Notion used to publish it and drag every other tab back."""
+    import sys
+    cur = _mem_latest()
+    if not saved and cur and cur[1] is not state and int(cur[1].get("rev", 0)) > int(state.get("rev", 0)):
+        return False
+    sys._dod_latest = (time.time(), state)
+    try:
+        _saver().latest = sys._dod_latest
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
 def load_state() -> dict:
     """Notion save if configured (cached per session for SESSION_TTL), else the local file."""
     if not notion_cfg():
         return _load_local() or default_state()
     cached = st.session_state.get("_state")
-    latest = getattr(_saver(), "latest", None)  # the newest game state ANY tab/device on this server has saved
-    if cached is not None and latest and latest[1] is not cached and latest[0] > st.session_state.get("_state_ts", 0):
+    latest = _mem_latest()  # the newest game state ANY tab/device on this server has saved
+    if cached is not None and latest and latest[1] is not cached and latest[0] > st.session_state.get("_state_ts", 0) \
+            and int(latest[1].get("rev", 0)) >= int(cached.get("rev", 0)):
         # another tab (phone vs laptop) saved after this one last loaded: use that, never a stale copy —
         # otherwise a daily ticked on one device shows unticked on the other, and the next save there undoes it
         st.session_state["_state"], st.session_state["_state_ts"] = latest[1], time.time()
@@ -451,9 +473,16 @@ def load_state() -> dict:
         st.session_state["_state_ts"] = time.time()
         st.session_state["_resave"] = True
         return _scrub(cached)
+    mem = _mem_latest()
+    landing = _saver().pending() or getattr(_saver(), "dirty", False)
+    if landing and mem and isinstance(mem[1], dict) and int(mem[1].get("rev", 0)) > int(data.get("rev", 0)):
+        # Notion is behind because our newest save is still landing (or didn't make it): use this server's copy,
+        # never the older one — otherwise your next tap saves the old copy over your newest progress
+        st.session_state["_state"], st.session_state["_state_ts"] = mem[1], time.time()
+        return _scrub(mem[1])
     state = _scrub(_merge(default_state(), data))
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
-    _saver().latest = (time.time(), state)
+    _offer_latest(state)
     st.session_state["_fresh_load"] = True
     st.session_state["_fresh_this_run"] = True
     return state
@@ -658,7 +687,7 @@ def _notion_sync(n: Notion, ids: dict, state: dict, out_map: dict | None, app_ur
             errs += sync_journal(n, jr_map, state)
     except Exception as e:
         errs.append(f"board: {e}")
-    save_json(n, ids["save_page"], state, budget=15)  # leftover blocks (if any) cleared a bit per save
+    save_json(n, ids["save_page"], state, budget=2)  # leftover blocks (if any): a few per save, the health check does the rest
     if dash and ids.get("dashboard"):
         try:
             update_dashboard(n, ids["dashboard"], state, TZ, app_url)
@@ -838,7 +867,7 @@ def fresh_for_settle(state: dict, fresh: bool) -> dict:
         if data and int(data.get("rev", 0)) > int(state.get("rev", 0)):
             state = _merge(default_state(), data)
             st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
-            _saver().latest = (time.time(), state)
+            _offer_latest(state)
     if state.get("backup_day") != now().date().isoformat():
         state["backup_day"] = now().date().isoformat()
         _backup_async(state, "before the day was settled")
@@ -850,7 +879,8 @@ SAVE_MAX = 3_000_000  # chars. A real save is well under 1 MB; anything near thi
 
 def save_state(state: dict) -> None:
     _scrub(state)
-    state["rev"] = int(state.get("rev", 0)) + 1  # newer copy = higher rev: a reload never trades it for an older one
+    _m = _mem_latest()  # newer copy = higher rev than anything out there: a reload never trades it for an older one
+    state["rev"] = max(int(state.get("rev", 0)), int(_m[1].get("rev", 0)) if _m and isinstance(_m[1], dict) else 0) + 1
     broadcast_lock(state)
     _refresh_alarms(state)
     snapshot = json.dumps(state, default=str)
@@ -870,7 +900,7 @@ def save_state(state: dict) -> None:
     if not notion_cfg():
         return
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
-    _saver().latest = (time.time(), state)
+    _offer_latest(state, saved=True)
     try:
         n, ids = notion_ctx()
         oc, bc, jc = out_cfg(state), board_cfg(state), journal_cfg(state)
@@ -4502,6 +4532,37 @@ CSS = """<style>
 .dod-boot-bar{width:180px;height:4px;border-radius:4px;background:#262b36;overflow:hidden}
 .dod-boot-bar i{display:block;width:40%;height:100%;background:var(--y);border-radius:4px;animation:dodSlide 1.1s ease-in-out infinite}
 @keyframes dodBob{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+/* ── the loading screen (sign-in check + first load) ── */
+.dod-load{min-height:72vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  background:radial-gradient(60% 45% at 50% 42%,rgba(245,197,24,.07),transparent 70%);animation:dodIn .35s ease-out both}
+.dod-load-lights{display:flex;gap:10px;padding:10px 14px;border-radius:12px;background:#0b0d11;border:1px solid #232833}
+.dod-load-lights i{width:16px;height:16px;border-radius:50%;background:#2a1012;box-shadow:inset 0 0 0 2px #3a1416;
+  animation:dodLight 2.6s infinite}
+.dod-load-lights i:nth-child(2){animation-delay:.25s}.dod-load-lights i:nth-child(3){animation-delay:.5s}
+.dod-load-lights i:nth-child(4){animation-delay:.75s}.dod-load-lights i:nth-child(5){animation-delay:1s}
+@keyframes dodLight{0%,5%{background:#2a1012;box-shadow:inset 0 0 0 2px #3a1416}
+  8%,60%{background:#ff2a1f;box-shadow:0 0 14px 2px rgba(255,42,31,.7),inset 0 0 0 2px #ff6a5c}
+  64%,100%{background:#2a1012;box-shadow:inset 0 0 0 2px #3a1416}}
+.dod-load-title{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:800;font-style:italic;
+  font-size:clamp(1.6rem,6vw,2.4rem);letter-spacing:.02em;color:#ece8df}
+.dod-load-title b{color:#f5c518}
+.dod-load-track{position:relative;width:min(340px,82vw);height:54px;border-radius:12px;overflow:hidden;
+  background:#1a1d24;border:1px solid #2c313c}
+.dod-load-track::before{content:'';position:absolute;left:0;right:0;top:50%;height:3px;margin-top:-1.5px;
+  background:repeating-linear-gradient(90deg,#f5c518 0 22px,transparent 22px 44px);opacity:.55;
+  animation:dodRoad .45s linear infinite}
+.dod-load-track::after{content:'';position:absolute;right:0;top:0;bottom:0;width:22px;
+  background:conic-gradient(#ece8df 25%,#111 0 50%,#ece8df 0 75%,#111 0) 0 0/11px 11px;opacity:.85}
+@keyframes dodRoad{from{background-position:0 0}to{background-position:-44px 0}}
+.dod-load-car{position:absolute;left:50%;top:50%;font-size:2rem;transform:translate(-50%,-55%) scaleX(-1);
+  animation:dodCar .5s ease-in-out infinite alternate;filter:drop-shadow(0 4px 6px rgba(0,0,0,.5))}
+@keyframes dodCar{from{transform:translate(-56%,-58%) scaleX(-1)}to{transform:translate(-44%,-52%) scaleX(-1)}}
+.dod-load-tips{position:relative;height:1.4rem;width:min(340px,82vw);text-align:center;color:#8b909c;font-size:.92rem}
+.dod-load-tips span{position:absolute;inset:0;opacity:0;animation:dodTip 7.5s infinite}
+.dod-load-tips span:nth-child(2){animation-delay:2.5s}.dod-load-tips span:nth-child(3){animation-delay:5s}
+@keyframes dodTip{0%{opacity:0;transform:translateY(4px)}6%,28%{opacity:1;transform:none}34%,100%{opacity:0}}
+.st-key-pw_late{animation:dodLate .4s 4s both}
+@keyframes dodLate{from{opacity:0;visibility:hidden}to{opacity:1;visibility:visible}}
 @keyframes dodSlide{0%{transform:translateX(-100%)}100%{transform:translateX(260%)}}
 /* dailies rows: name · ↩ · +1 on one line on phones */
 [class*="st-key-dlrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
@@ -4668,6 +4729,14 @@ if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
 # Log in once per device: the key is kept in a cookie + localStorage (components/keeper), so links without ?k=,
 # notification taps and the app waking from sleep all skip the password.
 _pw = get_secret("APP_PASSWORD")
+
+
+def _loader(tips: tuple[str, str, str] = ("Warming up the tyres…", "Fuelling up your save…",
+                                          "Checking the pit wall…")) -> str:
+    return ("<div class='dod-load'><div class='dod-load-lights'><i></i><i></i><i></i><i></i><i></i></div>"
+            "<div class='dod-load-title'>DEADLINE <b>OR</b> DIE</div>"
+            "<div class='dod-load-track'><div class='dod-load-car'>🏎️</div></div>"
+            "<div class='dod-load-tips'>" + "".join(f"<span>{t}</span>" for t in tips) + "</div></div>")
 _SORT = components.declare_component("sortable", path=str(Path(__file__).parent / "components" / "sortable"))
 
 
@@ -4710,10 +4779,18 @@ if _pw:
             st.session_state["_authed"] = True
             st.session_state["_persist"] = True
             st.rerun()
-        st.title("🏁 Deadline or Die")
-        if _held is None:
-            st.caption("Checking this device…")
-        entered = st.text_input("Password", type="password")
+        st.markdown("<style>div[data-testid='stElementContainer']:has(iframe[title*='keeper'])"
+                    "{position:absolute;width:0;height:0;overflow:hidden}</style>", unsafe_allow_html=True)
+        if _held is None:  # still asking the browser whether it's a remembered device: just the loading screen
+            st.markdown(_loader(("Checking this device…", "Warming up the tyres…", "Fuelling up your save…")),
+                        unsafe_allow_html=True)
+            box = st.container(key="pw_late")  # only shows if the check takes more than a few seconds
+        else:
+            st.markdown("<div class='dod-load' style='min-height:38vh;justify-content:flex-end'>"
+                        "<div class='dod-load-lights'><i></i><i></i><i></i><i></i><i></i></div>"
+                        "<div class='dod-load-title'>DEADLINE <b>OR</b> DIE</div></div>", unsafe_allow_html=True)
+            box = st.container()
+        entered = box.text_input("Password", type="password")
         if entered:
             if hashlib.sha256(entered.encode()).digest() == hashlib.sha256(_pw.encode()).digest():
                 st.session_state["_authed"] = True
@@ -4738,8 +4815,7 @@ def app_link() -> str | None:
 
 _boot = st.empty() if "_booted" not in st.session_state else None
 if _boot is not None:
-    _boot.markdown("<div class='dod-boot'><div class='dod-boot-car'>🏎️</div><div class='dod-boot-t'>Warming up the "
-                   "tyres…</div><div class='dod-boot-bar'><i></i></div></div>", unsafe_allow_html=True)
+    _boot.markdown(_loader(), unsafe_allow_html=True)
 state = load_state()
 st.markdown(theme_css(state), unsafe_allow_html=True)
 PROFILE = I.profile(state, now().date(), TZ)  # history before today → steers today's surprises (same in the nagger)
