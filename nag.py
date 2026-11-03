@@ -262,6 +262,14 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         save["rev"] = int(save.get("rev", 0)) + 1
         save_json(n, ids["save_page"], save, budget=45)  # leftover blocks are ignored on load; next run tidies more
         print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s)")
+    try:  # is the app's saving landing? (counts and times only)
+        led = save.get("ledger") or []
+        last = max((x.get("at", "") for x in led if isinstance(x, dict)), default="")
+        dl_today = (save.get("habit_log") or {}).get(now.date().isoformat())
+        print(f"::notice title=save freshness::rev {save.get('rev')} · folds {len(save.get('folds') or {})} · "
+              f"last ledger {last[:16]} · coins {save.get('coins')} · dailies today {json.dumps(dl_today)[:80] if dl_today else '-'}")
+    except Exception as e_:  # noqa: BLE001
+        print(f"::notice title=save freshness::failed ({type(e_).__name__})")
     try:  # where the weight is: field names and sizes only
         def _sz(v):
             return len(json.dumps(v, default=str))
