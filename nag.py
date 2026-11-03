@@ -264,6 +264,10 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             print(f"::notice title=save repair::deleted {gone} leftover block(s)")
     except Exception as e_:  # noqa: BLE001
         print(f"::notice title=save repair::tidy failed ({type(e_).__name__})")
+    try:
+        print(f"::notice title=save size::{save_shape(n, ids['save_page'])[:300]}")
+    except Exception as e_:  # noqa: BLE001
+        print(f"::notice title=save size::check failed ({type(e_).__name__})")
     app_url = app_url or save.get("settings", {}).get("app_url")  # tap a push → open the app
     prof = I.profile(save, now.date(), TZ) if save else None  # same history-before-today profile as the app
     EV.set_profile(prof)
