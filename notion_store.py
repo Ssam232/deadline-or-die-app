@@ -312,7 +312,57 @@ def save_shape(n: Notion, page_id: str) -> str:
         ok = "parses"
     except ValueError as e:
         ok = f"BROKEN ({type(e).__name__} at {getattr(e, 'pos', '?')})"
-    return f"{len(blocks)} block(s) [{', '.join(parts)}] · {len(text)} chars · {ok}"
+    if len(parts) > 6:
+        parts = parts[:3] + [f"… {len(parts) - 3} more"]
+    return f"{len(blocks)} block(s) [{', '.join(parts)}] · {len(text)} chars · {ok} · biggest: {_key_sizes(text)}"
+
+
+def _key_sizes(text: str, top: int = 8) -> str:
+    """Sizes of the save's top-level keys and of the biggest key one level down (names only, no values)."""
+    import re as _re
+    sizes, path, depth, i, n_, starts = {}, [], 0, 0, len(text), {}
+    key_re = _re.compile(r'"((?:[^"\\]|\\.)*)"\s*:')
+    in_str = esc = False
+    last_key = {}
+    while i < n_:
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            m = key_re.match(text, i)
+            if m and depth in (1, 2):
+                k = m.group(1)[:40]
+                name = k if depth == 1 else f"{(last_key.get(1) or ('?',))[0]}.{k}"
+                prev = last_key.get(depth)
+                if prev is not None:
+                    sizes[prev[0]] = sizes.get(prev[0], 0) + i - prev[1]
+                last_key[depth] = (name, i)
+                if depth == 1:
+                    last_key[1] = (name, i)
+                    last_key[2] = None
+                i = m.end()
+                continue
+            in_str = True
+        elif c in "{[":
+            depth += 1
+        elif c in "}]":
+            if depth == 2 and last_key.get(2):
+                sizes[last_key[2][0]] = sizes.get(last_key[2][0], 0) + i - last_key[2][1]
+                last_key[2] = None
+            depth -= 1
+        i += 1
+    for d in (1, 2):
+        if last_key.get(d):
+            sizes[last_key[d][0]] = sizes.get(last_key[d][0], 0) + n_ - last_key[d][1]
+    big = sorted(sizes.items(), key=lambda kv: -kv[1])[:top]
+    return ", ".join(f"{k}={v}" for k, v in big)
 
 
 def save_json(n: Notion, page_id: str, data) -> None:
