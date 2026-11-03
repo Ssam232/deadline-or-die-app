@@ -267,6 +267,11 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         dl_today = (save.get("habit_log") or {}).get(now.date().isoformat())
         print(f"::notice title=save freshness::rev {save.get('rev')} · folds {len(save.get('folds') or {})} · "
               f"last ledger {last[:16]} · coins {save.get('coins')} · dailies today {json.dumps(dl_today)[:80] if dl_today else '-'}")
+        pl = (save.get("perf_log") or [])[-4:]
+        if pl:
+            print("::notice title=login speed::" + " | ".join(
+                f"{x.get('at', '')[5:]} {'cold ' if x.get('cold') else ''}data {x.get('to_data')}s page {x.get('to_page')}s"
+                for x in pl))
     except Exception as e_:  # noqa: BLE001
         print(f"::notice title=save freshness::failed ({type(e_).__name__})")
     try:  # where the weight is: field names and sizes only

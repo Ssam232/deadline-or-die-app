@@ -4718,6 +4718,15 @@ def render_cluster(state: dict) -> None:
 
 # ─────────────────────────── app ───────────────────────────
 st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="wide")
+_T_SESSION = st.session_state.setdefault("_t_session", time.time())  # when this visit started (login timing)
+
+
+@st.cache_resource
+def _server_started() -> float:
+    return time.time()
+
+
+_COLD = time.time() - _server_started() < 90 and st.session_state.setdefault("_cold", True)
 st.markdown(CSS, unsafe_allow_html=True)
 with st.container(key="audio_session"):  # iOS: app sounds mix with your music instead of pausing it
     st.iframe("<script>try{for(const w of [window,parent])if(w.navigator.audioSession)"
@@ -4821,14 +4830,10 @@ st.markdown(theme_css(state), unsafe_allow_html=True)
 PROFILE = I.profile(state, now().date(), TZ)  # history before today → steers today's surprises (same in the nagger)
 EV.set_profile(PROFILE)
 
-sync_msgs = []
-if st.session_state.pop("_fresh_load", False) and notion_cfg():
-    try:
-        sync_msgs, changed = sync_from_notion(state)
-        if changed:
-            st.session_state["_needs_save"] = True
-    except Exception as e:
-        sync_msgs = [("warning", f"Couldn't sync tasks with Notion: {e}")]
+# ⚡ Checking Notion for tasks you added there waits until the page is on screen (bottom of this script)
+_SYNC_LATER = bool(st.session_state.get("_fresh_load") and notion_cfg())  # cleared once it has run
+sync_msgs = st.session_state.pop("_sync_msgs", [])
+_T_LOADED = time.time()
 
 if _boot is not None:
     _boot.empty()
@@ -6252,3 +6257,22 @@ with tab_set:
                 save_state(fresh_)
                 flash("Fresh start.", "warning")
                 st.rerun()
+
+
+# ── after the page is drawn ──
+if _boot is not None and notion_cfg():  # how long this login took, by stage (read by the health check)
+    _pl = state.setdefault("perf_log", [])
+    _pl.append({"at": now().isoformat()[:16], "cold": bool(st.session_state.get("_cold")),
+                "to_data": round(_T_LOADED - _T_SESSION, 1), "to_page": round(time.time() - _T_SESSION, 1)})
+    del _pl[:-10]
+if _SYNC_LATER:
+    st.session_state.pop("_fresh_load", None)
+    try:
+        _sm, _changed = sync_from_notion(state)
+    except Exception as e:  # noqa: BLE001
+        _sm, _changed = [("warning", f"Couldn't sync tasks with Notion: {e}")], False
+    if _changed:
+        save_state(state)
+    if _sm or _changed:
+        st.session_state["_sync_msgs"] = _sm
+        st.rerun()
