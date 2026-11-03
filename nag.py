@@ -30,7 +30,7 @@ import events as EV
 import insights as I
 import locks as LK
 from notify import push
-from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, pull_rows, save_json, update_dashboard
+from notion_store import Notion, NotionError, due_to_dt, ensure_workspace, load_json, save_shape, pull_rows, save_json, update_dashboard
 
 from tzfix import TZ  # Alberta: UTC-6 all year (safe against stale tz data on a server)
 QUIET_HOURS = os.getenv("QUIET_HOURS", "23-7")
@@ -248,6 +248,10 @@ def suggestion_candidates(n: Notion, save: dict, now: datetime) -> list[tuple[st
 def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(TZ)
     ids = ensure_workspace(n, parent)
+    try:
+        print(f"::notice title=save shape::{save_shape(n, ids['save_page'])}")
+    except Exception as e_:  # noqa: BLE001
+        print(f"::notice title=save shape::check failed ({type(e_).__name__})")
     save = load_json(n, ids["save_page"]) or {}
     app_url = app_url or save.get("settings", {}).get("app_url")  # tap a push → open the app
     prof = I.profile(save, now.date(), TZ) if save else None  # same history-before-today profile as the app

@@ -302,6 +302,19 @@ def load_json(n: Notion, page_id: str):
     return json.loads(text) if text.strip() else None
 
 
+def save_shape(n: Notion, page_id: str) -> str:
+    """How a JSON save is laid out in Notion (counts and sizes only, nothing personal) — for health checks."""
+    blocks = [b for b in n.children(page_id) if b.get("type") == "code"]
+    parts = [f"{len(b['code']['rich_text'])}pc/{len(plain(b['code']['rich_text']))}ch" for b in blocks]
+    text = "".join(plain(b["code"]["rich_text"]) for b in blocks)
+    try:
+        json.loads(text)
+        ok = "parses"
+    except ValueError as e:
+        ok = f"BROKEN ({type(e).__name__} at {getattr(e, 'pos', '?')})"
+    return f"{len(blocks)} block(s) [{', '.join(parts)}] · {len(text)} chars · {ok}"
+
+
 def save_json(n: Notion, page_id: str, data) -> None:
     text = json.dumps(data, separators=(",", ":"), default=str)
     pieces = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)] or [""]
