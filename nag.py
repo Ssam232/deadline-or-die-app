@@ -17,6 +17,7 @@ Env: NOTION_TOKEN, NOTION_PARENT_PAGE, NTFY_TOPIC, [APP_URL, DOD_TZ, QUIET_HOURS
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 import sys
