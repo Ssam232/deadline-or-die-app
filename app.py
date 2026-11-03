@@ -369,11 +369,19 @@ def _jr_sig(pm: dict) -> str:
 
 
 def _scrub(state: dict) -> dict:
-    """Repairs: drop the journal 'sig_for' copies that once nested inside each other on every save (Nov 2026)."""
+    """Repairs: drop the journal 'sig_for' copies that once nested inside each other on every save (Nov 2026).
+    If anything was removed, the cleaned copy is saved straight away."""
+    hit = False
     for e in (state.get("journal") or {}).values():
         pm = (e or {}).get("pm") if isinstance(e, dict) else None
-        if isinstance(pm, dict):
+        if isinstance(pm, dict) and "sig_for" in pm:
             pm.pop("sig_for", None)
+            hit = True
+    if hit:
+        try:
+            st.session_state["_resave"] = True
+        except Exception:  # noqa: BLE001 — called outside a session (background thread)
+            pass
     return state
 
 

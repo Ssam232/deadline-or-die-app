@@ -253,6 +253,16 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     except Exception as e_:  # noqa: BLE001
         print(f"::notice title=save shape::check failed ({type(e_).__name__})")
     save = load_json(n, ids["save_page"]) or {}
+    # repair: journal entries once carried a nested copy of their own signature ("sig_for") that doubled the save
+    # on every write (Nov 2026). Strip it and write the save back at its real size.
+    bad = [k for k, e in (save.get("journal") or {}).items() if isinstance(e, dict) and "sig_for" in (e.get("pm") or {})]
+    if bad:
+        for k in bad:
+            save["journal"][k]["pm"].pop("sig_for", None)
+        save["rev"] = int(save.get("rev", 0)) + 1
+        save_json(n, ids["save_page"], save)
+        print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s) · "
+              f"{save_shape(n, ids['save_page'])[:120]}")
     app_url = app_url or save.get("settings", {}).get("app_url")  # tap a push → open the app
     prof = I.profile(save, now.date(), TZ) if save else None  # same history-before-today profile as the app
     EV.set_profile(prof)
