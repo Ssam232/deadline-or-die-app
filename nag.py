@@ -252,10 +252,13 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     save = load_json(n, ids["save_page"]) or {}
     # repair: journal entries once carried a nested copy of their own signature ("sig_for") that doubled the save
     # on every write (Nov 2026). Strip it and write the save back at its real size.
-    bad = [k for k, e in (save.get("journal") or {}).items() if isinstance(e, dict) and "sig_for" in (e.get("pm") or {})]
+    bad = [k for k, e in (save.get("journal") or {}).items() if isinstance(e, dict) and isinstance(e.get("pm"), dict)
+           and ("sig_for" in e["pm"] or len(str(e["pm"].get("notion_sig") or "")) > 200_000)]
     if bad:
         for k in bad:
             save["journal"][k]["pm"].pop("sig_for", None)
+            if len(str(save["journal"][k]["pm"].get("notion_sig") or "")) > 200_000:
+                save["journal"][k]["pm"].pop("notion_sig", None)
         save["rev"] = int(save.get("rev", 0)) + 1
         save_json(n, ids["save_page"], save, budget=45)  # leftover blocks are ignored on load; next run tidies more
         print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s)")

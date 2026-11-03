@@ -377,6 +377,9 @@ def _scrub(state: dict) -> dict:
         if isinstance(pm, dict) and "sig_for" in pm:
             pm.pop("sig_for", None)
             hit = True
+        if isinstance(pm, dict) and len(str(pm.get("notion_sig") or "")) > 200_000:  # a signature that swallowed
+            pm.pop("notion_sig", None)  # the snowball: drop it (the day is simply rewritten to Notion once)
+            hit = True
     if hit:
         try:
             st.session_state["_resave"] = True

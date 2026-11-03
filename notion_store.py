@@ -327,7 +327,7 @@ def load_json(n: Notion, page_id: str):
     text = ""
     for blocks, more in _code_pages(n, page_id):  # stop as soon as a complete save has been read
         text += "".join(plain(b["code"]["rich_text"]) for b in blocks)
-        if text.strip():
+        if text.strip() and (not more or any(plain(b["code"]["rich_text"]).rstrip().endswith("}") for b in blocks)):
             try:
                 return _first_json(text)
             except ValueError:
@@ -366,6 +366,8 @@ def tidy(n: Notion, page_id: str, budget: float = 60) -> int:
                 gone += 1
                 continue
             text += plain(b["code"]["rich_text"])
+            if not text.rstrip().endswith("}"):
+                continue
             try:
                 _first_json(text)
                 done = True
