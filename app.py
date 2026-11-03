@@ -362,6 +362,39 @@ def notion_ctx() -> tuple[Notion, dict] | None:
     return (Notion(cfg[0]), _workspace(*cfg)) if cfg else None
 
 
+def _jr_sig(pm: dict) -> str:
+    """What a journal entry says (not its Notion bookkeeping): if this changes, Notion gets rewritten."""
+    return json.dumps({x: pm.get(x) for x in sorted(pm)
+                       if not x.startswith("notion_") and x not in ("paid", "sig_for")}, sort_keys=True, default=str)
+
+
+def _scrub(state: dict) -> dict:
+    """Repairs: drop the journal 'sig_for' copies that once nested inside each other on every save (Nov 2026)."""
+    for e in (state.get("journal") or {}).values():
+        pm = (e or {}).get("pm") if isinstance(e, dict) else None
+        if isinstance(pm, dict):
+            pm.pop("sig_for", None)
+    return state
+
+
+def _recover_save(n, ids) -> tuple[dict | None, str]:
+    """Newest good copy of the game: (data, where it came from) or (None, "")."""
+    import gc
+    best = None  # the newest in-memory copy held by this saver or one from before the last update
+    for o in [_saver()] + [o for o in gc.get_objects() if type(o).__name__ == "_Saver"]:
+        lt = getattr(o, "latest", None)
+        if lt and isinstance(lt[1], dict) and lt[1].get("tasks") is not None and (not best or lt[0] > best[0]):
+            best = lt
+    if best:
+        return _scrub(json.loads(json.dumps(best[1], default=str))), "the copy this server had in memory (your latest)"
+    cfg = notion_cfg()
+    for b in (_safe(BK.listing, n, cfg[1]) or [])[:6]:
+        d = _safe(BK.load, n, b["id"])
+        if isinstance(d, dict) and d.get("tasks") is not None:
+            return _scrub(d), f"the backup from {b['title'].split(' · ')[0]}"
+    return None, ""
+
+
 def load_state() -> dict:
     """Notion save if configured (cached per session for SESSION_TTL), else the local file."""
     if not notion_cfg():
@@ -372,14 +405,27 @@ def load_state() -> dict:
         # another tab (phone vs laptop) saved after this one last loaded: use that, never a stale copy —
         # otherwise a daily ticked on one device shows unticked on the other, and the next save there undoes it
         st.session_state["_state"], st.session_state["_state_ts"] = latest[1], time.time()
-        return latest[1]
+        return _scrub(latest[1])
     if cached is not None and (time.time() - st.session_state.get("_state_ts", 0) < SESSION_TTL
                                or _saver().pending()):
-        return cached
+        return _scrub(cached)
     _saver().flush(5)  # never read Notion while our own write is still landing
     try:
         n, ids = notion_ctx()
         data = load_json(n, ids["save_page"])
+    except ValueError as e:
+        # The save is there but its text is damaged (a write that didn't fully land). Don't lock you out:
+        # take the newest good copy — this server's memory first, then the rolling backups — and rewrite the save.
+        data, src = _recover_save(n, ids)
+        if data is None:
+            st.error(f"Your Notion save is damaged ({e}) and no good copy was found. Restore one in "
+                     "Notion: 🗄️ Backups (auto).")
+            st.button("Retry")
+            st.stop()
+        st.session_state["_resave"] = True
+        st.session_state.setdefault("flash", []).append(
+            ("warning", f"🛟 Your save in Notion was damaged, so I loaded {src} and rewrote it. Check the last few "
+                        "things you did."))
     except Exception as e:
         # Never fall back to a blank game here — a later save would overwrite the real one.
         st.error(f"Can't reach your Notion save right now: {e}")
@@ -393,8 +439,8 @@ def load_state() -> dict:
         # instead of quietly rolling your progress back to the last save that made it
         st.session_state["_state_ts"] = time.time()
         st.session_state["_resave"] = True
-        return cached
-    state = _merge(default_state(), data)
+        return _scrub(cached)
+    state = _scrub(_merge(default_state(), data))
     st.session_state["_state"], st.session_state["_state_ts"] = state, time.time()
     _saver().latest = (time.time(), state)
     st.session_state["_fresh_load"] = True
@@ -573,8 +619,7 @@ def sync_journal(n: Notion, jm: dict, state: dict) -> list[str]:
         pm = e.get("pm")
         if not pm or k < since:
             continue
-        sig = json.dumps({x: pm.get(x) for x in sorted(pm) if not x.startswith("notion_") and x != "paid"},
-                         sort_keys=True)
+        sig = _jr_sig(pm)
         if pm.get("notion_sig") == sig:
             continue
         try:
@@ -649,11 +694,11 @@ class _Saver:
         for k, f in self.known_journal.items():
             pm = (journal.get(k) or {}).get("pm")
             if pm is not None:
-                for fk, v in f.items():
-                    if v is not None and fk != "notion_sig":
-                        pm[fk] = v
-                if f.get("notion_sig") and f.get("sig_for") == json.dumps(
-                        {x: pm.get(x) for x in sorted(pm) if not x.startswith("notion_") and x != "paid"}, sort_keys=True):
+                for fk in ("notion_page", "notion_blocks"):
+                    if f.get(fk) is not None:
+                        pm[fk] = f[fk]
+                pm.pop("sig_for", None)
+                if f.get("notion_sig") and f.get("sig_for") == _jr_sig(pm):
                     pm["notion_sig"] = f["notion_sig"]
 
     def _apply_known(self, tasks: list[dict]) -> None:
@@ -695,8 +740,7 @@ class _Saver:
                             self.known_journal[k_] = {
                                 "notion_page": pm_["notion_page"], "notion_blocks": pm_.get("notion_blocks"),
                                 "notion_sig": pm_.get("notion_sig"),
-                                "sig_for": json.dumps({x: pm_.get(x) for x in sorted(pm_)
-                                                       if not x.startswith("notion_") and x != "paid"}, sort_keys=True)}
+                                "sig_for": _jr_sig(pm_)}
                     self._apply_known_journal(live.get("journal", {}))
                     self._apply_known(live.get("tasks", []))  # hand the new ids back to the live game
                     self._apply_known_goals(live.get("goals", []))
@@ -724,6 +768,15 @@ _SAVER_V = hashlib.md5(b"".join(getattr(_Saver, f).__code__.co_code for f in
 
 @st.cache_resource(show_spinner=False)
 def _saver_for(version: str) -> _Saver:
+    import gc
+    for o in gc.get_objects():  # savers from before this update: no more writes, and no stale journal ids to re-apply
+        if type(o).__name__ == "_Saver" and hasattr(o, "lock"):
+            try:
+                with o.lock:
+                    o.job = None
+                    o.known_journal = {}
+            except Exception:  # noqa: BLE001
+                pass
     return _Saver()
 
 
@@ -781,11 +834,21 @@ def fresh_for_settle(state: dict, fresh: bool) -> dict:
     return state
 
 
+SAVE_MAX = 3_000_000  # chars. A real save is well under 1 MB; anything near this is a bug snowballing.
+
+
 def save_state(state: dict) -> None:
+    _scrub(state)
     state["rev"] = int(state.get("rev", 0)) + 1  # newer copy = higher rev: a reload never trades it for an older one
     broadcast_lock(state)
     _refresh_alarms(state)
     snapshot = json.dumps(state, default=str)
+    if len(snapshot) > SAVE_MAX:
+        big = sorted(((k, len(json.dumps(v, default=str))) for k, v in state.items()), key=lambda kv: -kv[1])[:3]
+        st.session_state.setdefault("flash", []).append(
+            ("error", f"🛑 Not saving to Notion: the save ballooned to {len(snapshot):,} characters "
+                      f"({', '.join(f'{k} {n:,}' for k, n in big)}). That's a bug, not your data — tell Claude."))
+        return
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         tmp = STATE_FILE.with_suffix(".tmp")

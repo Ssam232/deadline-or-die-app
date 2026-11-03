@@ -365,7 +365,20 @@ def _key_sizes(text: str, top: int = 8) -> str:
     return ", ".join(f"{k}={v}" for k, v in big)
 
 
+def _save_lock():
+    import sys
+    if not hasattr(sys, "_dod_save_lock"):  # one per process, survives code updates on a long-running server
+        import threading
+        sys._dod_save_lock = threading.Lock()
+    return sys._dod_save_lock
+
+
 def save_json(n: Notion, page_id: str, data) -> None:
+    with _save_lock():  # two writers interleaving blocks is how a save gets torn
+        _save_json(n, page_id, data)
+
+
+def _save_json(n: Notion, page_id: str, data) -> None:
     text = json.dumps(data, separators=(",", ":"), default=str)
     pieces = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)] or [""]
     groups = [pieces[i:i + BLOCK_ITEMS] for i in range(0, len(pieces), BLOCK_ITEMS)]
