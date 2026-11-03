@@ -655,7 +655,7 @@ def _notion_sync(n: Notion, ids: dict, state: dict, out_map: dict | None, app_ur
             errs += sync_journal(n, jr_map, state)
     except Exception as e:
         errs.append(f"board: {e}")
-    save_json(n, ids["save_page"], state)
+    save_json(n, ids["save_page"], state, budget=15)  # leftover blocks (if any) cleared a bit per save
     if dash and ids.get("dashboard"):
         try:
             update_dashboard(n, ids["dashboard"], state, TZ, app_url)

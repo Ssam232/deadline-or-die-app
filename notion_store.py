@@ -303,21 +303,37 @@ def _first_json(text: str):
     return obj
 
 
-def load_json(n: Notion, page_id: str):
-    text, cur = "", None
-    while True:  # page by page, and stop as soon as a complete save has been read
-        q = "?page_size=100" + (f"&start_cursor={cur}" if cur else "")
+def _code_pages(n: Notion, page_id: str, size: int = 10):
+    """Code blocks under a page, a few at a time (each can hold 200k characters): yields (blocks, has_more)."""
+    cur = None
+    while True:
+        q = f"?page_size={size}" + (f"&start_cursor={cur}" if cur else "")
         d = n.req("GET", f"/blocks/{page_id}/children{q}")
-        text += "".join(plain(b["code"]["rich_text"]) for b in d.get("results", []) if b.get("type") == "code")
+        yield [b for b in d.get("results", []) if b.get("type") == "code"], bool(d.get("has_more"))
+        if not d.get("has_more"):
+            return
+        cur = d.get("next_cursor")
+
+
+def _delete(n: Notion, block_id: str) -> None:
+    try:
+        n.req("DELETE", f"/blocks/{block_id}")
+    except NotionError as e:  # already gone (another writer got there first): fine
+        if not any(x in str(e) for x in ("404", "archived", "Could not find")):
+            raise
+
+
+def load_json(n: Notion, page_id: str):
+    text = ""
+    for blocks, more in _code_pages(n, page_id):  # stop as soon as a complete save has been read
+        text += "".join(plain(b["code"]["rich_text"]) for b in blocks)
         if text.strip():
             try:
                 return _first_json(text)
             except ValueError:
-                if not d.get("has_more"):
+                if not more:
                     raise
-        if not d.get("has_more"):
-            return None
-        cur = d.get("next_cursor")
+    return None
 
 
 def save_shape(n: Notion, page_id: str) -> str:
@@ -337,25 +353,24 @@ def save_shape(n: Notion, page_id: str) -> str:
     return f"{len(blocks)} block(s) [{', '.join(parts)}] · {len(text)} chars · {ok} · biggest: {big}"
 
 
-def tidy(n: Notion, page_id: str, budget: float = 90) -> int:
+def tidy(n: Notion, page_id: str, budget: float = 60) -> int:
     """Delete code blocks left over after the complete save (an interrupted shrink). Returns how many went."""
     import time as _t
-    blocks = [b for b in n.children(page_id) if b.get("type") == "code"]
-    text, keep = "", len(blocks)
-    for i, b in enumerate(blocks):
-        text += plain(b["code"]["rich_text"])
-        try:
-            _first_json(text)
-            keep = i + 1
-            break
-        except ValueError:
-            continue
-    t0, gone = _t.time(), 0
-    for b in reversed(blocks[keep:]):
-        if _t.time() - t0 > budget:
-            break
-        n.req("DELETE", f"/blocks/{b['id']}")
-        gone += 1
+    t0, text, done, gone = _t.time(), "", False, 0
+    for blocks, _more in _code_pages(n, page_id):
+        for b in blocks:
+            if done:
+                if _t.time() - t0 > budget:
+                    return gone
+                _delete(n, b["id"])
+                gone += 1
+                continue
+            text += plain(b["code"]["rich_text"])
+            try:
+                _first_json(text)
+                done = True
+            except ValueError:
+                pass
     return gone
 
 
@@ -421,10 +436,18 @@ def save_json(n: Notion, page_id: str, data, budget: float | None = None) -> Non
 
 
 def _save_json(n: Notion, page_id: str, data, budget: float | None = None) -> None:
+    """Write the save over the first code blocks; delete the blocks after it (all of them, or with a `budget` in
+    seconds as many as fit — load ignores anything after a complete save, so the rest can go next time)."""
+    import time as _t
     text = json.dumps(data, separators=(",", ":"), default=str)
     pieces = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)] or [""]
     groups = [pieces[i:i + BLOCK_ITEMS] for i in range(0, len(pieces), BLOCK_ITEMS)]
-    existing = [b for b in n.children(page_id) if b.get("type") == "code"]
+    pages = _code_pages(n, page_id)
+    existing, more = [], True
+    for blocks, more in pages:
+        existing += blocks
+        if budget is not None and len(existing) > len(groups):
+            break  # enough to write over; anything further is leftover
 
     def code(g):
         return {"rich_text": [{"type": "text", "text": {"content": p}} for p in g], "language": "json"}
@@ -435,12 +458,17 @@ def _save_json(n: Notion, page_id: str, data, budget: float | None = None) -> No
         else:
             n.req("PATCH", f"/blocks/{page_id}/children",
                   json={"children": [{"object": "block", "type": "code", "code": code(g)}]})
-    import time as _t
     t0 = _t.time()
-    for b in reversed(existing[len(groups):]):  # leftovers after the new save are ignored on load, so this can stop
-        if budget is not None and _t.time() - t0 > budget:  # early and finish next time
-            break
-        n.req("DELETE", f"/blocks/{b['id']}")
+    for b in existing[len(groups):]:
+        if budget is not None and _t.time() - t0 > budget:
+            return
+        _delete(n, b["id"])
+    if budget is not None and more:
+        for blocks, _m in pages:  # keep clearing leftovers while there's time
+            for b in blocks:
+                if _t.time() - t0 > budget:
+                    return
+                _delete(n, b["id"])
 
 
 # ─────────────── task rows ───────────────

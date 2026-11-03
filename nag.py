@@ -256,10 +256,10 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         for k in bad:
             save["journal"][k]["pm"].pop("sig_for", None)
         save["rev"] = int(save.get("rev", 0)) + 1
-        save_json(n, ids["save_page"], save, budget=120)  # leftover blocks are ignored on load; next run tidies more
+        save_json(n, ids["save_page"], save, budget=45)  # leftover blocks are ignored on load; next run tidies more
         print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s)")
     try:
-        gone = tidy(n, ids["save_page"], budget=90)
+        gone = tidy(n, ids["save_page"], budget=60)
         if gone:
             print(f"::notice title=save repair::deleted {gone} leftover block(s)")
     except Exception as e_:  # noqa: BLE001
@@ -432,6 +432,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
 
 
 def main() -> int:
+    sys.stdout.reconfigure(line_buffering=True)  # notes reach the log even if a run is cut off
     missing = [k for k in ("NOTION_TOKEN", "NOTION_PARENT_PAGE", "NTFY_TOPIC") if not os.getenv(k)]
     if missing:
         print(f"Missing secrets: {', '.join(missing)}")
