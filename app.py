@@ -1348,6 +1348,29 @@ def notion_headers() -> dict:
             "Content-Type": "application/json"}
 
 
+@st.cache_resource
+def _bg_notes() -> list:
+    """Problems from finish-line side jobs that ran after the page moved on; shown on your next tap."""
+    return []
+
+
+def _in_background(jobs: list) -> None:
+    """Run (label, fn) jobs off the click path. Everything they need is resolved before this is called:
+    a background thread can't read secrets or session state."""
+    notes = _bg_notes()
+
+    def run():
+        for label, fn in jobs:
+            try:
+                r = fn()
+                if isinstance(r, str) and r:
+                    notes.append(f"{label}: {r}")
+            except Exception as e:  # noqa: BLE001 — side jobs never break a finish
+                notes.append(f"{label}: {e}")
+    if jobs:
+        threading.Thread(target=run, daemon=True).start()
+
+
 def _notion_err(r) -> str:
     try:
         return f"Notion {r.status_code}: {r.json().get('message')}"
@@ -1390,7 +1413,7 @@ def notion_parse(page: dict, date_prop: str, done_prop: str) -> dict:
             "done": done, "done_type": done_type}
 
 
-def notion_mark_done(state: dict, t: dict) -> str | None:
+def notion_mark_done(state: dict, t: dict, headers: dict | None = None) -> str | None:
     prop, typ = state["settings"].get("notion_done_prop"), t.get("notion_done_type")
     if not t.get("notion_id") or not prop or not typ:
         return None
@@ -1399,7 +1422,7 @@ def notion_mark_done(state: dict, t: dict) -> str | None:
     if not value:
         return None
     try:
-        r = requests.patch(f"https://api.notion.com/v1/pages/{t['notion_id']}", headers=notion_headers(),
+        r = requests.patch(f"https://api.notion.com/v1/pages/{t['notion_id']}", headers=headers or notion_headers(),
                            json={"properties": {prop: value}}, timeout=30)
         return None if r.status_code == 200 else _notion_err(r)
     except Exception as e:
@@ -1602,34 +1625,44 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         msg += f"\n\n🧑‍⚖️ Steward: *{verdict['comment']}*"
     if level_of(state["xp"]) > old_level:
         msg += f"\n\n⬆️ **Driver level {level_of(state['xp'])}!** Check the Race tab for new tracks."
+    # ⚡ The coins, XP and save are done. The rest (Zotero, ticking it off in Notion, uploading the proof file, the
+    # phone buzz) are network calls that used to hold the page for seconds: they now finish in the background.
+    jobs = []
     if t.get("zotero_key") and zotero_cfg(state):
+        zc, zk = zotero_cfg(state), t["zotero_key"]
+        def _zot():
+            Z.mark_read(zc[0], zc[1], zk)
+            _zotero_list.clear()  # so the To Read list drops it
+        jobs.append(("Couldn't tag it read in Zotero", _zot))
+        msg += "\n\n📄 Tagging it **read** in Zotero."
+    if t.get("notion_id") and state["settings"].get("notion_done_prop") and t.get("notion_done_type"):
         try:
-            zc = zotero_cfg(state)
-            Z.mark_read(zc[0], zc[1], t["zotero_key"])
-            _zotero_list.clear()
-            msg += "\n\n📄 Tagged **read** in Zotero."
-        except Exception as e:
-            msg += f"\n\n(Couldn't tag it in Zotero: {e})"
-    err = notion_mark_done(state, t)
-    if err:
-        msg += f"\n\n(Couldn't tick it off in your Notion list: {err})"
+            hdr, st_snap, t_snap = notion_headers(), {"settings": dict(state["settings"])}, dict(t)
+            jobs.append(("Couldn't tick it off in your Notion list", lambda: notion_mark_done(st_snap, t_snap, hdr)))
+        except RuntimeError as e:
+            msg += f"\n\n(Couldn't tick it off in your Notion list: {e})"
     if up and t.get("sync_page") and notion_cfg():
         try:
-            n, _ = notion_ctx()
-            fname = up.name
-            body, ctype = (shrink_image(data) if up.type in IMAGE_MIME else (data, up.type or "application/octet-stream"))
-            if up.type in IMAGE_MIME:
-                fname = Path(up.name).stem + ".jpg"
-            upload_proof(n, t["sync_page"], fname, body, ctype)
+            n_up, _ = notion_ctx()
+            fname, page, utype = up.name, t["sync_page"], up.type
+
+            def _upload():
+                body, ctype = (shrink_image(data) if utype in IMAGE_MIME else (data, utype or "application/octet-stream"))
+                upload_proof(n_up, page, Path(fname).stem + ".jpg" if utype in IMAGE_MIME else fname, body, ctype)
+            jobs.append(("Proof file didn't upload to Notion", _upload))
         except Exception as e:
             msg += f"\n\n(Proof file didn't upload to Notion: {e})"
     save_state(state)
     # Reward hits the phone too — the buzz becomes the cue.
     plain_msg = re.sub(r"[*#]", "", msg.split("\n\n🧑‍⚖️")[0]).replace("CHECKERED FLAG\n", "")
-    push(get_secret("NTFY_TOPIC"), "🏁 Checkered flag" if mode == "open" else "🩹 Redeemed", plain_msg.strip(),
-         priority=4 if sound == "jackpot" else 3,
-         tags=["checkered_flag", "moneybag"] if sound == "jackpot" else ["checkered_flag"],
-         click=app_link())
+    topic, link = get_secret("NTFY_TOPIC"), app_link()
+    if topic:
+        jobs.append(("Phone buzz didn't send", lambda: None if push(
+            topic, "🏁 Checkered flag" if mode == "open" else "🩹 Redeemed", plain_msg.strip(),
+            priority=4 if sound == "jackpot" else 3,
+            tags=["checkered_flag", "moneybag"] if sound == "jackpot" else ["checkered_flag"], click=link)
+            else "ntfy didn't take it"))
+    _in_background(jobs)
     flash(msg, celebrate=(mode == "open"), sound=sound)
     st.rerun()
 
@@ -4702,6 +4735,8 @@ for m in crash_msgs:
 if rust_msg:
     (st.success if rust_msg.startswith("🧽") else st.warning)(rust_msg)
 TOAST_ICON = {"success": "✅", "info": "💬"}
+while _bg_notes():  # a background finish-line job hit a snag since your last tap
+    flash(f"⚠️ {_bg_notes().pop(0)}", "warning")
 for kind, m in st.session_state.pop("flash", []):
     if kind in TOAST_ICON and len(m) <= 170 and "\n" not in m:
         lead = m.split(" ", 1)
