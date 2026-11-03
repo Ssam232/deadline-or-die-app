@@ -89,6 +89,18 @@ def qualified(save: dict, d: date) -> bool:
     return bool(peek_day(save, d).get("qualified")) or bool(booked(save, d))
 
 
+def release_moved(save: dict) -> list[dict]:
+    """A roadmap block you moved to another day leaves the mission of the day it was in (it joins its new day's
+    mission when that day comes). Returns the blocks that moved off."""
+    out = []
+    for t in save.get("tasks", []):
+        md, bk = t.get("mission_day"), t.get("block") or {}
+        if md and bk.get("date") and t.get("status") == "open" and bk["date"] != md:
+            t.pop("mission_day", None)
+            out.append(t)
+    return out
+
+
 def auto_qualify(save: dict, now: datetime, bank) -> str | None:
     """Today's booked roadmap blocks become today's mission and count as qualifying (+fuel, once). Qualifying
     stays open: you can still lock in more. Blocks booked later in the day join the mission too."""

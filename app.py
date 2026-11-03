@@ -4849,6 +4849,12 @@ _excused = daily.excuse_outages(state, bank)
 crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
 _made_good = daily.make_good(state, bank, DL)
+_moved_off = daily.release_moved(state)
+if _moved_off:
+    _made_good = _made_good + [
+        "🗺️ Off today's mission: " + ", ".join(
+            f"**{t['title']}** (now {date.fromisoformat(t['block']['date']):%a %b} {date.fromisoformat(t['block']['date']).day})"
+            for t in _moved_off[:3]) + ". It joins that day's mission instead."]
 _auto_q = daily.auto_qualify(state, now(), bank)
 _made_good = _made_good + DL.fix_claims(state, now().date(), bank)
 if _auto_q:
