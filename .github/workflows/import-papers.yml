@@ -1,0 +1,34 @@
+name: Import papers to Zotero
+on:
+  push:
+    branches: [paper-queue]
+    paths: ["queue/**"]
+permissions:
+  contents: write
+concurrency:
+  group: import-papers
+  cancel-in-progress: false
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet requests
+      - run: python import_papers.py
+        env:
+          ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+      - name: Record what was imported
+        if: always()
+        run: |
+          git add -A
+          git diff --cached --quiet && exit 0
+          git config user.name "paper-importer"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Record imported papers"
+          git pull --rebase origin paper-queue
+          git push origin HEAD:paper-queue

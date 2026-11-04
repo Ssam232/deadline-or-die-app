@@ -1,0 +1,225 @@
+"""Runs the importer against a local fake of Zotero, Crossref and Europe PMC."""
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+class Fake:
+    def __init__(self):
+        self.write = True
+        self.collections, self.items, self.tokens = [], [], set()
+        self.reject_titles = set()
+        self.crossref = {"10.1/good": {"title": ["Good <i>paper</i>"], "DOI": "10.1/GOOD",
+                                       "author": [{"family": "Koch", "given": "L"}], "container-title": ["J Test"],
+                                       "issued": {"date-parts": [[2020, 3]]}, "abstract": "<jats:p>Abs</jats:p>"},
+                         "10.1/wrong": {"title": ["Something else entirely about plants"], "DOI": "10.1/wrong"}}
+        self.epmc = {"PMCID:PMC1": {"title": "Paper from PMC.", "doi": "10.1/pmc", "pubYear": "2019",
+                                    "authorList": {"author": [{"lastName": "Britton", "firstName": "S"}]},
+                                    "journalInfo": {"journal": {"title": "J PMC"}, "volume": "5"}}}
+
+
+fake = None
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def send(self, code, body):
+        data = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        if u.path == "/keys/current":
+            return self.send(200, {"access": {"user": {"library": True, "write": fake.write}}})
+        if u.path.startswith("/works/"):
+            m = fake.crossref.get(u.path[len("/works/"):])
+            return self.send(200, {"message": m}) if m else self.send(404, {})
+        if u.path == "/search":
+            h = fake.epmc.get(q["query"][0])
+            return self.send(200, {"resultList": {"result": [h] if h else []}})
+        if u.path.endswith("/collections"):
+            return self.send(200, fake.collections)
+        if u.path.endswith("/items/top"):
+            ck = u.path.split("/collections/")[1].split("/")[0] if "/collections/" in u.path else None
+            rows = [i for i in fake.items if not ck or ck in i["data"]["collections"]]
+            start = int(q.get("start", ["0"])[0])
+            return self.send(200, rows[start:start + int(q.get("limit", ["100"])[0])])
+        self.send(404, {})
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        token = self.headers.get("Zotero-Write-Token")
+        if token in fake.tokens:
+            return self.send(412, {})
+        if self.path.endswith("/collections"):
+            fake.tokens.add(token)
+            key = f"COLL{len(fake.collections)}"
+            row = {"key": key, "data": {"name": body[0]["name"]}}
+            fake.collections.append(row)
+            return self.send(200, {"successful": {"0": row}, "failed": {}})
+        ok, bad = {}, {}
+        for n, it in enumerate(body):
+            if it["title"] in fake.reject_titles:
+                bad[str(n)] = {"code": 400, "message": "rejected"}
+            else:
+                row = {"key": f"ITEM{len(fake.items)}", "version": 1, "data": it}
+                fake.items.append(row)
+                ok[str(n)] = row
+        if not bad:
+            fake.tokens.add(token)
+        self.send(200, {"successful": ok, "failed": bad})
+
+
+class Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{cls.srv.server_port}"
+        for v in ("ZOTERO_API_BASE", "CROSSREF_BASE", "EPMC_BASE"):
+            os.environ[v] = base
+        os.environ.update(ZOTERO_USER_ID="1", ZOTERO_API_KEY="k")
+        os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1"
+        cls.base = base
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        global fake
+        fake = Fake()
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "queue").mkdir()
+        os.environ["QUEUE_ROOT"] = str(self.root)
+        sys.modules.pop("import_papers", None)
+        import import_papers
+        self.m = import_papers
+
+    def tearDown(self):
+        shutil.rmtree(self.root)
+
+    def queue(self, papers, name="2026-11-04.json"):
+        (self.root / "queue" / name).write_text(json.dumps({"papers": papers}))
+
+    def test_adds_paper_to_new_to_read_collection_and_moves_file(self):
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "tags": ["q1"]}])
+        self.assertEqual(self.m.run(), 0)
+        d = fake.items[0]["data"]
+        self.assertEqual(d["title"], "Good paper")
+        self.assertEqual(d["DOI"], "10.1/good")
+        self.assertEqual(d["date"], "2020-03")
+        self.assertEqual(d["collections"], ["COLL0"])
+        self.assertEqual(fake.collections[0]["data"]["name"], "To Read")
+        self.assertIn({"tag": "q1"}, d["tags"])
+        self.assertFalse(list((self.root / "queue").glob("*.json")))
+        self.assertTrue((self.root / "done" / "2026-11-04.json").exists())
+
+    def test_resolves_pmcid_through_europe_pmc(self):
+        self.queue([{"pmcid": "PMC1", "title": "Paper from PMC", "tags": []}])
+        self.assertEqual(self.m.run(), 0)
+        d = fake.items[0]["data"]
+        self.assertEqual((d["DOI"], d["publicationTitle"]), ("10.1/pmc", "J PMC"))
+        self.assertEqual(d["creators"][0]["lastName"], "Britton")
+
+    def test_wrong_doi_is_flagged_and_its_metadata_not_used(self):
+        self.queue([{"doi": "10.1/wrong", "title": "High-fat diet and the rat diaphragm"}])
+        self.assertEqual(self.m.run(), 0)
+        d = fake.items[0]["data"]
+        self.assertEqual(d["title"], "High-fat diet and the rat diaphragm")
+        self.assertEqual(d["DOI"], "")
+        self.assertIn({"tag": "needs-check"}, d["tags"])
+
+    def test_unresolvable_paper_is_flagged_not_dropped(self):
+        self.queue([{"doi": "10.1/missing", "title": "Unknown paper"}])
+        self.assertEqual(self.m.run(), 0)
+        self.assertIn({"tag": "needs-check"}, fake.items[0]["data"]["tags"])
+
+    def test_skips_papers_already_in_library_and_leaves_them_alone(self):
+        fake.items.append({"key": "OLD", "version": 7, "data": {"title": "Old", "DOI": "https://doi.org/10.1/GOOD",
+                                                                "collections": [], "tags": [{"tag": "read"}]}})
+        before = json.dumps(fake.items[0])
+        self.queue([{"doi": "10.1/good", "title": "Good paper"}])
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(len(fake.items), 1)
+        self.assertEqual(json.dumps(fake.items[0]), before)
+
+    def test_duplicates_across_queue_files_import_once(self):
+        self.queue([{"doi": "10.1/good", "title": "Good paper"}], "a.json")
+        self.queue([{"doi": "10.1/good", "title": "Good paper"}], "b.json")
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(len(fake.items), 1)
+
+    def test_read_only_key_stops_before_writing_and_keeps_queue(self):
+        fake.write = False
+        self.queue([{"doi": "10.1/good", "title": "Good paper"}])
+        with self.assertRaisesRegex(self.m.ImportFailure, "read-only"):
+            self.m.run()
+        self.assertEqual(fake.items, [])
+        self.assertTrue((self.root / "queue" / "2026-11-04.json").exists())
+
+    def test_failed_item_keeps_file_and_retry_does_not_duplicate(self):
+        fake.reject_titles = {"Unknown paper"}
+        self.queue([{"doi": "10.1/good", "title": "Good paper"}, {"doi": "10.1/none", "title": "Unknown paper"}])
+        self.assertEqual(self.m.run(), 1)
+        self.assertTrue((self.root / "queue" / "2026-11-04.json").exists())
+        fake.reject_titles = set()
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(sorted(i["data"]["title"] for i in fake.items), ["Good paper", "Unknown paper"])
+
+    def test_batch_where_every_item_failed_is_retried_not_lost(self):
+        fake.reject_titles = {"Unknown paper"}
+        self.queue([{"doi": "10.1/none", "title": "Unknown paper"}])
+        self.assertEqual(self.m.run(), 1)
+        fake.reject_titles = set()
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual([i["data"]["title"] for i in fake.items], ["Unknown paper"])
+
+    def test_webpage_entry(self):
+        self.queue([{"kind": "webpage", "title": "Protocol", "url": "https://x.org/p.pdf", "source": "TREAT-NMD"}])
+        self.assertEqual(self.m.run(), 0)
+        d = fake.items[0]["data"]
+        self.assertEqual((d["itemType"], d["url"]), ("webpage", "https://x.org/p.pdf"))
+        self.assertNotIn("DOI", d)
+
+    def test_missing_secrets_gives_clear_error(self):
+        os.environ.pop("ZOTERO_API_KEY")
+        try:
+            with self.assertRaisesRegex(self.m.ImportFailure, "secrets"):
+                self.m.run()
+        finally:
+            os.environ["ZOTERO_API_KEY"] = "k"
+
+    def test_the_apps_own_reader_sees_the_imported_paper(self):
+        app = os.getenv("APP_CHECKOUT")
+        if not app:
+            self.skipTest("set APP_CHECKOUT to a checkout of main")
+        self.queue([{"doi": "10.1/good", "title": "Good paper"}])
+        self.m.run()
+        sys.path.insert(0, app)
+        import zotero as Z
+        Z.API = self.base
+        papers = Z.to_read("1", "k", "To Read")
+        self.assertEqual(papers[0]["title"], "Good paper")
+        self.assertEqual(papers[0]["url"], "https://doi.org/10.1/good")
+        self.assertEqual((papers[0]["who"], papers[0]["year"]), ("Koch", "2020"))
+
+
+if __name__ == "__main__":
+    unittest.main()
