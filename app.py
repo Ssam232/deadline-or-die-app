@@ -4326,7 +4326,7 @@ CSS = """<style>
   line-height:1;margin:0;padding:0;letter-spacing:-.01em}
 .dod-hero{display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;margin-bottom:.7rem}
 .dod-hero p{color:var(--muted);margin:0;font-size:.95rem}
-.dod-cluster{display:grid;grid-template-columns:repeat(4,1fr);background:#101319;border:1px solid var(--line);
+.dod-cluster{display:grid;grid-template-columns:repeat(4,1fr);background:var(--deep,#101319);border:1px solid var(--line);
   border-radius:14px;overflow:hidden;margin:0 0 1.1rem}
 .dod-cell{padding:8px 16px 6px;border-left:1px solid var(--line)}
 .dod-cell:first-child{border-left:0}
@@ -4338,7 +4338,7 @@ CSS = """<style>
 .dod-xp{grid-column:1/-1;border-top:1px solid var(--line);padding:6px 16px;display:flex;align-items:center;gap:12px;
   font-size:.84rem;color:var(--muted)}
 .dod-xp b{color:#ece8df;font-weight:600}
-.dod-bar{flex:1;height:4px;background:#262b36;border-radius:2px;overflow:hidden}
+.dod-bar{flex:1;height:4px;background:var(--track,#262b36);border-radius:2px;overflow:hidden}
 .dod-bar i{display:block;height:100%;background:var(--y)}
 .dod-rows{margin:.2rem 0 .6rem}
 .dod-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line)}
@@ -4395,7 +4395,7 @@ CSS = """<style>
 .dod-step{display:flex;align-items:center;gap:8px;font-weight:600;color:#ece8df;margin:.5rem 0 .2rem;font-size:.95rem}
 .dod-step b{width:1.35rem;height:1.35rem;border-radius:50%;background:var(--y);color:#111;display:inline-flex;
   align-items:center;justify-content:center;font-size:.78rem}
-.dod-meter{font-size:.85rem;color:var(--muted);padding:6px 10px;border-radius:10px;background:#141821;
+.dod-meter{font-size:.85rem;color:var(--muted);padding:6px 10px;border-radius:10px;background:var(--card,#141821);
   border:1px solid var(--line);margin:.35rem 0 .1rem}
 .dod-meter b{color:#ece8df}.dod-meter.ok{border-color:rgba(46,196,182,.4)}.dod-meter.low{border-color:rgba(225,6,0,.45)}
 /* Today on a phone: flatten the two columns into one list and put the sections in a phone-friendly order */
@@ -4470,15 +4470,15 @@ CSS = """<style>
   margin:.2rem 0 .25rem;color:#ece8df}
 .dod-next .m{color:var(--muted);font-size:.9rem}
 .dod-next.slim{padding:10px 14px}.dod-next.slim::after{display:none}
-.dod-next.run{border-color:rgba(46,196,182,.45);background:linear-gradient(135deg,rgba(46,196,182,.16),transparent 60%),#141821}
+.dod-next.run{border-color:rgba(46,196,182,.45);background:linear-gradient(135deg,rgba(46,196,182,.16),transparent 60%),var(--card,#141821)}
 .dod-next.run .k{color:var(--t)}
-.dod-next.done{border-color:rgba(46,196,182,.35);background:linear-gradient(135deg,rgba(46,196,182,.12),transparent 60%),#141821}
+.dod-next.done{border-color:rgba(46,196,182,.35);background:linear-gradient(135deg,rgba(46,196,182,.12),transparent 60%),var(--card,#141821)}
 .dod-next.done .k{color:var(--t)}
 .st-key-up_next [data-testid^="stBaseButton-primary"]{font-size:1.05rem;padding:.6rem 0;border-radius:12px}
 .dod-goal{padding:4px 0 2px}
 .dod-goal .h{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
 .dod-goal .h b{color:#ece8df;font-weight:600}.dod-goal .h span{color:var(--muted);font-size:.8rem;white-space:nowrap}
-.dod-goal .bar{height:6px;border-radius:4px;background:#262b36;overflow:hidden;margin:6px 0 4px}
+.dod-goal .bar{height:6px;border-radius:4px;background:var(--track,#262b36);overflow:hidden;margin:6px 0 4px}
 .dod-goal .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--y),var(--t));border-radius:4px;
   animation:dodGrow .9s cubic-bezier(.2,.7,.2,1) both;--from:0%}
 .dod-goal .m{color:var(--muted);font-size:.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -4496,10 +4496,10 @@ CSS = """<style>
 .dod-car .nm .ok{color:var(--t)}.dod-car .nm .bad{color:#ff6a5c}
 .dod-car .cond{display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);margin:3px 0}
 .dod-car .cond span{width:4.6rem}.dod-car .cond b{color:#ece8df;font-weight:600;min-width:3.4rem;text-align:right}
-.dod-car .cond .bar{flex:1;height:5px;border-radius:3px;background:#262b36;overflow:hidden}
+.dod-car .cond .bar{flex:1;height:5px;border-radius:3px;background:var(--track,#262b36);overflow:hidden}
 .dod-car .cond .bar i{display:block;height:100%;background:var(--y);border-radius:3px}
 .dod-car .chips{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
-.dod-car .chips span{font-size:.75rem;color:var(--muted);background:#141821;border:1px solid var(--line);border-radius:999px;
+.dod-car .chips span{font-size:.75rem;color:var(--muted);background:var(--card,#141821);border:1px solid var(--line);border-radius:999px;
   padding:2px 9px}
 .dod-car .why{color:#ff6a5c;font-size:.8rem;margin-top:6px}
 .st-key-car_card [data-testid^="stBaseButton-tertiary"],.st-key-card_goals_today [data-testid^="stBaseButton-tertiary"]{
@@ -4529,7 +4529,7 @@ CSS = """<style>
 .dod-boot{min-height:60vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
 .dod-boot-car{font-size:3rem;animation:dodBob .9s ease-in-out infinite alternate}
 .dod-boot-t{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.2rem;color:#ece8df}
-.dod-boot-bar{width:180px;height:4px;border-radius:4px;background:#262b36;overflow:hidden}
+.dod-boot-bar{width:180px;height:4px;border-radius:4px;background:var(--track,#262b36);overflow:hidden}
 .dod-boot-bar i{display:block;width:40%;height:100%;background:var(--y);border-radius:4px;animation:dodSlide 1.1s ease-in-out infinite}
 @keyframes dodBob{from{transform:translateY(0)}to{transform:translateY(-6px)}}
 /* ── the loading screen (sign-in check + first load) ── */
@@ -4573,23 +4573,23 @@ CSS = """<style>
 @media (max-width:640px){.st-key-stat_kpis [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;gap:.5rem 1rem}
   .st-key-stat_kpis [data-testid="stColumn"]{flex:1 1 calc(50% - 1rem)!important;min-width:calc(50% - 1rem)!important}}
 /* toasts in the app's colours */
-[data-testid="stToast"]{background:#1b1f27!important;border:1px solid var(--line);border-left:3px solid var(--y);
+[data-testid="stToast"]{background:var(--panel)!important;border:1px solid var(--line);border-left:3px solid var(--y);
   color:#ece8df;box-shadow:0 8px 24px rgba(0,0,0,.45)}
 [class*="st-key-scrap_"] img{max-height:210px;object-fit:cover;width:100%;border-radius:10px}
-.dod-scrap-tile{height:96px;border-radius:10px;background:linear-gradient(135deg,#1b1f27,#141821);display:flex;
+.dod-scrap-tile{height:96px;border-radius:10px;background:linear-gradient(135deg,var(--panel),var(--card,#141821));display:flex;
   align-items:center;justify-content:center;font-size:2.4rem;margin-bottom:.4rem;border:1px solid var(--line)}
 .dod-mh{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:.1rem 0 .5rem}
 .dod-mt{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.55rem;line-height:1.1}
 .dod-mb{color:var(--muted);font-size:.9rem;white-space:nowrap}
 .dod-seg{display:flex;gap:5px;margin:0 0 .7rem}
-.dod-seg i{flex:1;height:7px;border-radius:4px;background:#262b36;transition:background .4s}
+.dod-seg i{flex:1;height:7px;border-radius:4px;background:var(--track,#262b36);transition:background .4s}
 .dod-seg i.ok{background:var(--y)} .dod-seg i.bad{background:var(--r)}
 .dod-pills{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 .8rem}
-.dod-pills span{font-size:.8rem;color:var(--muted);background:#141821;border:1px solid var(--line);border-radius:999px;
+.dod-pills span{font-size:.8rem;color:var(--muted);background:var(--card,#141821);border:1px solid var(--line);border-radius:999px;
   padding:3px 10px}
 .dod-pills b{color:#ece8df;font-weight:600}
 .dod-mrow{display:flex;gap:10px;align-items:center;padding:9px 14px;margin:0 0 .5rem;border:1px solid var(--line);
-  border-radius:12px;background:#141821}
+  border-radius:12px;background:var(--card,#141821)}
 .dod-mrow .m{color:var(--muted);font-size:.85rem;margin-left:6px}
 .dod-mrow.ok .dod-dot{background:var(--t)} .dod-mrow.ok s{color:var(--muted)}
 .dod-mrow.bad .dod-dot{background:var(--r)} .dod-mrow.bad{border-color:#4a1f22}
@@ -4648,17 +4648,191 @@ THEMES = {  # key: (name, accent, text-on-accent, cost, level, blurb)
 }
 
 
+# ── 🏁 Kits: full themes that restyle the whole app (background, surfaces, borders, fonts, shape, effects) ──
+_F = "https://fonts.googleapis.com/css2?family="
+KITS = {
+    "stock": dict(name="Stock", cost=0, level=1, blurb="The factory look. Paints from the Paint shop apply here.",
+                  accent=None),
+    "night": dict(name="Night Race", cost=600, level=2, blurb="Floodlights over a midnight street circuit. Cyan glow.",
+                  accent="#29e3ff", on="#051018", bg="#070b16", card="#0d1424", panel="#111a2e", deep="#0a1020",
+                  track="#1a2540", line="#1f3157", muted="#7f8fb0", radius="14px",
+                  head="Rajdhani", head_w="700", fonts="Rajdhani:wght@600;700",
+                  app_bg="radial-gradient(900px 420px at 12% -8%,rgba(41,227,255,.13),transparent 70%),"
+                         "radial-gradient(800px 400px at 88% -8%,rgba(255,255,255,.07),transparent 70%),#070b16",
+                  extra="[data-testid=stExpander] details{box-shadow:0 0 0 1px rgba(41,227,255,.07),0 10px 30px rgba(0,0,0,.45)}"
+                        "h1,h2,h3,.dod-hero h1,.dod-load-title{text-shadow:0 0 18px rgba(41,227,255,.35)}"),
+    "stealth": dict(name="Stealth", cost=700, level=2, blurb="Murdered-out. Pure black, white accents, sharp edges.",
+                    accent="#ffffff", on="#000000", bg="#000000", card="#080808", panel="#0d0d0d", deep="#050505",
+                    track="#1c1c1c", line="#1f1f1f", muted="#7a7a7a", radius="4px",
+                    head="Barlow Condensed", head_w="700", fonts="Barlow+Condensed:wght@600;700",
+                    app_bg="#000000",
+                    extra="h1,h2,h3,h4,.dod-hero h1,[data-testid=stExpander] summary p strong{text-transform:uppercase;"
+                          "letter-spacing:.06em}.dod-hero h1{font-style:normal}"),
+    "gulf": dict(name="Gulf Livery", cost=800, level=2, blurb="Powder blue and orange: the most famous livery in racing.",
+                 accent="#ff7a1a", on="#14171d", bg="#0f1a24", card="#12202c", panel="#152634", deep="#0d1720",
+                 track="#20384a", line="#23435a", muted="#8aa4b8", radius="12px",
+                 head="Archivo Black", head_w="400", fonts="Archivo+Black",
+                 app_bg="linear-gradient(180deg,#8fc8e8 0 4px,#ff7a1a 4px 8px,transparent 8px),#0f1a24",
+                 extra="[data-testid=stExpander] details{border-top:3px solid #8fc8e8!important}"
+                       ".dod-hero h1{color:#8fc8e8;font-style:normal}.dod-hero h1::after{content:'';display:block;"
+                       "height:4px;width:64px;margin-top:6px;background:#ff7a1a;border-radius:2px}"),
+    "carbon": dict(name="Carbon", cost=900, level=3, blurb="Carbon-fibre weave, gloss panels, race red.",
+                   accent="#e10600", on="#ffffff", bg="#1a1a1a", card="#161617", panel="#1d1d1f", deep="#121213",
+                   track="#2b2b2e", line="#333336", muted="#9a9aa0", radius="10px",
+                   head="Russo One", head_w="400", fonts="Russo+One",
+                   app_bg="radial-gradient(#0d0d0d 15%,transparent 16%) 0 0/14px 14px,"
+                          "radial-gradient(#0d0d0d 15%,transparent 16%) 7px 7px/14px 14px,"
+                          "radial-gradient(rgba(255,255,255,.07) 15%,transparent 20%) 0 1px/14px 14px,"
+                          "radial-gradient(rgba(255,255,255,.07) 15%,transparent 20%) 7px 8px/14px 14px,#1f1f21",
+                   extra="[data-testid=stExpander] details{background:linear-gradient(180deg,#1f1f22,#141416)!important;"
+                         "box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 8px 24px rgba(0,0,0,.5)}"
+                         ".dod-hero h1{font-style:normal}"),
+    "lemans": dict(name="Le Mans Dusk", cost=1200, level=3, blurb="Hour 20 of 24: sunset sky, frosted-glass panels.",
+                   accent="#ffb347", on="#1a1020", bg="#1a1033", card="rgba(20,14,34,.55)", panel="rgba(28,20,44,.6)",
+                   deep="rgba(16,10,28,.6)", track="rgba(255,255,255,.12)", line="rgba(255,255,255,.10)",
+                   muted="#b8a8c8", radius="16px", head="Bebas Neue", head_w="400", fonts="Bebas+Neue",
+                   app_bg="linear-gradient(180deg,#1a1033 0%,#2b1438 38%,#4a1f2c 72%,#6b2a1a 100%) fixed",
+                   extra="[data-testid=stExpander] details,.dod-cluster,.dod-next{backdrop-filter:blur(12px);"
+                         "-webkit-backdrop-filter:blur(12px)}h1,h2,h3,.dod-hero h1,[data-testid=stExpander] summary p strong"
+                         "{letter-spacing:.04em}.dod-hero h1{font-style:normal;font-size:2.6rem}"),
+    "arcade": dict(name="Pole Position '82", cost=1500, level=4, blurb="Arcade cabinet: neon grid, scanlines, pixel font.",
+                   accent="#ff2bd6", on="#0b0016", bg="#0b0016", card="#120022", panel="#16002a", deep="#0d001a",
+                   track="#2a0a44", line="#3b1460", muted="#a58fc4", radius="0px",
+                   head="Press Start 2P", head_w="400", fonts="Press+Start+2P", head_scale=".62",
+                   app_bg="linear-gradient(rgba(255,43,214,.07) 1px,transparent 1px) 0 0/100% 34px,"
+                          "linear-gradient(90deg,rgba(0,255,200,.05) 1px,transparent 1px) 0 0/34px 100%,#0b0016",
+                   extra="[data-testid=stApp]::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:999989;"
+                         "background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px)}"
+                         "[data-testid=stExpander] details{border:2px solid rgba(0,255,200,.35)!important}"
+                         "h1,h2,h3,.dod-hero h1,.dod-load-title{text-shadow:0 0 10px rgba(255,43,214,.7)}"
+                         ".dod-hero h1{font-style:normal}"),
+}
+
+
+def active_kit(state: dict) -> dict | None:
+    """The kit being shown: a free preview from the shop (this visit only), else the one you've fitted."""
+    k = st.session_state.get("kit_preview") or state.get("ui_kit", "stock")
+    kit = KITS.get(k)
+    return kit if kit and kit.get("accent") else None
+
+
 def accent(state: dict) -> tuple[str, str]:
+    kit = active_kit(state)
+    if kit:
+        return kit["accent"], kit["on"]
     k = state.get("ui_theme", "phoenix")
     _, acc, on, *_ = THEMES.get(k, THEMES["phoenix"])
     return acc, on
 
 
+def _kit_swatch(k: str, kit: dict) -> str:
+    """A tiny mock of the app drawn in the kit's own style."""
+    if not kit.get("accent"):
+        acc = THEMES.get("phoenix")[1]
+        bg, card, line, head, r, on, muted = "#14171d", "#1b1f27", "#2c313c", "Saira Semi Condensed", "10px", "#14171d", "#8b909c"
+        app_bg = bg
+    else:
+        acc, bg, card, line, head, r, on, muted, app_bg = (kit["accent"], kit["bg"], kit["card"], kit["line"], kit["head"],
+                                                           kit["radius"], kit["on"], kit["muted"], kit["app_bg"])
+    fs = ".62rem" if k == "arcade" else ".95rem"
+    return (f"<div style='height:112px;border-radius:12px;overflow:hidden;border:1px solid #2c313c;background:{app_bg};"
+            f"background-color:{bg};padding:12px;position:relative'>"
+            f"<div style='background:{card};border:1px solid {line};border-radius:{r};padding:8px 10px'>"
+            f"<div style=\"font-family:'{head}',sans-serif;font-size:{fs};color:#ece8df;margin-bottom:6px\">"
+            f"🏁 TODAY'S MISSION</div><div style='height:5px;border-radius:3px;background:{line};overflow:hidden'>"
+            f"<div style='width:62%;height:100%;background:{acc}'></div></div>"
+            f"<div style='display:flex;gap:6px;margin-top:8px'><span style='background:{acc};color:{on};font-size:.68rem;"
+            f"font-weight:700;padding:3px 9px;border-radius:{r}'>START</span><span style='color:{muted};font-size:.7rem'>"
+            f"2/3 · 45m to go</span></div></div></div>")
+
+
+def render_kits(state: dict) -> None:
+    owned = state.setdefault("kits_owned", ["stock"])
+    cur = state.get("ui_kit", "stock")
+    prev = st.session_state.get("kit_preview")
+    lvl_now = level_of(state["xp"])
+    with fold("kits", "🏁 Kits — restyle the whole app", False):
+        st.caption("A kit changes everything: background, cards, borders, fonts, corners and effects. "
+                   "Try any of them free before you buy.")
+        st.markdown("<style>@import url('" + _F + "&family=".join(k["fonts"] for k in KITS.values() if k.get("fonts"))
+                    + "&display=swap');</style>", unsafe_allow_html=True)
+        items = list(KITS.items())
+        for i in range(0, len(items), 3):
+            cols = st.columns(3)
+            for col, (k, kit) in zip(cols, items[i:i + 3]):
+                with col:
+                    st.markdown(_kit_swatch(k, kit) + f"<div style='margin-top:6px'><b>{kit['name']}</b></div>"
+                                f"<div style='color:var(--muted);font-size:.82rem;min-height:2.6em'>{kit['blurb']}</div>",
+                                unsafe_allow_html=True)
+                    c1, c2 = st.columns(2)
+                    if k == cur and not prev:
+                        c1.caption("✅ Fitted")
+                    elif k in owned:
+                        if c1.button("Fit", key=f"kit_fit_{k}", use_container_width=True):
+                            state["ui_kit"] = k
+                            st.session_state.pop("kit_preview", None)
+                            save_state(state)
+                            flash(f"🏁 {kit['name']} fitted.")
+                            st.rerun()
+                    elif lvl_now < kit["level"]:
+                        c1.caption(f"🔒 Level {kit['level']}")
+                    elif c1.button(f"{kit['cost']:,} 🪙", key=f"kit_buy_{k}", use_container_width=True,
+                                   disabled=state["coins"] < kit["cost"], help="Buy it and fit it"):
+                        bank(state, -kit["cost"], f"🏁 Kit: {kit['name']}")
+                        owned.append(k)
+                        state["ui_kit"] = k
+                        st.session_state.pop("kit_preview", None)
+                        save_state(state)
+                        flash(f"🏁 **{kit['name']}** bought and fitted.", celebrate=True, sound="jackpot")
+                        st.rerun()
+                    if k != "stock" and k not in owned:
+                        if prev == k:
+                            if c2.button("Stop", key=f"kit_stop_{k}", use_container_width=True):
+                                st.session_state.pop("kit_preview", None)
+                                st.rerun()
+                        elif c2.button("👀 Try it", key=f"kit_try_{k}", use_container_width=True,
+                                       help="Preview it on the whole app (just this visit)"):
+                            st.session_state["kit_preview"] = k
+                            st.rerun()
+
+
+def kit_css(kit: dict) -> str:
+    h, sc = f"'{kit['head']}',system-ui,sans-serif", kit.get("head_scale")
+    size = (f"h1{{font-size:calc(2.75rem*{sc})!important}}h2{{font-size:calc(2.25rem*{sc})!important}}"
+            f"h3{{font-size:calc(1.75rem*{sc})!important}}h4{{font-size:calc(1.5rem*{sc})!important}}"
+            f".dod-hero h1{{font-size:calc(2.2rem*{sc})!important}}[data-testid=stExpander] summary p strong"
+            f"{{font-size:.8em}}.dod-load-title{{font-size:1.3rem}}" if sc else "")
+    r = kit["radius"]
+    return (f":root{{--panel:{kit['panel']};--line:{kit['line']};--muted:{kit['muted']};--card:{kit['card']};"
+            f"--deep:{kit['deep']};--track:{kit['track']}}}"
+            f"[data-testid=stApp]{{background:{kit['app_bg']}!important;background-color:{kit['bg']}!important}}"
+            f"[data-testid=stHeader],[data-testid=stBottomBlockContainer]{{background:transparent!important}}"
+            f"[data-testid=stExpander] details{{background:{kit['card']};border-color:{kit['line']}!important;"
+            f"border-radius:{r}!important}}"
+            f"[data-testid=stExpander] summary:hover{{background:rgba(255,255,255,.03)}}"
+            f"[data-testid=stVerticalBlock][class*=st-key-]{{border-color:{kit['line']}}}"
+            f"[data-baseweb=select]>div,[data-baseweb=input],[data-baseweb=textarea],[data-baseweb=base-input],"
+            f"[data-testid=stNumberInputContainer]{{background:{kit['panel']}!important;border-color:{kit['line']}!important;"
+            f"border-radius:{r}!important}}"
+            f"[data-baseweb=input] input,[data-baseweb=textarea] textarea{{background:transparent!important}}"
+            f"[data-testid^=stBaseButton-secondary],[data-testid^=stBaseButton-pills],[data-testid=stButtonGroup] button"
+            f"{{background:{kit['panel']}!important;border-color:{kit['line']}!important;border-radius:{r}!important}}"
+            f"[data-testid^=stBaseButton-primary]{{border-radius:{r}!important}}"
+            f"[data-baseweb=popover]>div,[data-baseweb=menu]{{background:{kit['deep']}!important}}"
+            f".dod-cluster,.dod-next,.dod-load-track,.dod-load-lights{{border-radius:{r}!important}}"
+            f"h1,h2,h3,h4,.dod-hero h1,.dod-sec,.dod-load-title,[data-baseweb=tab] p,[data-testid=stMetricValue],"
+            f"[data-testid=stExpander] summary p strong,.dod-mt,.dod-next .t{{font-family:{h}!important;"
+            f"font-weight:{kit['head_w']}!important}}"
+            + size + kit.get("extra", ""))
+
+
 def theme_css(state: dict) -> str:
+    kit = active_kit(state)
     acc, on = accent(state)
     r, g, b = (int(acc[i:i + 2], 16) for i in (1, 3, 5))
     soft = f"rgba({r},{g},{b},.14)"
-    return f"""<style>
+    imp = f"@import url('{_F}{kit['fonts']}&display=swap');" if kit else ""
+    return f"""<style>{imp}
 :root{{--y:{acc}}}
 [data-testid^="stBaseButton-primary"]{{background:{acc}!important;border-color:{acc}!important}}
 [data-testid^="stBaseButton-primary"] *{{color:{on}!important}}
@@ -4670,6 +4844,7 @@ def theme_css(state: dict) -> str:
 [data-testid="stSlider"] [role="slider"]{{background-color:{acc}!important}}
 [data-testid="stSliderThumbValue"]{{color:{acc}!important}}
 a{{color:{acc}}}
+{kit_css(kit) if kit else ""}
 </style>"""
 
 
@@ -4883,6 +5058,14 @@ st.markdown(f"<div class='dod-hero'><h1>Deadline or Die</h1><p>{greet}, {html.es
                if now().weekday() in DANGER_DAYS else "") + "</p></div>", unsafe_allow_html=True)
 render_cluster(state)
 render_debt(state)
+if st.session_state.get("kit_preview") in KITS:
+    _pk = KITS[st.session_state["kit_preview"]]
+    _c1, _c2 = st.columns([5, 1], vertical_alignment="center")
+    _c1.info(f"👀 Previewing the **{_pk['name']}** kit ({_pk['cost']:,} 🪙). Only you see this, just this visit. "
+             "Buy it in Garage → 🏁 Kits.")
+    if _c2.button("Stop preview", key="kit_stop_top", use_container_width=True):
+        st.session_state.pop("kit_preview", None)
+        st.rerun()
 
 for kind, m in sync_msgs:
     getattr(st, kind)(m)
@@ -5760,8 +5943,11 @@ with tab_garage:
             else:
                 st.caption("Can't afford repairs. Go finish something.")
 
+    render_kits(state)
     with fold("paint", "🎨 Paint shop — colour the whole app", False):
-        st.caption("Unlock Honda colours for the app itself: buttons, timer, instrument cluster, everything.")
+        _kit_on = active_kit(state)
+        st.caption(f"Your **{_kit_on['name']}** kit sets its own colours: switch to Stock (above) to use these."
+                   if _kit_on else "Unlock Honda colours for the app itself: buttons, timer, instrument cluster, everything.")
         owned_t = state.setdefault("themes_owned", ["phoenix"])
         cur_t = state.get("ui_theme", "phoenix")
         lvl_now = level_of(state["xp"])
