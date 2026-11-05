@@ -3325,9 +3325,9 @@ def _bail_dialog(state: dict) -> None:
 
 
 def render_checkin(state: dict) -> None:
-    """One tap on the way in. Only before 3 PM and only until you've answered."""
+    """One tap on the way in. 6 AM to 3 PM, and only until you've answered."""
     d = now().date()
-    if J.peek(state, d).get("am") or now().hour >= 15:
+    if J.peek(state, d).get("am") or now().hour >= 15 or now().hour < J.NEW_DAY_AT:
         return
     with fold("checkin", "☀️ **How are you starting today?** :gray[+2 · one tap each]", card=True):
         c1, c2 = st.columns(2)
@@ -3369,7 +3369,7 @@ def _journal_form(state: dict, d, key: str) -> None:
             return
         got = J.close_day(state, d, {**ans, "mood": mood, "energy": energy}, now(), bank)
         tmr = next((x.strip(" -•") for x in (ans.get("tomorrow") or "").splitlines() if x.strip()), "")[:120]
-        if to_q and tmr and d == now().date():
+        if to_q and tmr and d == J.journal_date(now()):
             p_ = Q.parse(tmr, now() + timedelta(days=1))
             state["draft"] = {"date": (d + timedelta(days=1)).isoformat(),
                               "items": [[tmr, p_["minutes"], p_["category"], False]]}
@@ -3379,17 +3379,18 @@ def _journal_form(state: dict, d, key: str) -> None:
 
 
 def render_close_day(state: dict) -> None:
-    """From 5 PM: a short end-of-day questionnaire. Pays a little, once."""
-    d = now().date()
-    if now().hour < J.PM_OPENS:
+    """5 PM to 2 AM: a short end-of-day questionnaire (after midnight it's still for the day you're closing)."""
+    if not J.pm_open(now()):
         return
+    d = J.journal_date(now())
     pm = J.peek(state, d).get("pm")
     if pm:
         st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div>📓 Day journaled "
                     f"{J.MOODS[pm['mood']]} <span class='m'>· +{pm.get('paid', 0)} · edit in Stats → Journal</span></div>"
                     "</div>", unsafe_allow_html=True)
         return
-    with fold("closeday", "📓 **Close the day**", card=True):
+    late = d != now().date()
+    with fold("closeday", "📓 **Close the day**" + (f" :gray[{d:%A} · open till 2 AM]" if late else ""), card=True):
         st.caption(f"Two taps and a few lines. +{J.PM_BASE} for the taps, +{J.PM_PER_ANSWER} per real answer "
                    f"(up to +{J.PM_MAX}). It all lands in Stats → Journal and your weekly recap.")
         _journal_form(state, d, "cd")
@@ -3439,9 +3440,13 @@ def render_journal(state: dict) -> None:
     with fold("jr_recap", "📋 Recap to paste", False):
         st.code(J.recap_text(r), language=None)
     st.markdown("#### 📓 Days")
-    if not J.peek(state, today).get("pm"):
-        with fold("jr_today", f"✏️ Today, {today:%a %b} {today.day} · not journaled yet", False):
-            _journal_form(state, today, "jt")
+    jd = J.journal_date(now())  # yesterday until 2 AM · none 2–6 AM · today from 6 AM
+    if jd is None:
+        st.caption(f"🌙 The journal reopens at {J.NEW_DAY_AT} AM for the new day.")
+    elif not J.peek(state, jd).get("pm"):
+        with fold("jr_today", ("✏️ Today" if jd == today else f"✏️ {jd:%A} (open till 2 AM)")
+                  + f", {jd:%a %b} {jd.day} · not journaled yet", False):
+            _journal_form(state, jd, "jt")
     ents = J.entries(state)
     if not ents:
         st.caption("Your check-ins and evening entries land here, one card per day.")
@@ -3451,7 +3456,7 @@ def render_journal(state: dict) -> None:
         head = (f"{d_:%a %b} {d_.day} · " + (f"{J.MOODS[am['mood']]}" if am else "·") + " → "
                 + (f"{J.MOODS[pm['mood']]}" if pm else "·") + f" · ⏱️ {J.focus_on(state, d_) / 60:.1f} h · ✅ {len(done)}")
         with st.expander(head, key=f"exp_jr_{d_.isoformat()}"):
-            if (d_ == today and pm) or (d_.isoformat() in state.get("late_journal_ok", []) and not pm):
+            if (d_ == jd and pm) or (d_.isoformat() in state.get("late_journal_ok", []) and not pm):
                 _journal_form(state, d_, f"je_{d_.isoformat()}")
                 continue
             qs = J.questions(state)

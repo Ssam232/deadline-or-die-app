@@ -41,7 +41,23 @@ MULTILINE = {"happened", "blocker", "tomorrow", "grateful", "vibe", "note"}
 
 def answer_keys(entry: dict) -> list[str]:
     return [k for k in entry if k not in ("mood", "energy", "at", "paid") and not k.startswith("notion_")]
-PM_OPENS = 17        # the evening journal opens at 5 PM
+PM_OPENS = 17        # the evening journal opens at 5 PM…
+PM_CLOSES = 2        # …and stays open for that day until 2 AM
+NEW_DAY_AT = 6       # the next day's entries (morning check-in, today's journal) start at 6 AM
+
+
+def pm_open(at: datetime) -> bool:
+    """Is the evening journal open right now? 5 PM → 2 AM (the hours after midnight still belong to yesterday)."""
+    return at.hour >= PM_OPENS or at.hour < PM_CLOSES
+
+
+def journal_date(at: datetime) -> date | None:
+    """The day you're journaling for: yesterday until 2 AM, nothing 2–6 AM, today from 6 AM."""
+    if at.hour < PM_CLOSES:
+        return at.date() - timedelta(days=1)
+    if at.hour < NEW_DAY_AT:
+        return None
+    return at.date()
 RECAP_DAY, RECAP_HOUR = 6, 19   # Sunday 7 PM
 
 
@@ -78,7 +94,7 @@ def close_day(save: dict, d: date, entry: dict, at: datetime, bank) -> int:
                "mood": int(entry["mood"]), "energy": int(entry["energy"]), "at": at.isoformat(), "paid": paid, **keep}
     e["pm"].pop("notion_sig", None)  # changed → write it to Notion again
     owed = min(PM_MAX, pm_value(entry)) - paid
-    if owed > 0 and (d == at.date() or d.isoformat() in save.get("late_journal_ok", [])):
+    if owed > 0 and (d == journal_date(at) or d.isoformat() in save.get("late_journal_ok", [])):
         bank(save, owed, "📓 Journal")
         e["pm"]["paid"] = paid + owed
         return owed
