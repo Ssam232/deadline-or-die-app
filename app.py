@@ -2770,6 +2770,48 @@ def render_qualify_form(state: dict) -> None:
     st.rerun(scope="app")
 
 
+REMOVE_REASONS = ["Duplicate of another task", "Merged into another task", "Plans changed: not needed anymore",
+                  "Made by mistake", "Someone else is doing it", "Other"]
+REMOVALS_PER_WEEK = 3  # free removals with a reason; past that it's Abandon (with the penalty) as before
+
+
+def removals_this_week(state: dict) -> int:
+    ws = now().date() - timedelta(days=now().weekday())
+    return sum(1 for r in state.get("removals", []) if (r.get("at") or "")[:10] >= ws.isoformat() and not r.get("auto"))
+
+
+def remove_task(state: dict, t: dict, reason: str, note: str) -> None:
+    """Take an open task off the board without a penalty, with the reason on record (ledger + removals log).
+    It's marked cancelled, not erased: the Notion row and Fortuna card get tidied by the normal sync."""
+    t.update(status="cancelled", cancelled_at=now().isoformat(), cancel_reason=f"{reason}: {note}".strip(": "))
+    t.pop("mission_day", None)
+    state.setdefault("removals", []).append({"at": now().isoformat(), "title": t["title"][:80], "reason": reason,
+                                             "note": note[:200]})
+    del state["removals"][:-50]
+    bank(state, 0, f"🗑️ Removed: {t['title'][:50]} ({reason}{': ' + note[:60] if note else ''})")
+
+
+def render_remove(state: dict, t: dict, scope: str) -> None:
+    left = REMOVALS_PER_WEEK - removals_this_week(state)
+    with st.popover(f"🗑️ Remove with a reason · {max(0, left)} left this week", use_container_width=True):
+        if left <= 0:
+            st.caption(f"You've used your {REMOVALS_PER_WEEK} free removals this week. Abandon it (penalty) or finish it.")
+            return
+        why = st.selectbox("Why are you removing it?", REMOVE_REASONS, index=None, key=f"{scope}rmwhy_{t['id']}",
+                           placeholder="Pick a reason")
+        note = st.text_input("In a few words", key=f"{scope}rmnote_{t['id']}", max_chars=200,
+                             placeholder="e.g. same paper as the Read: Development… task")
+        ok = bool(why) and len(note.strip()) >= 8
+        if not ok:
+            st.caption("A reason and a short note (8+ characters) are required. No penalty; it goes in your ledger.")
+        if st.button("Remove it", key=f"{scope}rm_{t['id']}", type="primary", disabled=not ok, use_container_width=True):
+            remove_task(state, t, why, note.strip())
+            save_state(state)
+            flash(f"🗑️ Removed **{t['title'][:60]}** · {why}. No penalty ({left - 1} free removal"
+                  f"{'s' * (left - 1 != 1)} left this week).")
+            st.rerun()
+
+
 READING_TASK = re.compile(r"\b(read|reading|paper|papers|article|articles|lit(erature)?\s*review)\b", re.I)
 
 
@@ -2840,12 +2882,8 @@ def render_paper_pair(state: dict, t: dict, scope: str) -> None:
             _proof_touch(f"{scope}open_{t['id']}")
             if x.get("focus_min") and not t.get("focus_min"):
                 t["focus_min"] = x["focus_min"]  # keep any timer minutes already logged on the spare
-            state["tasks"].remove(x)
-            if x.get("sync_page") and notion_cfg():
-                try:
-                    archive_page(notion_ctx()[0], x["sync_page"])
-                except Exception:  # noqa: BLE001
-                    pass
+            remove_task(state, x, "Duplicate of another task", f"same paper as {t['title'][:60]}")
+            state["removals"][-1]["auto"] = True  # doesn't use up a weekly removal: it's provably the same paper
             save_state(state)
             flash(f"🗑️ Removed the spare **{x['title'][:60]}**. One task for this paper now.")
             st.rerun()
@@ -2890,6 +2928,8 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
         else:
             ca.caption("No extensions left.")
         young = now() - parse_dt(t["created"]) < timedelta(minutes=FREE_DELETE_MIN)
+        if not young:
+            render_remove(state, t, scope)
         label = "🗑️ Delete (free)" if young else f"🏳️ Abandon (−{t['penalty']} 🪙)"
         if cb.checkbox("Confirm", key=f"{scope}conf_{t['id']}") and cb.button(label, key=f"{scope}ab_{t['id']}"):
             if young:
