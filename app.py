@@ -330,6 +330,11 @@ def _zotero_list(user: str, key: str, coll: str) -> list[dict]:
     return Z.to_read(user, key, coll)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _zotero_reading(user: str, key: str, coll: str) -> list[dict]:
+    return Z.reading_list(user, key, coll)
+
+
 def zotero_cfg(state: dict) -> tuple[str, str, str] | None:
     u, k = get_secret("ZOTERO_USER_ID"), get_secret("ZOTERO_API_KEY")
     return (str(u), k, state["settings"].get("zotero_collection") or "To Read") if u and k else None
@@ -1737,6 +1742,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         def _zot():
             Z.mark_read(zc[0], zc[1], zk)
             _zotero_list.clear()  # so the To Read list drops it
+            _zotero_reading.clear()
         jobs.append(("Couldn't tag it read in Zotero", _zot))
         msg += "\n\n📄 Tagging it **read** in Zotero."
     if t.get("notion_id") and state["settings"].get("notion_done_prop") and t.get("notion_done_type"):
@@ -4150,6 +4156,95 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
                         render_proof_form(state, t, "redeem", scope="tb_")
 
 
+READING_LABELS = {"unread": "To read", "reading": "Reading", "read": "Read", "dropped": "Dropped"}
+
+
+def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
+    """Runs when a paper's status control changes. Saves to Zotero, or puts the control back if that fails."""
+    new = {v: k for k, v in READING_LABELS.items()}.get(st.session_state.get(widget))
+    if not new:  # tapping the selected option clears it: treat that as no change
+        st.session_state[widget] = READING_LABELS[p["status"]]
+        return
+    try:
+        Z.set_status(zc[0], zc[1], p["key"], new)
+    except Exception as e:
+        st.session_state[widget] = READING_LABELS[p["status"]]
+        flash(f"Couldn't update that paper: {e}", "error")
+        return
+    _zotero_reading.clear()
+    _zotero_list.clear()
+    if new in ("read", "dropped") and any(t.get("zotero_key") == p["key"] and t["status"] == "open" for t in state["tasks"]):
+        flash(f"📄 Marked **{READING_LABELS[new].lower()}**. Its task is still open on your list.", "warning")
+
+
+def render_reading_list(state: dict) -> None:
+    zc = zotero_cfg(state)
+    if not zc:
+        st.caption("Add ZOTERO_USER_ID and ZOTERO_API_KEY in Settings to see your reading list here.")
+        return
+    try:
+        papers = _zotero_reading(*zc)
+    except Exception as e:
+        st.caption(f"(Couldn't read Zotero: {e})")
+        return
+    if not papers:
+        st.caption(f"Nothing in “{zc[2]}” yet.")
+        return
+    count = {s_: sum(p["status"] == s_ for p in papers) for s_ in READING_LABELS}
+    kept = len(papers) - count["dropped"]
+    st.progress(count["read"] / kept if kept else 0.0,
+                text=f"{count['read']} of {kept} read" + (f" · {count['reading']} in progress" if count["reading"] else "")
+                     + (f" · {count['dropped']} dropped" if count["dropped"] else ""))
+    views = {"To read": ("unread", "reading"), "Read": ("read",), "Dropped": ("dropped",),
+             "All": ("unread", "reading", "read", "dropped")}
+    view = st.segmented_control("Show", list(views), default="To read", key="reading_view",
+                                label_visibility="collapsed") or "To read"
+    shown = [p for p in papers if p["status"] in views[view]]
+    if not shown:
+        st.caption({"Read": "Nothing read yet.", "Dropped": "Nothing dropped."}.get(view, "All caught up."))
+    open_keys = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
+    seen_levels = {"last": object()}
+
+    def _row(p: dict) -> None:
+        if p["level"] != seen_levels["last"]:
+            seen_levels["last"] = p["level"]
+            st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(p['level'] or 'Not ordered yet')}</div>",
+                        unsafe_allow_html=True)
+        meta = " · ".join(x for x in (p["who"], p["year"], p["journal"]) if x)
+        num = f"<b>{html.escape(p['order'])}</b> · " if p["order"] else ""
+        st.markdown(f"{num}<a href='{html.escape(p['url'], quote=True)}' target='_blank'>{html.escape(p['title'])}</a>"
+                    + (f"<br><small style='color:#8b909c'>{html.escape(meta)}</small>" if meta else ""),
+                    unsafe_allow_html=True)
+        c1, c2 = st.columns([4, 1.2], vertical_alignment="center")
+        widget = f"paper_{p['key']}_{p['status']}"  # a new status starts a fresh control
+        c1.segmented_control(f"Status of {p['title'][:60]}", list(READING_LABELS.values()),
+                             default=READING_LABELS[p["status"]], key=widget, label_visibility="collapsed",
+                             on_change=_set_paper_status, args=(zc, p, widget))
+        if p["key"] in open_keys:
+            c2.caption("On your tasks")
+        elif p["status"] in ("unread", "reading"):
+            if c2.button("➕ Task", key=f"paper_task_{p['key']}", use_container_width=True,
+                         help="A 45-minute deep-work task, due tonight. Finishing it with proof earns coins and marks the paper read."):
+                nt = make_task(f"📄 Read: {p['title'][:80]}", f"Proof: photo/screenshot of your notes + a 2-line summary. {p['url']}",
+                               datetime.combine(now().date(), dtime(23, 59), TZ), None, "", category="deep", minutes=45)
+                nt["zotero_key"] = p["key"]
+                if daily.peek_day(state, now().date()).get("qualified"):
+                    nt["mission_day"] = now().date().isoformat()
+                state["tasks"].append(nt)
+                save_state(state)
+                flash(f"📄 **{nt['title']}** added, due tonight" + (" · in today's mission" if nt.get("mission_day") else "") + ".")
+                st.rerun()
+
+    first = 6 if view == "To read" else len(shown)  # the next few papers; the rest stay a tap away
+    for p in shown[:first]:
+        _row(p)
+    if len(shown) > first:
+        with fold("reading_more", f"Show {len(shown) - first} more", False):
+            for p in shown[first:]:
+                _row(p)
+    st.caption("Ticking a paper here only tracks it. Coins come from finishing its task with proof.")
+
+
 def render_contracts(state: dict) -> None:
     n_ = now()
     claimed = state.setdefault("contracts_claimed", [])
@@ -5209,6 +5304,9 @@ with tab_tasks:
                 with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
                                  expanded=proof_open(f"redeem_{t['id']}")):
                     render_proof_form(state, t, "redeem")
+
+    with fold("tasks_reading", "📚 **Reading list**", True, card=True):
+        render_reading_list(state)
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
     recents, seen_ = [], {t["title"].strip().lower() for t in open_tasks}
