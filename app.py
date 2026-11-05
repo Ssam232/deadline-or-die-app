@@ -5250,8 +5250,8 @@ render_up_next(state)  # 🎯 on every page, above the tabs
 lvl = level_of(state["xp"])
 
 open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
-tab_today, tab_tasks, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
-    ["🏁 Today", "✅ Tasks", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"],
+tab_today, tab_tasks, tab_reading, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
+    ["🏁 Today", "✅ Tasks", "📚 Reading list", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"],
     key="nav", on_change="ignore" if os.getenv("DOD_ALL_TABS") else "rerun")  # remembers the open tab; only it runs
 
 # ── Today: the cockpit. Do-now on the left, instruments on the right; stacks on a phone. ──
@@ -5304,9 +5304,6 @@ with tab_tasks:
                 with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
                                  expanded=proof_open(f"redeem_{t['id']}")):
                     render_proof_form(state, t, "redeem")
-
-    with fold("tasks_reading", "📚 **Reading list**", True, card=True):
-        render_reading_list(state)
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
     recents, seen_ = [], {t["title"].strip().lower() for t in open_tasks}
@@ -5744,6 +5741,10 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
 
 
 # ── Goals ──
+with tab_reading:
+  if tab_reading.open is not False:
+    render_reading_list(state)
+
 with tab_goals:
   if tab_goals.open is not False:
     with fold("new_goal", "🗺️ New goal", not state["goals"]):

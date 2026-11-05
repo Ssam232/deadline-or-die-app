@@ -1,5 +1,5 @@
 """
-📄 Zotero reading list — papers from your "To Read" collection become one-tap deep-work tasks, and the Tasks tab
+📄 Zotero reading list — papers from your "To Read" collection become one-tap deep-work tasks, and the Reading list tab
 tracks each one as to read, reading, read or dropped. Zotero holds that status as a tag, so it stays your record.
 
 Needs ZOTERO_USER_ID + ZOTERO_API_KEY (zotero.org/settings/keys — give the key library read access,
