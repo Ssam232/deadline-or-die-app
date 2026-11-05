@@ -18,6 +18,7 @@ class Fake:
         self.write = True
         self.collections, self.items, self.tokens = [], [], set()
         self.reject_titles = set()
+        self.reject_patch = set()
         self.crossref = {"10.1/good": {"title": ["Good <i>paper</i>"], "DOI": "10.1/GOOD",
                                        "author": [{"family": "Koch", "given": "L"}], "container-title": ["J Test"],
                                        "issued": {"date-parts": [[2020, 3]]}, "abstract": "<jats:p>Abs</jats:p>"},
@@ -57,9 +58,24 @@ class H(BaseHTTPRequestHandler):
         if u.path.endswith("/items/top"):
             ck = u.path.split("/collections/")[1].split("/")[0] if "/collections/" in u.path else None
             rows = [i for i in fake.items if not ck or ck in i["data"]["collections"]]
+            if "tag" in q:
+                rows = [i for i in rows if {"tag": q["tag"][0]} in i["data"]["tags"]]
             start = int(q.get("start", ["0"])[0])
             return self.send(200, rows[start:start + int(q.get("limit", ["100"])[0])])
         self.send(404, {})
+
+    def do_PATCH(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        key = self.path.rsplit("/", 1)[1]
+        row = next(i for i in fake.items if i["key"] == key)
+        if key in fake.reject_patch:
+            return self.send(412, {})
+        if self.headers.get("If-Unmodified-Since-Version") != str(row["version"]):
+            return self.send(412, {})
+        row["data"].update(body)
+        row["version"] += 1
+        self.send_response(204)
+        self.end_headers()
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -125,8 +141,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(d["title"], "Good paper")
         self.assertEqual(d["DOI"], "10.1/good")
         self.assertEqual(d["date"], "2020-03")
-        self.assertEqual(d["collections"], ["COLL0"])
-        self.assertEqual(fake.collections[0]["data"]["name"], "To Read")
+        self.assertEqual(d["collections"], ["COLL0", "COLL1"])
+        self.assertEqual([c["data"]["name"] for c in fake.collections], ["To Read", "LCR HCR CVxR"])
         self.assertIn({"tag": "q1"}, d["tags"])
         self.assertFalse(list((self.root / "queue").glob("*.json")))
         self.assertTrue((self.root / "done" / "2026-11-04.json").exists())
@@ -190,6 +206,36 @@ class Tests(unittest.TestCase):
         fake.reject_titles = set()
         self.assertEqual(self.m.run(), 0)
         self.assertEqual([i["data"]["title"] for i in fake.items], ["Unknown paper"])
+
+    def scout_item(self, key="OLD1", colls=("TOREAD",), tags=("paper-scout",)):
+        fake.items.append({"key": key, "version": 3, "data": {"title": f"Paper {key}", "collections": list(colls),
+                                                              "tags": [{"tag": t} for t in tags]}})
+
+    def test_earlier_imports_join_the_project_collection_and_keep_the_others(self):
+        self.scout_item()
+        self.scout_item("MINE", colls=("OTHER",), tags=("my-own",))
+        self.assertEqual(self.m.run(), 0)
+        project = next(c["key"] for c in fake.collections if c["data"]["name"] == "LCR HCR CVxR")
+        self.assertEqual(fake.items[0]["data"]["collections"], ["TOREAD", project])
+        self.assertEqual(fake.items[1]["data"]["collections"], ["OTHER"])
+        self.assertIn("Added 1", (self.root / self.m.BACKFILL_MARKER).read_text())
+
+    def test_backfill_runs_once_so_a_later_removal_sticks(self):
+        self.scout_item()
+        self.m.run()
+        fake.items[0]["data"]["collections"] = ["TOREAD"]
+        self.queue([{"doi": "10.1/good", "title": "Good paper"}])
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(fake.items[0]["data"]["collections"], ["TOREAD"])
+
+    def test_failed_backfill_is_reported_and_retried(self):
+        self.scout_item()
+        fake.reject_patch = {"OLD1"}
+        self.assertEqual(self.m.run(), 1)
+        self.assertFalse((self.root / self.m.BACKFILL_MARKER).exists())
+        fake.reject_patch = set()
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(len(fake.items[0]["data"]["collections"]), 2)
 
     def test_webpage_entry(self):
         self.queue([{"kind": "webpage", "title": "Protocol", "url": "https://x.org/p.pdf", "source": "TREAT-NMD"}])

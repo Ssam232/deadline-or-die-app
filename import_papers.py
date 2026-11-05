@@ -1,14 +1,16 @@
 """
-Moves papers from queue/*.json into the Zotero "To Read" collection.
+Moves papers from queue/*.json into two Zotero collections: "To Read" and "LCR HCR CVxR".
 
-Deadline or Die already reads that collection, so a paper imported here shows up in the app
-with no change to the app itself. Runs in GitHub Actions, where the Zotero key lives as a secret.
+Deadline or Die already reads "To Read", so a paper imported here shows up in the app with no
+change to the app itself. "LCR HCR CVxR" is the permanent record of everything the search sent.
+An item in two collections is one item in Zotero, not a duplicate. Runs in GitHub Actions, where the Zotero key lives as a secret.
 
 Rules:
   - Metadata comes from Crossref or Europe PMC, never from the queue file alone, and is checked
     against the queued title. A failed lookup or a title mismatch still adds the paper, using what
     the queue supplied, but tags it "needs-check" and leaves the DOI off.
-  - A paper already in the library is skipped. Existing items are never edited or deleted.
+  - A paper already in the library is skipped. Existing items are never edited or deleted, apart
+    from one one-time step that adds earlier imports (tag "paper-scout") to "LCR HCR CVxR".
   - A queue file moves to done/ only once every paper in it has been handled.
 """
 from __future__ import annotations
@@ -30,6 +32,8 @@ CROSSREF = os.getenv("CROSSREF_BASE", "https://api.crossref.org")
 EPMC = os.getenv("EPMC_BASE", "https://www.ebi.ac.uk/europepmc/webservices/rest")
 UA = {"User-Agent": "deadline-or-die-paper-importer (github.com/Ssam232/deadline-or-die-app)"}
 ROOT = Path(os.getenv("QUEUE_ROOT", "."))
+PROJECT = "LCR HCR CVxR"
+BACKFILL_MARKER = "backfill-lcr-hcr-cvxr.done"
 MATCH = 0.72
 BATCH = 50
 
@@ -144,12 +148,12 @@ def resolve(paper: dict) -> tuple[dict | None, str]:
     return None, "; ".join(tried) or "no identifier resolved"
 
 
-def build_item(paper: dict, collection: str) -> dict:
+def build_item(paper: dict, collections: list[str]) -> dict:
     tags = [{"tag": t} for t in paper.get("tags", [])] + [{"tag": "paper-scout"}]
     if paper.get("kind") == "webpage":
         return {"itemType": "webpage", "title": paper["title"], "url": paper.get("url", ""), "creators": [],
                 "websiteTitle": paper.get("source", ""), "date": paper.get("date", ""),
-                "tags": tags, "collections": [collection], "relations": {}}
+                "tags": tags, "collections": collections, "relations": {}}
     meta, why = resolve(paper)
     if meta is None:
         print(f"  needs-check: {paper.get('title', '?')[:70]} ({why})")
@@ -160,7 +164,7 @@ def build_item(paper: dict, collection: str) -> dict:
     pmcid = paper.get("pmcid")
     url = (f"https://doi.org/{doi}" if doi else
            f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/" if pmcid else paper.get("url", ""))
-    return {"itemType": "journalArticle", **meta, "url": url, "tags": tags, "collections": [collection], "relations": {}}
+    return {"itemType": "journalArticle", **meta, "url": url, "tags": tags, "collections": collections, "relations": {}}
 
 
 # ---- zotero ---------------------------------------------------------------------------------
@@ -178,10 +182,11 @@ class Library:
             raise ImportFailure("The Zotero key is read-only. Turn on 'Allow write access' at "
                                 "zotero.org/settings/keys, then re-run this workflow.")
 
-    def _pages(self, path: str):
+    def _pages(self, path: str, **params):
         start = 0
         while True:
-            r = requests.get(f"{self.base}{path}", headers=self.h, params={"limit": 100, "start": start}, timeout=30)
+            r = requests.get(f"{self.base}{path}", headers=self.h, timeout=30,
+                             params={"limit": 100, "start": start, **params})
             if r.status_code != 200:
                 raise ImportFailure(f"Zotero read failed ({r.status_code}): {r.text[:160]}")
             rows = r.json()
@@ -212,6 +217,21 @@ class Library:
                 titles.add(norm_title(d["title"]))
         return dois, titles
 
+    def add_scout_items_to(self, collection: str) -> tuple[int, list[str]]:
+        """Adds earlier imports to a collection. Changes only that membership, and keeps every other one."""
+        added, errors = 0, []
+        for it in list(self._pages("/items/top", tag="paper-scout")):
+            current = it["data"].get("collections", [])
+            if collection in current:
+                continue
+            r = requests.patch(f"{self.base}/items/{it['key']}", json={"collections": current + [collection]},
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code in (200, 204):
+                added += 1
+            else:
+                errors.append(f'{it["data"].get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        return added, errors
+
     def create(self, items: list[dict]) -> list[str]:
         """Creates items, returns a failure message per item that did not save."""
         errors = []
@@ -234,20 +254,32 @@ def run() -> int:
     if not user or not key:
         raise ImportFailure("Add ZOTERO_USER_ID and ZOTERO_API_KEY as GitHub Actions secrets, then re-run this workflow.")
     pending = sorted((ROOT / "queue").glob("*.json"))
-    if not pending:
+    marker = ROOT / BACKFILL_MARKER
+    if not pending and marker.exists():
         print("Queue is empty.")
         return 0
     lib = Library(user, key)
     lib.check_write()
-    coll = lib.collection(os.getenv("ZOTERO_COLLECTION") or "To Read")
+    to_read = lib.collection(os.getenv("ZOTERO_COLLECTION") or "To Read")
+    project = lib.collection(PROJECT)
+    colls = [to_read, project]
+    failed_any = False
+    if not marker.exists():
+        moved, errors = lib.add_scout_items_to(project)
+        if errors:
+            failed_any = True
+            print("Could not add every earlier paper:\n  " + "\n  ".join(errors))
+        else:
+            marker.write_text(f"Added {moved} earlier papers to {PROJECT}.\n")
+            print(f"Added {moved} earlier papers to {PROJECT}.")
     dois, titles = lib.known()
-    log, failed_any = [], False
+    log = []
     (ROOT / "done").mkdir(exist_ok=True)
     for path in pending:
         papers = json.loads(path.read_text()).get("papers", [])
         items, outcomes = [], []
         for p in papers:
-            item = build_item(p, coll)
+            item = build_item(p, colls)
             doi, title = norm_doi(item.get("DOI")), norm_title(item["title"])
             if (doi and doi in dois) or title in titles:
                 outcomes.append(("skipped: already in library", item))
