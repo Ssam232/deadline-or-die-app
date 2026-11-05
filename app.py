@@ -3830,6 +3830,27 @@ def render_timer(state: dict) -> None:
         _timer_controls(state)
 
 
+def _skip_break(state: dict) -> None:
+    """Runs the moment you tap ☕ Skip break. Checks the clock right then (the button no longer waits for the
+    controls' 10-second refresh to switch itself on), so a tap during a break always lands."""
+    tm = state.get("timer")
+    if not tm:
+        return
+    eff = PM.effective_elapsed(tm, now().timestamp())
+    ph, left = PM.phase(eff, tm.get("work"), tm.get("brk"), tm["planned"])
+    if tm.get("paused_at"):
+        flash("⏸️ Resume first, then skip the break.", "info")
+    elif ph != "break":
+        nxt = (tm.get("work") or 0) and ph == "work"
+        flash("☕ No break right now" + (f" — the next one starts in {int(left) + 1} min." if nxt and tm.get("brk")
+                                         and PM.work_done(eff, tm["work"], tm["brk"]) + left < tm["planned"] else "."), "info")
+    else:
+        tm["skipped"] = tm.get("skipped", 0.0) + left * 60
+        save_state(state)
+        flash(f"☕ Break skipped ({int(left) + 1} min). Back on track.", "success")
+    st.session_state["_tm_redraw"] = True
+
+
 @st.fragment(run_every=10)
 def _timer_controls(state: dict) -> None:
     """Pause / skip break / stop. Refreshes itself so 'Skip break' shows up when a break starts."""
@@ -3859,12 +3880,10 @@ def _timer_controls(state: dict) -> None:
         bank(state, -cost, f"⏸️ Pause #{tm['pauses']} during focus")
         save_state(state)
         st.rerun()
-    in_break = ph == "break" and not paused
-    if c2.button("☕ Skip break", use_container_width=True, key="tm_skip", disabled=not in_break,
-                 help="Jump straight to the next work block." if in_break else "Shows up during a break."):
-        tm["skipped"] = tm.get("skipped", 0.0) + left * 60
-        save_state(state)
-        st.rerun()
+    if st.session_state.pop("_tm_redraw", False):
+        st.rerun(scope="app")  # the clock lives outside these controls: redraw it with the new times
+    c2.button("☕ Skip break", use_container_width=True, key="tm_skip", on_click=_skip_break, args=(state,),
+              help="Jump straight to the next work block (works whenever you're on a break).")
     wd_now = PM.work_done(eff, work, brk)
     near_end = tm["planned"] - wd_now <= FLOW_WINDOW
     if not paused and ph != "break" and near_end and tm.get("ext", 0) < FLOW_MAX_EXT:
