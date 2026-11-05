@@ -19,6 +19,7 @@ DROPPED_TAG = "dropped"
 STATUS_TAGS = (READ_TAG, READING_TAG, DROPPED_TAG)
 SKIP_TYPES = {"attachment", "note", "annotation"}
 LEVELS = {"A": "Foundational", "B": "Core", "C": "Specialized", "D": "Niche"}
+FACETS = ("subject", "species", "sex", "type")  # Zotero tags written as "subject:Diet and muscle"
 _ORDER = re.compile(r"^Read order:\s*([A-D])(\d+)", re.M | re.I)
 
 
@@ -73,6 +74,15 @@ def _status(tags: list[dict]) -> str:
     return next((t for t in (READ_TAG, DROPPED_TAG, READING_TAG) if t in names), "unread")
 
 
+def _facets(tags: list[dict]) -> dict:
+    out = {f: [] for f in FACETS}
+    for t in tags:
+        name, _, value = (t.get("tag") or "").partition(":")
+        if name in out and value.strip():
+            out[name].append(value.strip())
+    return out
+
+
 def _folder_items(user: str, key: str, folder: str):
     start = 0
     while True:
@@ -103,7 +113,8 @@ def reading_list(user: str, key: str, collection: str = "To Read") -> list[dict]
         out.append({"key": it["key"], "title": d.get("title") or "(untitled)", "who": who,
                     "year": (d.get("date") or "")[:4], "journal": d.get("publicationTitle") or d.get("websiteTitle") or "",
                     "url": d.get("url") or f"https://www.zotero.org/users/{user}/items/{it['key']}",
-                    "status": _status(d.get("tags", [])),
+                    "status": _status(d.get("tags", [])), "facets": _facets(d.get("tags", [])),
+                    "needs_check": any(t.get("tag") == "needs-check" for t in d.get("tags", [])),
                     "order": f"{m[1].upper()}{int(m[2]):02d}" if m else "", "level": LEVELS.get(m[1].upper()) if m else None})
     out.sort(key=lambda p: p["order"] or "~")  # stable: unordered papers keep their oldest-first order at the end
     return out

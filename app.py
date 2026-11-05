@@ -4157,6 +4157,20 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
 
 
 READING_LABELS = {"unread": "To read", "reading": "Reading", "read": "Read", "dropped": "Dropped"}
+READING_SORTS = {"Read order": lambda p: p["order"] or "~",
+                 "Newest first": lambda p: -int(p["year"]) if p["year"].isdigit() else 1,
+                 "Oldest first": lambda p: int(p["year"]) if p["year"].isdigit() else 9999,
+                 "Title": lambda p: p["title"].casefold(),
+                 "Author": lambda p: p["who"].casefold() or "~",
+                 "Subject": lambda p: (p["facets"]["subject"] or ["~"])[0].casefold()}
+READING_FILTERS = {"subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type"}
+
+
+def _paper_chips(p: dict) -> str:
+    """Small labels under a paper's title."""
+    vals = [v for f in READING_FILTERS for v in p["facets"][f]] + (["needs check"] if p["needs_check"] else [])
+    return "".join(f"<span style='display:inline-block;border:1px solid #8b909c66;border-radius:999px;padding:0 .5rem;"
+                   f"margin:.2rem .25rem 0 0;font-size:.72rem;color:#a4a9b5'>{html.escape(v)}</span>" for v in vals)
 
 
 def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
@@ -4199,21 +4213,41 @@ def render_reading_list(state: dict) -> None:
              "All": ("unread", "reading", "read", "dropped")}
     view = st.segmented_control("Show", list(views), default="To read", key="reading_view",
                                 label_visibility="collapsed") or "To read"
-    shown = [p for p in papers if p["status"] in views[view]]
+    with fold("reading_filter", "🔎 Sort and filter", False):
+        c1, c2 = st.columns(2)
+        sort = c1.selectbox("Sort by", list(READING_SORTS), key="reading_sort")
+        search = c2.text_input("Search", placeholder="Title, author or journal", key="reading_search").strip().casefold()
+        options = {f: sorted({v for p in papers for v in p["facets"][f]}) for f in READING_FILTERS}
+        years = sorted({p["year"] for p in papers if p["year"]}, reverse=True)
+        cols = st.columns(2)
+        picked = {f: cols[i % 2].multiselect(READING_FILTERS[f], options[f], key=f"reading_f_{f}")
+                  for i, f in enumerate(READING_FILTERS) if options[f]}
+        picked_years = cols[len(picked) % 2].multiselect("Year", years, key="reading_f_year")
+    filtered = bool(search or picked_years or any(picked.values()))
+    shown = [p for p in papers if p["status"] in views[view]
+             and (not picked_years or p["year"] in picked_years)
+             and all(not vals or set(vals) & set(p["facets"][f]) for f, vals in picked.items())
+             and (not search or search in f"{p['title']} {p['who']} {p['journal']}".casefold())]
+    shown.sort(key=READING_SORTS[sort])  # stable, so ties stay in read order
+    if filtered:
+        st.caption(f"Showing {len(shown)} of {sum(p['status'] in views[view] for p in papers)}. Change these in Sort and filter.")
     if not shown:
-        st.caption({"Read": "Nothing read yet.", "Dropped": "Nothing dropped."}.get(view, "All caught up."))
+        st.caption("No papers match those filters." if filtered else
+                   {"Read": "Nothing read yet.", "Dropped": "Nothing dropped."}.get(view, "All caught up."))
     open_keys = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
     seen_levels = {"last": object()}
 
     def _row(p: dict) -> None:
-        if p["level"] != seen_levels["last"]:
-            seen_levels["last"] = p["level"]
-            st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(p['level'] or 'Not ordered yet')}</div>",
-                        unsafe_allow_html=True)
+        head = (p["level"] or "Not ordered yet") if sort == "Read order" else \
+               ((p["facets"]["subject"] or ["No subject"])[0] if sort == "Subject" else None)
+        if head and head != seen_levels["last"]:
+            seen_levels["last"] = head
+            st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(head)}</div>", unsafe_allow_html=True)
         meta = " · ".join(x for x in (p["who"], p["year"], p["journal"]) if x)
         num = f"<b>{html.escape(p['order'])}</b> · " if p["order"] else ""
         st.markdown(f"{num}<a href='{html.escape(p['url'], quote=True)}' target='_blank'>{html.escape(p['title'])}</a>"
-                    + (f"<br><small style='color:#8b909c'>{html.escape(meta)}</small>" if meta else ""),
+                    + (f"<br><small style='color:#8b909c'>{html.escape(meta)}</small>" if meta else "")
+                    + (f"<br>{chips}" if (chips := _paper_chips(p)) else ""),
                     unsafe_allow_html=True)
         c1, c2 = st.columns([4, 1.2], vertical_alignment="center")
         widget = f"paper_{p['key']}_{p['status']}"  # a new status starts a fresh control
@@ -4235,7 +4269,8 @@ def render_reading_list(state: dict) -> None:
                 flash(f"📄 **{nt['title']}** added, due tonight" + (" · in today's mission" if nt.get("mission_day") else "") + ".")
                 st.rerun()
 
-    first = 6 if view == "To read" else len(shown)  # the next few papers; the rest stay a tap away
+    # the next few papers; the rest stay a tap away. Sorting or filtering shows everything that matches.
+    first = 6 if view == "To read" and sort == "Read order" and not filtered else len(shown)
     for p in shown[:first]:
         _row(p)
     if len(shown) > first:
@@ -5975,6 +6010,20 @@ with tab_stats:
                 delta=f"{full['failed']} missed" if full["failed"] else None, delta_color="inverse")
     k[2].metric("Focus hours", f"{full['focus_min'] / 60:.1f}", help="Timer-logged work minutes (breaks excluded).")
     k[3].metric("Active days", f"{full['active_days']}/28")
+    zc_ = zotero_cfg(state)
+    if zc_:
+        try:
+            papers_ = _zotero_reading(*zc_)
+        except Exception as e:
+            papers_ = None
+            st.caption(f"(Couldn't read your reading list from Zotero: {e})")
+        if papers_:
+            n_ = {s_: sum(p["status"] == s_ for p in papers_) for s_ in READING_LABELS}
+            r_ = st.columns(4)
+            r_[0].metric("📚 Papers read", n_["read"], help="All time, from your Reading list tab.")
+            r_[1].metric("Reading now", n_["reading"])
+            r_[2].metric("Still to read", n_["unread"])
+            r_[3].metric("Dropped", n_["dropped"])
     hr_ = DL.hit_rate(state, now().date())
     if hr_ is not None:
         st.caption(f"🔁 Dailies hit rate (28 days): **{hr_:.0%}**")
