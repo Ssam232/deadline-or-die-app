@@ -13,7 +13,11 @@ Rules:
     from one-time steps on earlier imports (tag "paper-scout"): adding them to "LCR HCR CVxR", and
     writing the read order from reading-order.json.
   - Read order lives in the item's Extra field as "Read order: B07 (Core)", so sorting by Extra in
-    Zotero and the list in Deadline or Die agree. A new paper's "level" puts it at the end of that level.
+    Zotero and the list in Deadline or Die agree.
+  - A new paper goes before the title in its "before" field, or at the end of its "level" if there is
+    none. Papers after it in that level move down one, which changes only their read-order line.
+  - reading-order.json is rewritten from Zotero after each import, so the next search sees the real order.
+  - At most MAX_NEW_PER_RUN papers are added per run. Any extras stay in the queue for the next run.
   - A queue file moves to done/ only once every paper in it has been handled.
 """
 from __future__ import annotations
@@ -42,6 +46,7 @@ ORDER_MARKER = "reading-order.done"
 LEVELS = {"foundational": ("A", "Foundational"), "core": ("B", "Core"),
           "specialized": ("C", "Specialized"), "niche": ("D", "Niche")}
 LETTER_NAMES = {letter: name for letter, name in LEVELS.values()}
+MAX_NEW_PER_RUN = 2
 ORDER_LINE = re.compile(r"^Read order:\s*([A-D])(\d+).*$", re.M | re.I)
 MATCH = 0.72
 BATCH = 50
@@ -183,11 +188,36 @@ def with_order(extra: str | None, code: str) -> str:
     return "\n".join([line, *rest])
 
 
-def next_code(level: str | None, used: dict[str, int]) -> str:
-    """The next free code at the end of a level. A paper with no level counts as specialized."""
-    letter = LEVELS.get((level or "").strip().lower(), LEVELS["specialized"])[0]
-    used[letter] = used.get(letter, 0) + 1
-    return f"{letter}{used[letter]:02d}"
+def place(rows: list[dict], new: list[tuple[dict, dict]]) -> list[tuple[dict, str]]:
+    """Fits new papers into the read order and numbers each level 1, 2, 3...
+
+    rows is the current order, new is (queue entry, Zotero item) pairs. Sets each new item's Extra and returns
+    the (existing row, new code) pairs that have to change.
+    """
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["code"][0], []).append(row)
+    for paper, item in new:
+        entry = {"item": item}
+        anchor = norm_title(paper.get("before"))
+        spot = next(((letter, i) for letter, g in groups.items() for i, r in enumerate(g)
+                     if anchor and norm_title(r.get("title")) == anchor), None)
+        if spot:
+            groups[spot[0]].insert(spot[1], entry)
+        else:
+            if anchor:
+                print(f'  "{paper["before"][:60]}" is not in the read order, so using the level instead.')
+            letter = LEVELS.get((paper.get("level") or "").strip().lower(), LEVELS["specialized"])[0]
+            groups.setdefault(letter, []).append(entry)
+    changes = []
+    for letter, group in groups.items():
+        for n, entry in enumerate(group, 1):
+            code = f"{letter}{n:02d}"
+            if "item" in entry:
+                entry["item"]["extra"] = with_order(entry["item"].get("extra"), code)
+            elif entry["code"] != code:
+                changes.append((entry, code))
+    return changes
 
 
 # ---- zotero ---------------------------------------------------------------------------------
@@ -280,13 +310,27 @@ class Library:
             errors.append("no library item found for " + ", ".join(missing))
         return written, errors
 
-    def used_codes(self) -> dict[str, int]:
-        used: dict[str, int] = {}
+    def ordered(self) -> list[dict]:
+        """Every item with a read-order line, in order."""
+        rows = []
         for it in self._pages("/items/top"):
-            m = ORDER_LINE.search(it["data"].get("extra") or "")
+            d = it["data"]
+            m = ORDER_LINE.search(d.get("extra") or "")
             if m:
-                used[m[1].upper()] = max(used.get(m[1].upper(), 0), int(m[2]))
-        return used
+                rows.append({"key": it["key"], "version": it["version"], "extra": d.get("extra"),
+                             "code": f"{m[1].upper()}{int(m[2]):02d}", "num": int(m[2]),
+                             "title": d.get("title", ""), "doi": norm_doi(d.get("DOI"))})
+        rows.sort(key=lambda r: (r["code"][0], r["num"]))
+        return rows
+
+    def write_codes(self, changes: list[tuple[dict, str]]) -> list[str]:
+        errors = []
+        for row, code in changes:
+            r = requests.patch(f"{self.base}/items/{row['key']}", json={"extra": with_order(row["extra"], code)},
+                               headers={**self.h, "If-Unmodified-Since-Version": str(row["version"])}, timeout=30)
+            if r.status_code not in (200, 204):
+                errors.append(f'{row["title"][:60]}: {r.status_code} {r.text[:100]}')
+        return errors
 
     def create(self, items: list[dict]) -> list[str]:
         """Creates items, returns a failure message per item that did not save."""
@@ -339,13 +383,20 @@ def run() -> int:
             order_marker.write_text(f"Set the read order on {written} papers.\n")
             print(f"Set the read order on {written} papers.")
     dois, titles = lib.known()
-    used = lib.used_codes()
     log = []
+    room = MAX_NEW_PER_RUN
     (ROOT / "done").mkdir(exist_ok=True)
     for path in pending:
-        papers = json.loads(path.read_text()).get("papers", [])
-        items, outcomes = [], []
+        if room <= 0:
+            break
+        queued = json.loads(path.read_text())
+        papers = queued.get("papers", [])
+        items, pairs, outcomes = [], [], []
+        taken = 0
         for p in papers:
+            if len(items) >= room:
+                break
+            taken += 1
             item = build_item(p, colls)
             doi, title = norm_doi(item.get("DOI")), norm_title(item["title"])
             if (doi and doi in dois) or title in titles:
@@ -354,20 +405,31 @@ def run() -> int:
             if doi:
                 dois.add(doi)
             titles.add(title)
-            item["extra"] = with_order(item.get("extra"), next_code(p.get("level"), used))
             items.append(item)
+            pairs.append((p, item))
             outcomes.append(("needs-check" if {"tag": "needs-check"} in item["tags"] else "added", item))
+        changes = place(lib.ordered(), pairs)
         errors = lib.create(items) if items else []
+        if not errors:
+            errors = lib.write_codes(changes)
         if errors:
             failed_any = True
-            used = lib.used_codes()  # some may have saved: never hand out the same code twice
             print(f"{path.name} kept in the queue:\n  " + "\n  ".join(errors))
             continue
+        room -= len(items)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log += [{"date": stamp, "outcome": o, "title": i["title"], "doi": norm_doi(i.get("DOI")), "file": path.name,
                  **({"order": i["extra"].split()[2]} if o != "skipped: already in library" else {})}
                 for o, i in outcomes]
-        path.rename(ROOT / "done" / path.name)
+        if taken < len(papers):
+            queued["papers"] = papers[taken:]
+            path.write_text(json.dumps(queued, indent=1, ensure_ascii=False) + "\n")
+            print(f"Run limit reached: {len(papers) - taken} paper(s) stay in {path.name} for the next run.")
+        else:
+            path.rename(ROOT / "done" / path.name)
+    if log:
+        current = [{"code": r["code"], "doi": r["doi"], "title": r["title"]} for r in lib.ordered()]
+        (ROOT / ORDER_FILE).write_text(json.dumps(current, indent=1, ensure_ascii=False) + "\n")
     if log:
         with (ROOT / "imported.jsonl").open("a") as f:
             f.writelines(json.dumps(row) + "\n" for row in log)

@@ -130,6 +130,7 @@ class Tests(unittest.TestCase):
         sys.modules.pop("import_papers", None)
         import import_papers
         self.m = import_papers
+        self.m.MAX_NEW_PER_RUN = 99  # only the run-limit tests use the real cap
 
     def tearDown(self):
         shutil.rmtree(self.root)
@@ -263,17 +264,87 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.m.run(), 1)
         self.assertFalse((self.root / self.m.ORDER_MARKER).exists())
 
-    def test_new_paper_goes_to_the_end_of_its_level(self):
-        self.scout_item()
-        fake.items[0]["data"]["extra"] = "Read order: B07 (Core)"
+    def ordered_item(self, key, code, title=None, extra_lines=""):
+        self.scout_item(key)
+        fake.items[-1]["data"].update({"title": title or f"Paper {key}", "extra": f"Read order: {code} (x){extra_lines}"})
+
+    def codes(self):
+        return {i["data"]["title"]: (i["data"].get("extra") or "").split("\n")[0].replace("Read order: ", "").split(" ")[0]
+                for i in fake.items}
+
+    def test_new_paper_goes_to_the_end_of_its_level_without_a_place(self):
+        self.ordered_item("B1", "B01")
+        self.ordered_item("B2", "B02")
         self.queue([{"doi": "10.1/good", "title": "Good paper", "level": "core"},
                     {"doi": "10.1/none", "title": "No level given"},
                     {"doi": "10.1/none2", "title": "Foundational one", "level": "Foundational"}])
         self.assertEqual(self.m.run(), 0)
-        got = {i["data"]["title"]: i["data"].get("extra") for i in fake.items[1:]}
-        self.assertEqual(got["Good paper"], "Read order: B08 (Core)")
-        self.assertEqual(got["No level given"], "Read order: C01 (Specialized)")
-        self.assertEqual(got["Foundational one"], "Read order: A01 (Foundational)")
+        c = self.codes()
+        self.assertEqual((c["Good paper"], c["No level given"], c["Foundational one"]), ("B03", "C01", "A01"))
+        self.assertEqual((c["Paper B1"], c["Paper B2"]), ("B01", "B02"))
+
+    def test_new_paper_slots_in_and_later_papers_move_down(self):
+        self.ordered_item("A1", "A01")
+        self.ordered_item("B1", "B01")
+        self.ordered_item("B2", "B02", extra_lines="\nMy note")
+        self.ordered_item("B3", "B03")
+        self.ordered_item("C1", "C01")
+        (self.root / self.m.BACKFILL_MARKER).write_text("done")  # so only read-order writes change versions
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "before": "paper b2", "level": "niche"}])
+        self.assertEqual(self.m.run(), 0)
+        c = self.codes()
+        self.assertEqual([c[f"Paper {k}"] for k in ("A1", "B1", "B2", "B3", "C1")], ["A01", "B01", "B03", "B04", "C01"])
+        self.assertEqual(c["Good paper"], "B02")  # the place wins over the level
+        moved = next(i for i in fake.items if i["key"] == "B2")["data"]["extra"]
+        self.assertEqual(moved, "Read order: B03 (Core)\nMy note")
+        saved = json.loads((self.root / "reading-order.json").read_text())
+        self.assertEqual([r["code"] for r in saved], ["A01", "B01", "B02", "B03", "B04", "C01"])
+        self.assertEqual(saved[2]["title"], "Good paper")
+        self.assertEqual(sum(1 for i in fake.items if i["version"] > 3), 2)  # only the two that moved were written
+
+    def test_two_papers_in_one_run_keep_their_places(self):
+        self.ordered_item("B1", "B01")
+        self.ordered_item("B2", "B02")
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "before": "Paper B1"},
+                    {"doi": "10.1/none", "title": "Second", "before": "Paper B2"}])
+        self.assertEqual(self.m.run(), 0)
+        c = self.codes()
+        self.assertEqual((c["Good paper"], c["Paper B1"], c["Second"], c["Paper B2"]), ("B01", "B02", "B03", "B04"))
+
+    def test_unknown_place_falls_back_to_the_level(self):
+        self.ordered_item("B1", "B01")
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "before": "Not a real title", "level": "core"}])
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(self.codes()["Good paper"], "B02")
+
+    def test_run_limit_adds_two_and_keeps_the_rest_for_next_run(self):
+        self.m.MAX_NEW_PER_RUN = 2
+        self.queue([{"doi": "10.1/a", "title": "One"}, {"doi": "10.1/b", "title": "Two"}, {"doi": "10.1/c", "title": "Three"}])
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(sorted(i["data"]["title"] for i in fake.items), ["One", "Two"])
+        left = json.loads((self.root / "queue" / "2026-11-04.json").read_text())["papers"]
+        self.assertEqual([p["title"] for p in left], ["Three"])
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(len(fake.items), 3)
+        self.assertFalse(list((self.root / "queue").glob("*.json")))
+
+    def test_duplicates_do_not_use_up_the_run_limit(self):
+        self.m.MAX_NEW_PER_RUN = 1
+        self.ordered_item("OLD", "A01", title="Already here")
+        self.queue([{"doi": "10.1/none", "title": "Already here"}, {"doi": "10.1/good", "title": "Good paper"}])
+        self.assertEqual(self.m.run(), 0)
+        self.assertIn("Good paper", self.codes())
+
+    def test_failed_move_keeps_the_file_and_the_retry_fixes_the_order(self):
+        self.ordered_item("B1", "B01")
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "before": "Paper B1"}])
+        fake.reject_patch = {"B1"}
+        self.assertEqual(self.m.run(), 1)
+        self.assertTrue((self.root / "queue" / "2026-11-04.json").exists())
+        fake.reject_patch = set()
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(sorted(self.codes().values()), ["B01", "B02"])
+        self.assertEqual(sum(i["data"]["title"] == "Good paper" for i in fake.items), 1)
 
     def test_app_lists_papers_in_read_order_and_tracks_status(self):
         app = os.getenv("APP_CHECKOUT")
