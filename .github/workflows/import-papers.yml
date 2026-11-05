@@ -2,7 +2,7 @@ name: Import papers to Zotero
 on:
   push:
     branches: [paper-queue]
-    paths: ["queue/**", "import_papers.py", "reading-order.json", "paper-facts.json"]
+    paths: ["queue/**", "import_papers.py", "reading-order.json", "paper-facts.json", "paper-questions.json"]
 permissions:
   contents: write
 concurrency:

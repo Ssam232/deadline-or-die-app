@@ -21,8 +21,8 @@ Rules:
   - A new paper goes before the title in its "before" field, or at the end of its "level" if there is
     none. Papers after it in that level move down one, which changes only their read-order line.
   - reading-order.json is rewritten from Zotero after each import, so the next search sees the real order.
-  - Papers get Zotero tags such as "subject:Diet and muscle", "year:2016", "species:rat", "sex:male" and
-    "type:study". The year comes from the paper's metadata; a detail not stated in the queue is left off.
+  - Papers get Zotero tags such as "question:Q3 How does diet change muscle?", "subject:Diet and muscle",
+    "year:2016", "species:rat", "sex:male" and "type:study". A paper's "tags" set its questions and subjects. The year comes from the paper's metadata; a detail not stated in the queue is left off.
   - At most MAX_NEW_PER_RUN papers are added per run. Any extras stay in the queue for the next run.
   - A queue file moves to done/ only once every paper in it has been handled.
 """
@@ -53,9 +53,15 @@ FACTS_MARKER = "paper-facts.done"
 SUBJECTS = {"hcr-lcr": "HCR and LCR rats", "remodeling": "Heart and diaphragm remodeling", "diet-muscle": "Diet and muscle",
             "exercise-obese-muscle": "Exercise and obese muscle", "genetics-exercise": "Genetics and exercise",
             "heart-diaphragm": "Heart and diaphragm failure", "strip-testing": "Muscle strip testing"}
+QUESTIONS = {"hcr-lcr": "Q1 What are HCR/LCR rats?", "remodeling": "Q2 What causes remodeling?",
+             "diet-muscle": "Q3 How does diet change muscle?", "exercise-obese-muscle": "Q4 How does exercise change obese muscle?",
+             "genetics-exercise": "Q5 How do genes and exercise interact?",
+             "heart-diaphragm": "Q6 Why does heart + diaphragm failure matter?", "strip-testing": "Q7 How are muscle strips tested?"}
+QUESTIONS_FILE = "paper-questions.json"
+QUESTIONS_MARKER = "paper-questions.done"
 ALLOWED = {"species": {"rat", "mouse", "human"}, "sex": {"male", "female", "both"},
            "type": {"review", "study", "methods"}}
-FACT_PREFIXES = ("subject:", "year:", "species:", "sex:", "type:")
+FACT_PREFIXES = ("question:", "subject:", "year:", "species:", "sex:", "type:")
 STATUS_FOLDERS = {"read": "Read", "dropped": "Dropped"}
 ORDER_FILE = "reading-order.json"
 ORDER_MARKER = "reading-order.done"
@@ -200,7 +206,8 @@ def build_item(paper: dict, collections: list[str]) -> dict:
 
 def fact_tags(paper: dict, date: str | None) -> list[dict]:
     """The labelled tags for a paper: its subjects, year, and any species, sex and type that were stated."""
-    names = [f"subject:{SUBJECTS.get(t, t)}" for t in paper.get("tags", [])]
+    names = [f"question:{QUESTIONS[t]}" for t in paper.get("tags", []) if t in QUESTIONS]
+    names += [f"subject:{SUBJECTS.get(t, t)}" for t in paper.get("tags", [])]
     year = (date or "")[:4]
     if year.isdigit():
         names.append(f"year:{year}")
@@ -404,6 +411,30 @@ class Library:
             errors.append("no library item found for: " + "; ".join(missing))
         return written, errors
 
+    def apply_questions(self, papers: list[dict]) -> tuple[int, list[str]]:
+        """Sets the question and subject tags on earlier imports. Every other tag stays as it is."""
+        by_doi = {norm_doi(f["doi"]): f for f in papers if f.get("doi")}
+        by_title = {norm_title(f["title"]): f for f in papers}
+        written, matched, errors = 0, set(), []
+        for it in list(self._pages("/items/top", tag="paper-scout")):
+            d = it["data"]
+            fact = by_doi.get(norm_doi(d.get("DOI"))) or by_title.get(norm_title(d.get("title")))
+            if not fact:
+                continue
+            matched.add(fact["title"])
+            keep = [t for t in d.get("tags", []) if not t.get("tag", "").startswith(("question:", "subject:"))]
+            tags = [t for t in fact_tags(fact, None)] + keep
+            r = requests.patch(f"{self.base}/items/{it['key']}", json={"tags": tags},
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code in (200, 204):
+                written += 1
+            else:
+                errors.append(f'{d.get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        missing = [f["title"][:60] for f in papers if f["title"] not in matched]
+        if missing:
+            errors.append("no library item found for: " + "; ".join(missing))
+        return written, errors
+
     def ordered(self) -> list[dict]:
         """Every item with a read-order line, in order."""
         rows = []
@@ -454,7 +485,10 @@ def run() -> int:
     folders_marker = ROOT / FOLDERS_MARKER
     facts_file, facts_marker = ROOT / FACTS_FILE, ROOT / FACTS_MARKER
     facts_due = facts_file.exists() and not facts_marker.exists()
-    if not pending and marker.exists() and not order_due and folders_marker.exists() and not facts_due:
+    questions_file, questions_marker = ROOT / QUESTIONS_FILE, ROOT / QUESTIONS_MARKER
+    questions_due = questions_file.exists() and not questions_marker.exists()
+    if (not pending and marker.exists() and not order_due and folders_marker.exists() and not facts_due
+            and not questions_due):
         print("Queue is empty.")
         return 0
     lib = Library(user, key)
@@ -487,6 +521,14 @@ def run() -> int:
         else:
             facts_marker.write_text(f"Tagged {written} earlier papers.\n")
             print(f"Tagged {written} earlier papers.")
+    if questions_due:
+        written, errors = lib.apply_questions(json.loads(questions_file.read_text()))
+        if errors:
+            failed_any = True
+            print("Could not add every question tag:\n  " + "\n  ".join(errors))
+        else:
+            questions_marker.write_text(f"Added question tags to {written} earlier papers.\n")
+            print(f"Added question tags to {written} earlier papers.")
     if order_due:
         written, errors = lib.apply_order(json.loads(order_file.read_text()))
         if errors:

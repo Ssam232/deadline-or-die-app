@@ -453,7 +453,8 @@ class Tests(unittest.TestCase):
                      "sex": "unclear", "type": "study"}])
         self.assertEqual(self.m.run(), 0)
         tags = {t["tag"] for t in fake.items[0]["data"]["tags"]}
-        self.assertEqual(tags, {"subject:Diet and muscle", "year:2020", "species:rat", "type:study", "paper-scout"})
+        self.assertEqual(tags, {"question:Q3 How does diet change muscle?", "subject:Diet and muscle", "year:2020",
+                                "species:rat", "type:study", "paper-scout"})
 
     def test_earlier_papers_are_tagged_once_keeping_status_and_own_tags(self):
         self.scout_item(tags=("paper-scout", "diet-muscle", "read", "my-own"))
@@ -462,8 +463,8 @@ class Tests(unittest.TestCase):
             [{"doi": "10.1/X", "title": "Paper OLD1", "tags": ["diet-muscle"], "species": "rat", "sex": "male", "type": "study"}]))
         self.assertEqual(self.m.run(), 0)
         tags = {t["tag"] for t in fake.items[0]["data"]["tags"]}
-        self.assertEqual(tags, {"subject:Diet and muscle", "year:2016", "species:rat", "sex:male", "type:study",
-                                "paper-scout", "read", "my-own"})
+        self.assertEqual(tags, {"question:Q3 How does diet change muscle?", "subject:Diet and muscle", "year:2016",
+                                "species:rat", "sex:male", "type:study", "paper-scout", "read", "my-own"})
         fake.items[0]["data"]["tags"].append({"tag": "species:mouse"})  # a later hand edit is left alone
         self.assertEqual(self.m.run(), 0)
         self.assertIn({"tag": "species:mouse"}, fake.items[0]["data"]["tags"])
@@ -484,9 +485,28 @@ class Tests(unittest.TestCase):
         import zotero as Z
         Z.API = self.base
         p = Z.reading_list("1", "k")[0]
-        self.assertEqual(p["facets"], {"subject": ["Diet and muscle"], "species": ["rat"], "sex": [], "type": ["study"]})
+        self.assertEqual(p["facets"], {"question": ["Q3 How does diet change muscle?"], "subject": ["Diet and muscle"],
+                                       "species": ["rat"], "sex": [], "type": ["study"]})
         self.assertEqual(p["year"], "2020")
         self.assertFalse(p["needs_check"])
+
+    def test_questions_go_on_earlier_papers_once_and_touch_nothing_else(self):
+        self.scout_item(tags=("paper-scout", "subject:Diet and muscle", "species:mouse", "year:2016", "read", "my-own"))
+        fake.items[0]["data"]["DOI"] = "10.1/x"
+        (self.root / self.m.QUESTIONS_FILE).write_text(json.dumps(
+            [{"doi": "10.1/X", "title": "Paper OLD1", "tags": ["diet-muscle", "strip-testing"]}]))
+        self.assertEqual(self.m.run(), 0)
+        tags = {t["tag"] for t in fake.items[0]["data"]["tags"]}
+        self.assertEqual(tags, {"question:Q3 How does diet change muscle?", "question:Q7 How are muscle strips tested?",
+                                "subject:Diet and muscle", "subject:Muscle strip testing", "species:mouse", "year:2016",
+                                "paper-scout", "read", "my-own"})
+        fake.items[0]["data"]["tags"] = [{"tag": "question:Q1 What are HCR/LCR rats?"}]  # a later hand edit stays
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(fake.items[0]["data"]["tags"], [{"tag": "question:Q1 What are HCR/LCR rats?"}])
+
+    def test_every_question_code_has_a_short_numbered_tag(self):
+        self.assertEqual(set(self.m.QUESTIONS), set(self.m.SUBJECTS))
+        self.assertEqual(sorted(v[:2] for v in self.m.QUESTIONS.values()), [f"Q{i}" for i in range(1, 8)])
 
     def test_webpage_entry(self):
         self.queue([{"kind": "webpage", "title": "Protocol", "url": "https://x.org/p.pdf", "source": "TREAT-NMD"}])
