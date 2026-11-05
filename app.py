@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import zlib
 import io
 import json
 import math
@@ -4304,15 +4305,32 @@ READING_SORTS = {"Read order": lambda p: p["order"] or "~",
                  "Oldest first": lambda p: int(p["year"]) if p["year"].isdigit() else 9999,
                  "Title": lambda p: p["title"].casefold(),
                  "Author": lambda p: p["who"].casefold() or "~",
+                 "Question": lambda p: (sorted(p["facets"]["question"]) or ["~"])[0],
                  "Subject": lambda p: (p["facets"]["subject"] or ["~"])[0].casefold()}
-READING_FILTERS = {"subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type"}
+READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type"}
 
 
-def _paper_chips(p: dict) -> str:
-    """Small labels under a paper's title."""
-    vals = [v for f in READING_FILTERS for v in p["facets"][f]] + (["needs check"] if p["needs_check"] else [])
-    return "".join(f"<span style='display:inline-block;border:1px solid #8b909c66;border-radius:999px;padding:0 .5rem;"
-                   f"margin:.2rem .25rem 0 0;font-size:.72rem;color:#a4a9b5'>{html.escape(v)}</span>" for v in vals)
+def _paper_tags(p: dict) -> list[str]:
+    """A paper's clickable tags as "filter|value". Its subject mostly repeats its question, so it only shows without one."""
+    f = p["facets"]
+    tags = [("question", v) for v in sorted(f["question"])] + ([] if f["question"] else [("subject", v) for v in f["subject"]])
+    tags += ([("year", p["year"])] if p["year"] else []) + [(n, v) for n in ("species", "sex", "type") for v in f[n]]
+    return [f"{n}|{v}" for n, v in tags]
+
+
+def _toggle_tag_filters(widget: str, before: list[str]) -> None:
+    """Runs when a tag is clicked: clicking one filters by it, clicking it again takes the filter off."""
+    for tag in set(st.session_state.get(widget) or []) ^ set(before):
+        name, value = tag.split("|", 1)
+        key = f"reading_f_{name}"
+        current = list(st.session_state.get(key) or [])
+        st.session_state[key] = [v for v in current if v != value] if value in current else current + [value]
+
+
+def _clear_reading_filters() -> None:
+    for name in (*READING_FILTERS, "year"):
+        st.session_state[f"reading_f_{name}"] = []
+    st.session_state["reading_search"] = ""
 
 
 def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
@@ -4372,25 +4390,36 @@ def render_reading_list(state: dict) -> None:
              and (not search or search in f"{p['title']} {p['who']} {p['journal']}".casefold())]
     shown.sort(key=READING_SORTS[sort])  # stable, so ties stay in read order
     if filtered:
-        st.caption(f"Showing {len(shown)} of {sum(p['status'] in views[view] for p in papers)}. Change these in Sort and filter.")
+        c1, c2 = st.columns([4, 1.2], vertical_alignment="center")
+        c1.caption(f"Showing {len(shown)} of {sum(p['status'] in views[view] for p in papers)}.")
+        c2.button("✕ Clear filters", key="reading_clear", use_container_width=True, on_click=_clear_reading_filters)
     if not shown:
         st.caption("No papers match those filters." if filtered else
                    {"Read": "Nothing read yet.", "Dropped": "Nothing dropped."}.get(view, "All caught up."))
+    st.markdown("<style>[class*='st-key-paper_tags_'] button{min-height:1.5rem;padding:0 .55rem}"
+                "[class*='st-key-paper_tags_'] button p{font-size:.74rem}</style>", unsafe_allow_html=True)
     open_keys = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
     seen_levels = {"last": object()}
 
     def _row(p: dict) -> None:
         head = (p["level"] or "Not ordered yet") if sort == "Read order" else \
-               ((p["facets"]["subject"] or ["No subject"])[0] if sort == "Subject" else None)
+               ((sorted(p["facets"]["question"]) or ["No question"])[0] if sort == "Question" else
+                ((p["facets"]["subject"] or ["No subject"])[0] if sort == "Subject" else None))
         if head and head != seen_levels["last"]:
             seen_levels["last"] = head
             st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(head)}</div>", unsafe_allow_html=True)
-        meta = " · ".join(x for x in (p["who"], p["year"], p["journal"]) if x)
+        meta = " · ".join(x for x in (p["who"], p["journal"], "needs check" if p["needs_check"] else "") if x)
         num = f"<b>{html.escape(p['order'])}</b> · " if p["order"] else ""
         st.markdown(f"{num}<a href='{html.escape(p['url'], quote=True)}' target='_blank'>{html.escape(p['title'])}</a>"
-                    + (f"<br><small style='color:#8b909c'>{html.escape(meta)}</small>" if meta else "")
-                    + (f"<br>{chips}" if (chips := _paper_chips(p)) else ""),
+                    + (f"<br><small style='color:#8b909c'>{html.escape(meta)}</small>" if meta else ""),
                     unsafe_allow_html=True)
+        tags = _paper_tags(p)
+        if tags:
+            on = [t for t in tags if t.split("|", 1)[1] in (st.session_state.get(f"reading_f_{t.split('|', 1)[0]}") or [])]
+            widget = f"paper_tags_{p['key']}_{zlib.crc32('~'.join(on).encode())}"  # stays in step with the active filters
+            st.pills(f"Tags of {p['title'][:60]}", tags, selection_mode="multi", default=on, key=widget,
+                     format_func=lambda t: t.split("|", 1)[1], label_visibility="collapsed",
+                     on_change=_toggle_tag_filters, args=(widget, on))
         c1, c2 = st.columns([4, 1.2], vertical_alignment="center")
         widget = f"paper_{p['key']}_{p['status']}"  # a new status starts a fresh control
         c1.segmented_control(f"Status of {p['title'][:60]}", list(READING_LABELS.values()),

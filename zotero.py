@@ -19,7 +19,7 @@ DROPPED_TAG = "dropped"
 STATUS_TAGS = (READ_TAG, READING_TAG, DROPPED_TAG)
 SKIP_TYPES = {"attachment", "note", "annotation"}
 LEVELS = {"A": "Foundational", "B": "Core", "C": "Specialized", "D": "Niche"}
-FACETS = ("subject", "species", "sex", "type")  # Zotero tags written as "subject:Diet and muscle"
+FACETS = ("question", "subject", "species", "sex", "type")  # Zotero tags written as "subject:Diet and muscle"
 _ORDER = re.compile(r"^Read order:\s*([A-D])(\d+)", re.M | re.I)
 
 
