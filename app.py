@@ -2811,6 +2811,7 @@ def render_paper_pair(state: dict, t: dict, scope: str) -> None:
             or p["key"] == t.get("zotero_key")]
     if not opts:
         return
+    opts.sort(key=lambda p: (p["title"] or "").casefold().lstrip("\"'“‘([ "))  # A→Z by title
     by = {p["key"]: p for p in opts}
     widget = f"{scope}pair_{t['id']}"
     cur = t.get("zotero_key") if t.get("zotero_key") in by else None
