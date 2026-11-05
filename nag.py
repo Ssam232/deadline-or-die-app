@@ -261,6 +261,16 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
                 save["journal"][k]["pm"].pop("notion_sig", None)
         save_json(n, ids["save_page"], save, budget=45)  # same rev: the app's own newer copy still wins  # leftover blocks are ignored on load; next run tidies more
         print(f"::notice title=save repair::removed nested journal signatures from {len(bad)} day(s)")
+    if os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch":  # manual run = a full Zotero check too
+        zu, zk = os.getenv("ZOTERO_USER_ID"), os.getenv("ZOTERO_API_KEY")
+        if not (zu and zk):
+            print(f"::notice title=zotero::{'ZOTERO_USER_ID' if not zu else 'ZOTERO_API_KEY'} is empty in the GitHub secrets")
+        else:
+            try:
+                import zotero as Z
+                print(f"::notice title=zotero::{Z.health(zu, zk, save.get('settings', {}).get('zotero_collection') or 'To Read')}")
+            except Exception as e:  # noqa: BLE001
+                print(f"::notice title=zotero::check failed ({type(e).__name__})")
     try:  # is the app's saving landing? (counts and times only)
         led = save.get("ledger") or []
         last = max((x.get("at", "") for x in led if isinstance(x, dict)), default="")

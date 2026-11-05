@@ -77,3 +77,26 @@ def mark_read(user: str, key: str, item_key: str) -> None:
                        json={"tags": tags + [{"tag": READ_TAG}]}, timeout=20)
     if r.status_code not in (200, 204):
         raise ZoteroError(f"Zotero tag failed {r.status_code}: {r.text[:120]}")
+
+
+def health(user: str, key: str, collection: str = "To Read") -> str:
+    """One line for the health check: is the key valid and for this user, can it write (to tag papers read), is the
+    reading-list collection there, how many papers. Counts only."""
+    user = str(user).strip()
+    if not user.isdigit():
+        return "ZOTERO_USER_ID isn't a number: use the numeric userID from zotero.org/settings/keys, not the username"
+    r = requests.get(f"{API}/keys/current", headers=_h(key.strip()), timeout=20)
+    if r.status_code != 200:
+        return f"API key rejected (HTTP {r.status_code}): check ZOTERO_API_KEY"
+    k = r.json()
+    if str(k.get("userID")) != user:
+        return "key works but belongs to a different user than ZOTERO_USER_ID"
+    lib = ((k.get("access") or {}).get("user") or {})
+    parts = ["key ok", "read " + ("yes" if lib.get("library") else "NO"),
+             "write " + ("yes" if lib.get("write") else "no (papers can't be tagged read)")]
+    try:
+        papers = to_read(user, key.strip(), collection, limit=100)
+        parts.append(f'"{collection}" found · {len(papers)} paper(s)')
+    except ZoteroError as e:
+        parts.append(str(e))
+    return " · ".join(parts)
