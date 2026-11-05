@@ -2783,8 +2783,12 @@ def _pair_paper(state: dict, t: dict, widget: str, proof_key: str, papers: list[
         t.setdefault("title_orig", t["title"])
         t.setdefault("details_orig", t.get("details", ""))
         t.update(zotero_key=p["key"], title=f"📄 Read: {p['title'][:80]}",
-                 details=(t["details_orig"] + "  \n" if t["details_orig"] else "") + f"📄 {Z.label(p)} · {p['url']}")
-        flash(f"📄 Paired **{Z.label(p)[:80]}**. Finishing this marks it read in Zotero.")
+                 details=(t["details_orig"] + "  \n" if t["details_orig"] else "") + f"📄 {Z.label(p)}"
+                 + (f" · {p['url']}" if p.get("url") else ""))
+        also = next((x["title"] for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]
+                     and x.get("zotero_key") == p["key"]), None)
+        flash(f"📄 Paired **{Z.label(p)[:80]}**. Finishing this marks it read in Zotero."
+              + (f" It's also on **{also[:60]}**: finish either one, or remove the spare." if also else ""))
     else:
         t.pop("zotero_key", None)
         if "title_orig" in t:
@@ -2806,9 +2810,13 @@ def render_paper_pair(state: dict, t: dict, scope: str) -> None:
         papers = _zotero_reading(*zc)
     except Exception:  # noqa: BLE001 — Zotero down: the task still works without it
         return
-    taken = {x.get("zotero_key") for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]}
-    opts = [p for p in papers if (p["status"] in ("unread", "reading") and p["key"] not in taken)
-            or p["key"] == t.get("zotero_key")]
+    taken = {x["zotero_key"]: x["title"] for x in state["tasks"]
+             if x["status"] == "open" and x["id"] != t["id"] and x.get("zotero_key")}
+    opts = [p for p in papers if p["status"] in ("unread", "reading") or p["key"] == t.get("zotero_key")]
+    if t.get("zotero_key") and t["zotero_key"] not in {p["key"] for p in opts}:
+        # its paper isn't in what Zotero sent back (moved, or the list is cached): still show it as the pick
+        opts.append({"key": t["zotero_key"], "title": t["title"].replace("📄 Read: ", ""), "who": "", "year": "",
+                     "url": "", "status": "unread"})
     if not opts:
         return
     opts.sort(key=lambda p: (p["title"] or "").casefold().lstrip("\"'“‘([ "))  # A→Z by title
@@ -2819,7 +2827,8 @@ def render_paper_pair(state: dict, t: dict, scope: str) -> None:
         st.session_state[widget] = cur
     st.selectbox("📄 Which paper?", [None] + list(by), key=widget,
                  format_func=lambda k: "— pick one from your reading list —" if k is None else
-                 ("📖 " if by[k]["status"] == "reading" else "") + Z.label(by[k]),
+                 ("📖 " if by[k]["status"] == "reading" else "") + Z.label(by[k])
+                 + (" · already a task" if k in taken else ""),
                  on_change=_pair_paper, args=(state, t, widget, f"{scope}open_{t['id']}", opts),
                  help="Pairs this task with a paper: it takes the paper's name and link, and finishing it marks the "
                       "paper read in Zotero.")
