@@ -2770,6 +2770,60 @@ def render_qualify_form(state: dict) -> None:
     st.rerun(scope="app")
 
 
+READING_TASK = re.compile(r"\b(read|reading|paper|papers|article|articles|lit(erature)?\s*review)\b", re.I)
+
+
+def _pair_paper(state: dict, t: dict, widget: str, proof_key: str, papers: list[dict]) -> None:
+    """Runs when you pick (or clear) a paper for a reading task: the task takes the paper's name and link, and
+    finishing it marks the paper read in Zotero."""
+    _proof_touch(proof_key)  # keep this panel open
+    pick = st.session_state.get(widget)
+    p = next((x for x in papers if x["key"] == pick), None)
+    if p:
+        t.setdefault("title_orig", t["title"])
+        t.setdefault("details_orig", t.get("details", ""))
+        t.update(zotero_key=p["key"], title=f"📄 Read: {p['title'][:80]}",
+                 details=(t["details_orig"] + "  \n" if t["details_orig"] else "") + f"📄 {Z.label(p)} · {p['url']}")
+        flash(f"📄 Paired **{Z.label(p)[:80]}**. Finishing this marks it read in Zotero.")
+    else:
+        t.pop("zotero_key", None)
+        if "title_orig" in t:
+            t["title"] = t.pop("title_orig")
+        if "details_orig" in t:
+            t["details"] = t.pop("details_orig")
+        flash("📄 Paper unpaired.")
+    save_state(state)
+
+
+def render_paper_pair(state: dict, t: dict, scope: str) -> None:
+    """📄 For reading tasks: pick which paper from your Zotero reading list this one is."""
+    if not (t.get("zotero_key") or READING_TASK.search(t.get("title_orig") or t["title"])):
+        return
+    zc = zotero_cfg(state)
+    if not zc:
+        return
+    try:
+        papers = _zotero_reading(*zc)
+    except Exception:  # noqa: BLE001 — Zotero down: the task still works without it
+        return
+    taken = {x.get("zotero_key") for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]}
+    opts = [p for p in papers if (p["status"] in ("unread", "reading") and p["key"] not in taken)
+            or p["key"] == t.get("zotero_key")]
+    if not opts:
+        return
+    by = {p["key"]: p for p in opts}
+    widget = f"{scope}pair_{t['id']}"
+    cur = t.get("zotero_key") if t.get("zotero_key") in by else None
+    if widget not in st.session_state or st.session_state[widget] != cur:
+        st.session_state[widget] = cur
+    st.selectbox("📄 Which paper?", [None] + list(by), key=widget,
+                 format_func=lambda k: "— pick one from your reading list —" if k is None else
+                 ("📖 " if by[k]["status"] == "reading" else "") + Z.label(by[k]),
+                 on_change=_pair_paper, args=(state, t, widget, f"{scope}open_{t['id']}", opts),
+                 help="Pairs this task with a paper: it takes the paper's name and link, and finishing it marks the "
+                      "paper read in Zotero.")
+
+
 def render_task_row(state: dict, t: dict, scope: str = "") -> None:
     """One open task: due chip + value; opens to finish (proof), extend or abandon."""
     s = state["settings"]
@@ -2789,6 +2843,7 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
             + (f"  \n{t['details']}" if t.get("details") else "")
             + (f"  \n🚨 If missed: *{t['consequence']}*" if t.get("consequence") else "")
             + (f"  \n🚩 Rejected {t['rejections']}×" if t.get("rejections") else ""))
+        render_paper_pair(state, t, scope)
         render_proof_form(state, t, "open", scope=scope)
 
         st.divider()
@@ -2929,6 +2984,7 @@ def render_today(state: dict) -> None:
                         else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
                 with c1.expander(_lbl + f" · +{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
                                  expanded=proof_open(f"today_open_{t['id']}")):
+                    render_paper_pair(state, t, "today_")
                     render_proof_form(state, t, "open", scope="today_")
                 running = bool(tm) and tm.get("task_id") == t["id"]
                 if c2.button("⏱️" if running else "▶", key=f"mgo_{t['id']}", use_container_width=True,
