@@ -2832,6 +2832,23 @@ def render_paper_pair(state: dict, t: dict, scope: str) -> None:
                  on_change=_pair_paper, args=(state, t, widget, f"{scope}open_{t['id']}", opts),
                  help="Pairs this task with a paper: it takes the paper's name and link, and finishing it marks the "
                       "paper read in Zotero.")
+    spares = [x for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]
+              and t.get("zotero_key") and x.get("zotero_key") == t["zotero_key"]]
+    for x in spares:  # the same paper on two open tasks: drop the spare, no penalty (it's one piece of work)
+        if st.button(f"🗑️ Remove the spare “{x['title'][:50]}” (free: same paper)", key=f"{scope}spare_{t['id']}_{x['id']}",
+                     use_container_width=True):
+            _proof_touch(f"{scope}open_{t['id']}")
+            if x.get("focus_min") and not t.get("focus_min"):
+                t["focus_min"] = x["focus_min"]  # keep any timer minutes already logged on the spare
+            state["tasks"].remove(x)
+            if x.get("sync_page") and notion_cfg():
+                try:
+                    archive_page(notion_ctx()[0], x["sync_page"])
+                except Exception:  # noqa: BLE001
+                    pass
+            save_state(state)
+            flash(f"🗑️ Removed the spare **{x['title'][:60]}**. One task for this paper now.")
+            st.rerun()
 
 
 def render_task_row(state: dict, t: dict, scope: str = "") -> None:
