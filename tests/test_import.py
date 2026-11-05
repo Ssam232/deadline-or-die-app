@@ -19,6 +19,7 @@ class Fake:
         self.collections, self.items, self.tokens = [], [], set()
         self.reject_titles = set()
         self.reject_patch = set()
+        self.reject_put = False
         self.crossref = {"10.1/good": {"title": ["Good <i>paper</i>"], "DOI": "10.1/GOOD",
                                        "author": [{"family": "Koch", "given": "L"}], "container-title": ["J Test"],
                                        "issued": {"date-parts": [[2020, 3]]}, "abstract": "<jats:p>Abs</jats:p>"},
@@ -67,6 +68,16 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, rows[start:start + int(q.get("limit", ["100"])[0])])
         self.send(404, {})
 
+    def do_PUT(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        row = next(c for c in fake.collections if c["key"] == self.path.rsplit("/", 1)[1])
+        if body.get("version") != row["version"] or fake.reject_put:
+            return self.send(412, {})
+        row["data"].update({"name": body["name"], "parentCollection": body["parentCollection"]})
+        row["version"] += 1
+        self.send_response(204)
+        self.end_headers()
+
     def do_PATCH(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         key = self.path.rsplit("/", 1)[1]
@@ -88,7 +99,8 @@ class H(BaseHTTPRequestHandler):
         if self.path.endswith("/collections"):
             fake.tokens.add(token)
             key = f"COLL{len(fake.collections)}"
-            row = {"key": key, "data": {"name": body[0]["name"]}}
+            row = {"key": key, "version": 1, "data": {"name": body[0]["name"],
+                                                      "parentCollection": body[0].get("parentCollection", False)}}
             fake.collections.append(row)
             return self.send(200, {"successful": {"0": row}, "failed": {}})
         ok, bad = {}, {}
@@ -146,7 +158,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(d["DOI"], "10.1/good")
         self.assertEqual(d["date"], "2020-03")
         self.assertEqual(d["collections"], ["COLL0", "COLL1"])
-        self.assertEqual([c["data"]["name"] for c in fake.collections], ["To Read", "LCR HCR CVxR"])
+        self.assertEqual([c["data"]["name"] for c in fake.collections], ["To Read", "LCR HCR CVxR", "Read", "Dropped"])
         self.assertIn({"tag": "q1"}, d["tags"])
         self.assertFalse(list((self.root / "queue").glob("*.json")))
         self.assertTrue((self.root / "done" / "2026-11-04.json").exists())
@@ -374,6 +386,66 @@ class Tests(unittest.TestCase):
         self.assertEqual([p["title"] for p in Z.to_read("1", "k", "To Read")], ["A protocol", "Later"])
         Z.set_status("1", "k", rl[0]["key"], "unread")
         self.assertEqual(Z.to_read("1", "k", "To Read")[0]["title"], "Good paper")
+
+    def folder(self, name):
+        return next(c for c in fake.collections if c["data"]["name"] == name)
+
+    def test_folders_nest_and_papers_already_read_or_dropped_move(self):
+        fake.collections.append({"key": "TR", "version": 4, "data": {"name": "To Read", "parentCollection": False}})
+        fake.collections.append({"key": "MINE", "version": 1, "data": {"name": "Read", "parentCollection": False}})
+        self.scout_item("A", colls=("TR",), tags=("paper-scout", "read"))
+        self.scout_item("B", colls=("TR", "OTHER"), tags=("paper-scout", "dropped"))
+        self.scout_item("C", colls=("TR",), tags=("paper-scout", "reading"))
+        self.assertEqual(self.m.run(), 0)
+        project = self.folder("LCR HCR CVxR")["key"]
+        self.assertEqual(self.folder("To Read")["data"]["parentCollection"], project)
+        read = next(c for c in fake.collections if c["data"]["name"] == "Read" and c["key"] != "MINE")
+        self.assertEqual(read["data"]["parentCollection"], project)
+        self.assertFalse(next(c for c in fake.collections if c["key"] == "MINE")["data"]["parentCollection"])
+        dropped = self.folder("Dropped")
+        self.assertEqual(dropped["data"]["parentCollection"], project)
+        a, b, c = fake.items[:3]
+        self.assertNotIn("TR", a["data"]["collections"])
+        self.assertIn(read["key"], a["data"]["collections"])
+        self.assertIn(project, a["data"]["collections"])
+        self.assertIn("OTHER", b["data"]["collections"])
+        self.assertIn(dropped["key"], b["data"]["collections"])
+        self.assertIn("TR", c["data"]["collections"])
+        n = len(fake.collections)
+        os.unlink(self.root / self.m.FOLDERS_MARKER)
+        self.assertEqual(self.m.run(), 0)  # safe to run again
+        self.assertEqual(len(fake.collections), n)
+
+    def test_failed_folder_move_is_reported_and_retried(self):
+        fake.collections.append({"key": "TR", "version": 4, "data": {"name": "To Read", "parentCollection": False}})
+        fake.reject_put = True
+        self.assertEqual(self.m.run(), 1)
+        self.assertFalse((self.root / self.m.FOLDERS_MARKER).exists())
+        fake.reject_put = False
+        self.assertEqual(self.m.run(), 0)
+        self.assertTrue((self.root / self.m.FOLDERS_MARKER).exists())
+
+    def test_app_moves_papers_between_folders_and_still_lists_them_all(self):
+        app = os.getenv("APP_CHECKOUT")
+        if not app:
+            self.skipTest("set APP_CHECKOUT to a checkout of main")
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "level": "core"},
+                    {"doi": "10.1/none", "title": "Other", "level": "niche"}])
+        self.assertEqual(self.m.run(), 0)
+        sys.path.insert(0, app)
+        sys.modules.pop("zotero", None)
+        import zotero as Z
+        Z.API = self.base
+        tr, rd, dr = (self.folder(n)["key"] for n in ("To Read", "Read", "Dropped"))
+        project = self.folder("LCR HCR CVxR")["key"]
+        item = next(i for i in fake.items if i["data"]["title"] == "Good paper")
+        for status, where in (("reading", tr), ("read", rd), ("dropped", dr), ("unread", tr)):
+            Z.set_status("1", "k", item["key"], status)
+            self.assertEqual(set(item["data"]["collections"]), {where, project}, status)
+            self.assertEqual(Z.reading_list("1", "k")[0]["status"], status)
+            self.assertEqual(len(Z.reading_list("1", "k")), 2)
+        Z.set_status("1", "k", item["key"], "read")
+        self.assertEqual([p["title"] for p in Z.to_read("1", "k")], ["Other"])
 
     def test_webpage_entry(self):
         self.queue([{"kind": "webpage", "title": "Protocol", "url": "https://x.org/p.pdf", "source": "TREAT-NMD"}])

@@ -1,9 +1,13 @@
 """
-Moves papers from queue/*.json into two Zotero collections: "To Read" and "LCR HCR CVxR".
+Moves papers from queue/*.json into Zotero. The collections are arranged as:
 
-Deadline or Die already reads "To Read", so a paper imported here shows up in the app with no
-change to the app itself. "LCR HCR CVxR" is the permanent record of everything the search sent.
-An item in two collections is one item in Zotero, not a duplicate. Runs in GitHub Actions, where the Zotero key lives as a secret.
+    LCR HCR CVxR     every paper the search has sent, the permanent record
+      To Read        what's ahead, which Deadline or Die reads
+      Read           moved here when marked Read in Deadline or Die
+      Dropped        moved here when marked Dropped in Deadline or Die
+
+An item in two collections is one item in Zotero, not a duplicate.
+Runs in GitHub Actions, where the Zotero key lives as a secret.
 
 Rules:
   - Metadata comes from Crossref or Europe PMC, never from the queue file alone, and is checked
@@ -41,6 +45,8 @@ UA = {"User-Agent": "deadline-or-die-paper-importer (github.com/Ssam232/deadline
 ROOT = Path(os.getenv("QUEUE_ROOT", "."))
 PROJECT = "LCR HCR CVxR"
 BACKFILL_MARKER = "backfill-lcr-hcr-cvxr.done"
+FOLDERS_MARKER = "folders.done"
+STATUS_FOLDERS = {"read": "Read", "dropped": "Dropped"}
 ORDER_FILE = "reading-order.json"
 ORDER_MARKER = "reading-order.done"
 LEVELS = {"foundational": ("A", "Foundational"), "core": ("B", "Core"),
@@ -260,6 +266,45 @@ class Library:
         print(f'Created the "{name}" collection.')
         return made["0"]["key"]
 
+    def arrange_folders(self, project: str, to_read: str) -> tuple[int, list[str]]:
+        """Puts To Read under the project collection, adds Read and Dropped beside it, and moves papers that are
+        already marked read or dropped. Changes only collections, and is safe to run again."""
+        errors = []
+        cols = list(self._pages("/collections"))
+        row = next(c for c in cols if c["key"] == to_read)
+        if row["data"].get("parentCollection") != project:
+            r = requests.put(f"{self.base}/collections/{to_read}", headers=self.h, timeout=30,
+                             json={"key": to_read, "version": row["version"], "name": row["data"]["name"],
+                                   "parentCollection": project})
+            if r.status_code not in (200, 204):
+                return 0, [f"could not move To Read ({r.status_code}): {r.text[:120]}"]
+        keys = {}
+        for tag, name in STATUS_FOLDERS.items():
+            found = next((c["key"] for c in cols if c["data"]["name"].strip().lower() == name.lower()
+                          and c["data"].get("parentCollection") == project), None)
+            if not found:
+                r = requests.post(f"{self.base}/collections", json=[{"name": name, "parentCollection": project}],
+                                  headers={**self.h, "Zotero-Write-Token": uuid.uuid4().hex}, timeout=30)
+                made = r.json().get("successful", {}) if r.status_code == 200 else {}
+                if "0" not in made:
+                    return 0, [f'could not create "{name}" ({r.status_code}): {r.text[:120]}']
+                found = made["0"]["key"]
+            keys[tag] = found
+        moved = 0
+        for it in list(self._pages(f"/collections/{to_read}/items/top")):
+            tags = {t.get("tag") for t in it["data"].get("tags", [])}
+            tag = next((t for t in STATUS_FOLDERS if t in tags), None)
+            if not tag:
+                continue
+            colls = [c for c in it["data"].get("collections", []) if c != to_read] + [keys[tag]]
+            r = requests.patch(f"{self.base}/items/{it['key']}", json={"collections": list(dict.fromkeys(colls))},
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code in (200, 204):
+                moved += 1
+            else:
+                errors.append(f'{it["data"].get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        return moved, errors
+
     def known(self) -> tuple[set[str], set[str]]:
         dois, titles = set(), set()
         for it in self._pages("/items/top"):
@@ -357,7 +402,8 @@ def run() -> int:
     marker = ROOT / BACKFILL_MARKER
     order_file, order_marker = ROOT / ORDER_FILE, ROOT / ORDER_MARKER
     order_due = order_file.exists() and not order_marker.exists()
-    if not pending and marker.exists() and not order_due:
+    folders_marker = ROOT / FOLDERS_MARKER
+    if not pending and marker.exists() and not order_due and folders_marker.exists():
         print("Queue is empty.")
         return 0
     lib = Library(user, key)
@@ -374,6 +420,14 @@ def run() -> int:
         else:
             marker.write_text(f"Added {moved} earlier papers to {PROJECT}.\n")
             print(f"Added {moved} earlier papers to {PROJECT}.")
+    if not folders_marker.exists():
+        moved, errors = lib.arrange_folders(project, to_read)
+        if errors:
+            failed_any = True
+            print("Could not finish arranging the folders:\n  " + "\n  ".join(errors))
+        else:
+            folders_marker.write_text(f"Arranged To Read, Read and Dropped under {PROJECT}. Moved {moved} papers.\n")
+            print(f"Arranged the folders and moved {moved} papers.")
     if order_due:
         written, errors = lib.apply_order(json.loads(order_file.read_text()))
         if errors:

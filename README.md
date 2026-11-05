@@ -3,7 +3,7 @@
 Branch for the reading-list pipeline. It has no app code, so pushes here never restart Deadline or Die.
 
 1. A weekly scheduled search adds up to 2 papers in `queue/<date>.json`.
-2. The push runs `import_papers.py` in GitHub Actions, which adds the papers to the Zotero "To Read" and "LCR HCR CVxR" collections.
+2. The push runs `import_papers.py` in GitHub Actions, which adds the papers to "LCR HCR CVxR" and its "To Read" folder in Zotero. Marking a paper Read or Dropped in Deadline or Die moves it to the "Read" or "Dropped" folder beside To Read.
 3. Deadline or Die already reads "To Read", so the papers appear in the app.
 
 Processed files move to `done/`, and `imported.jsonl` records every outcome.
