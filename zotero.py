@@ -107,8 +107,7 @@ def reading_list(user: str, key: str, collection: str = "To Read") -> list[dict]
         if d.get("itemType") in SKIP_TYPES or it["key"] in seen:
             continue
         seen.add(it["key"])
-        authors = [c.get("lastName") or c.get("name", "") for c in d.get("creators", []) if c.get("creatorType") == "author"]
-        who = (authors[0] + (" et al." if len(authors) > 1 else "")) if authors else ""
+        who = who_of(d.get("creators", []))
         m = _ORDER.search(d.get("extra") or "")
         out.append({"key": it["key"], "title": d.get("title") or "(untitled)", "who": who,
                     "year": (d.get("date") or "")[:4], "journal": d.get("publicationTitle") or d.get("websiteTitle") or "",
@@ -123,6 +122,14 @@ def reading_list(user: str, key: str, collection: str = "To Read") -> list[dict]
 def to_read(user: str, key: str, collection: str = "To Read", limit: int = 50) -> list[dict]:
     """What's still ahead of you, in read order. Papers you've read or dropped stay out of suggestions."""
     return [p for p in reading_list(user, key, collection) if p["status"] in ("unread", READING_TAG)][:limit]
+
+
+def who_of(creators: list[dict]) -> str:
+    """'Smith et al.' (or 'Smith' for one author). Falls back to any creator when none is tagged as an author."""
+    people = [c for c in creators if c.get("creatorType") == "author"] or list(creators)
+    names = [(c.get("lastName") or c.get("name") or "").strip() for c in people]
+    names = [x for x in names if x]
+    return (names[0] + (" et al." if len(names) > 1 else "")) if names else ""
 
 
 def label(p: dict) -> str:
@@ -159,6 +166,24 @@ def set_status(user: str, key: str, item_key: str, status: str, collection: str 
         if r.status_code != 412 or attempt == 2:  # 412: it changed in Zotero since we read it, so read it again once
             detail = "the key needs write access" if r.status_code == 403 else r.text[:120]
             raise ZoteroError(f"Zotero couldn't save that ({r.status_code}): {detail}")
+
+
+def set_order(user: str, key: str, item_key: str, level: str, num: int) -> str:
+    """Writes 'Read order: A03' into the paper's Extra field (replacing any old one, keeping the rest). Needs write
+    access. Returns the new order label."""
+    r = requests.get(f"{API}/users/{user}/items/{item_key}", headers=_h(key), timeout=20)
+    if r.status_code != 200:
+        raise ZoteroError(f"Zotero {r.status_code}")
+    it = r.json()
+    lab = f"{level.upper()}{int(num):02d}"
+    extra = _ORDER.sub("", it["data"].get("extra") or "").strip("\n")
+    extra = (f"Read order: {lab}\n" + extra).strip("\n")
+    r = requests.patch(f"{API}/users/{user}/items/{item_key}",
+                       headers={**_h(key), "If-Unmodified-Since-Version": str(it["version"])},
+                       json={"extra": extra}, timeout=20)
+    if r.status_code not in (200, 204):
+        raise ZoteroError(f"Zotero {r.status_code}: needs a key with write access")
+    return lab
 
 
 def mark_read(user: str, key: str, item_key: str, collection: str = "To Read") -> None:

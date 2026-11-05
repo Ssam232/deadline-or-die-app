@@ -1738,14 +1738,15 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     # ⚡ The coins, XP and save are done. The rest (Zotero, ticking it off in Notion, uploading the proof file, the
     # phone buzz) are network calls that used to hold the page for seconds: they now finish in the background.
     jobs = []
-    if t.get("zotero_key") and zotero_cfg(state):
-        zc, zk = zotero_cfg(state), t["zotero_key"]
+    if paper_keys(t) and zotero_cfg(state):
+        zc, zks = zotero_cfg(state), paper_keys(t)
         def _zot():
-            Z.mark_read(zc[0], zc[1], zk, zc[2])
-            _zotero_list.clear()  # so the To Read list drops it
+            for zk in zks:
+                Z.mark_read(zc[0], zc[1], zk, zc[2])
+            _zotero_list.clear()  # so the To Read list drops them
             _zotero_reading.clear()
         jobs.append(("Couldn't tag it read in Zotero", _zot))
-        msg += "\n\n📄 Tagging it **read** in Zotero."
+        msg += f"\n\n📄 Tagging {'it' if len(zks) == 1 else f'all {len(zks)}'} **read** in Zotero."
     if t.get("notion_id") and state["settings"].get("notion_done_prop") and t.get("notion_done_type"):
         try:
             hdr, st_snap, t_snap = notion_headers(), {"settings": dict(state["settings"])}, dict(t)
@@ -2606,7 +2607,7 @@ def render_qualify_form(state: dict) -> None:
     zc = zotero_cfg(state)
     if zc:
         try:
-            known_z = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
+            known_z = {k for t in state["tasks"] if t["status"] == "open" for k in paper_keys(t)}
             for p_ in [p_ for p_ in _zotero_list(*zc) if p_["key"] not in known_z][:6]:
                 k = f"z:{p_['key']}"
                 lab = Z.label(p_)
@@ -2816,35 +2817,62 @@ def render_remove(state: dict, t: dict, scope: str) -> None:
 READING_TASK = re.compile(r"\b(read|reading|paper|papers|article|articles|lit(erature)?\s*review)\b", re.I)
 
 
+PAPER_MIN = 45  # minutes per paper on a reading task (flow extensions cover the rest)
+
+
+def paper_keys(t: dict) -> list[str]:
+    """The Zotero papers a task covers (older tasks have just one)."""
+    return list(t.get("zotero_keys") or ([t["zotero_key"]] if t.get("zotero_key") else []))
+
+
+def paper_label(p: dict, order: bool = True) -> str:
+    """'A03 · Title — Smith et al., 2021': reading-order number first, author always shown."""
+    who = ", ".join(x for x in (p.get("who"), p.get("year")) if x)
+    return (f"{p['order']} · " if order and p.get("order") else "") + p["title"][:90] + (f" — {who}" if who else "")
+
+
 def _pair_paper(state: dict, t: dict, widget: str, proof_key: str, papers: list[dict]) -> None:
-    """Runs when you pick (or clear) a paper for a reading task: the task takes the paper's name and link, and
-    finishing it marks the paper read in Zotero."""
+    """Runs when you change the papers on a reading task: it takes their names and links, gets 45 min per paper
+    (the timer starts from that; flow extensions cover the rest), and finishing it marks them all read."""
     _proof_touch(proof_key)  # keep this panel open
-    pick = st.session_state.get(widget)
-    p = next((x for x in papers if x["key"] == pick), None)
-    if p:
-        t.setdefault("title_orig", t["title"])
-        t.setdefault("details_orig", t.get("details", ""))
-        t.update(zotero_key=p["key"], title=f"📄 Read: {p['title'][:80]}",
-                 details=(t["details_orig"] + "  \n" if t["details_orig"] else "") + f"📄 {Z.label(p)}"
-                 + (f" · {p['url']}" if p.get("url") else ""))
-        also = next((x["title"] for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]
-                     and x.get("zotero_key") == p["key"]), None)
-        flash(f"📄 Paired **{Z.label(p)[:80]}**. Finishing this marks it read in Zotero."
-              + (f" It's also on **{also[:60]}**: finish either one, or remove the spare." if also else ""))
+    by = {p["key"]: p for p in papers}
+    picks = [k for k in (st.session_state.get(widget) or []) if k in by]
+    if picks:
+        for k_, v_ in (("title_orig", t["title"]), ("details_orig", t.get("details", "")),
+                       ("minutes_orig", t.get("minutes")), ("value_orig", [t.get("reward"), t.get("penalty"), t.get("xp")])):
+            t.setdefault(k_, v_)
+        first = by[picks[0]]
+        mins = PAPER_MIN * len(picks)
+        d_ = V.value(t.get("category") if t.get("category") in V.CATEGORIES else "deep", mins)
+        t.update(zotero_keys=picks, zotero_key=picks[0], minutes=mins, reward=d_["reward"], penalty=d_["penalty"],
+                 xp=d_["xp"], difficulty=V.size_label(mins),
+                 title=f"📄 Read: {first['title'][:70]}" + (f" + {len(picks) - 1} more" if len(picks) > 1 else ""),
+                 details=(t["details_orig"] + "  \n" if t["details_orig"] else "")
+                 + "  \n".join(f"📄 {paper_label(by[k])}" + (f" · {by[k]['url']}" if by[k].get("url") else "") for k in picks))
+        also = sorted({x["title"][:50] for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]
+                       and set(paper_keys(x)) & set(picks)})
+        flash(f"📄 {len(picks)} paper{'s' * (len(picks) != 1)} · {min_label(mins)} on the timer · +{d_['reward']}. "
+              "Finishing marks them read in Zotero."
+              + (f" Also on: **{'**, **'.join(also)}**." if also else ""))
     else:
-        t.pop("zotero_key", None)
+        for k_ in ("zotero_key", "zotero_keys"):
+            t.pop(k_, None)
         if "title_orig" in t:
             t["title"] = t.pop("title_orig")
         if "details_orig" in t:
             t["details"] = t.pop("details_orig")
-        flash("📄 Paper unpaired.")
+        if "minutes_orig" in t:
+            t["minutes"] = t.pop("minutes_orig")
+        if "value_orig" in t:
+            t["reward"], t["penalty"], t["xp"] = t.pop("value_orig")
+        flash("📄 Papers unpaired.")
     save_state(state)
 
 
 def render_paper_pair(state: dict, t: dict, scope: str) -> None:
-    """📄 For reading tasks: pick which paper from your Zotero reading list this one is."""
-    if not (t.get("zotero_key") or READING_TASK.search(t.get("title_orig") or t["title"])):
+    """📄 For reading tasks: pick which papers from your Zotero reading list this one covers."""
+    mine = paper_keys(t)
+    if not (mine or READING_TASK.search(t.get("title_orig") or t["title"])):
         return
     zc = zotero_cfg(state)
     if not zc:
@@ -2853,36 +2881,35 @@ def render_paper_pair(state: dict, t: dict, scope: str) -> None:
         papers = _zotero_reading(*zc)
     except Exception:  # noqa: BLE001 — Zotero down: the task still works without it
         return
-    taken = {x["zotero_key"]: x["title"] for x in state["tasks"]
-             if x["status"] == "open" and x["id"] != t["id"] and x.get("zotero_key")}
-    opts = [p for p in papers if p["status"] in ("unread", "reading") or p["key"] == t.get("zotero_key")]
-    if t.get("zotero_key") and t["zotero_key"] not in {p["key"] for p in opts}:
-        # its paper isn't in what Zotero sent back (moved, or the list is cached): still show it as the pick
-        opts.append({"key": t["zotero_key"], "title": t["title"].replace("📄 Read: ", ""), "who": "", "year": "",
-                     "url": "", "status": "unread"})
+    taken = {k: x["title"] for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"] for k in paper_keys(x)}
+    opts = [p for p in papers if p["status"] in ("unread", "reading") or p["key"] in mine]
+    have = {p["key"] for p in opts}
+    for k in mine:
+        if k not in have:  # its paper isn't in what Zotero sent back (moved, or cached): still show it as picked
+            opts.append({"key": k, "title": t["title"].replace("📄 Read: ", "").split(" + ")[0] if k == mine[0] else k,
+                         "who": "", "year": "", "url": "", "status": "unread", "order": ""})
     if not opts:
         return
     opts.sort(key=lambda p: (p["title"] or "").casefold().lstrip("\"'“‘([ "))  # A→Z by title
     by = {p["key"]: p for p in opts}
     widget = f"{scope}pair_{t['id']}"
-    cur = t.get("zotero_key") if t.get("zotero_key") in by else None
-    if widget not in st.session_state or st.session_state[widget] != cur:
+    cur = [k for k in mine if k in by]
+    if st.session_state.get(widget) != cur:
         st.session_state[widget] = cur
-    st.selectbox("📄 Which paper?", [None] + list(by), key=widget,
-                 format_func=lambda k: "— pick one from your reading list —" if k is None else
-                 ("📖 " if by[k]["status"] == "reading" else "") + Z.label(by[k])
-                 + (" · already a task" if k in taken else ""),
-                 on_change=_pair_paper, args=(state, t, widget, f"{scope}open_{t['id']}", opts),
-                 help="Pairs this task with a paper: it takes the paper's name and link, and finishing it marks the "
-                      "paper read in Zotero.")
+    st.multiselect(f"📄 Which papers? · {PAPER_MIN} min each", list(by), key=widget,
+                   format_func=lambda k: ("📖 " if by[k]["status"] == "reading" else "") + paper_label(by[k])
+                   + (" · already a task" if k in taken else ""),
+                   placeholder="Pick from your reading list", on_change=_pair_paper,
+                   args=(state, t, widget, f"{scope}open_{t['id']}", opts),
+                   help=f"Each paper adds {PAPER_MIN} min to this task (and its timer). It takes their names and links; "
+                        "finishing it marks them all read in Zotero.")
     spares = [x for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]
-              and t.get("zotero_key") and x.get("zotero_key") == t["zotero_key"]]
-    for x in spares:  # the same paper on two open tasks: drop the spare, no penalty (it's one piece of work)
+              and paper_keys(x) and set(paper_keys(x)) <= set(mine)]
+    for x in spares:  # papers already covered here: drop the spare, no penalty (it's the same reading)
         if st.button(f"🗑️ Remove the spare “{x['title'][:50]}” (free: same paper)", key=f"{scope}spare_{t['id']}_{x['id']}",
                      use_container_width=True):
             _proof_touch(f"{scope}open_{t['id']}")
-            if x.get("focus_min") and not t.get("focus_min"):
-                t["focus_min"] = x["focus_min"]  # keep any timer minutes already logged on the spare
+            t["focus_min"] = (t.get("focus_min") or 0) + (x.get("focus_min") or 0)  # keep timer minutes logged on it
             remove_task(state, x, "Duplicate of another task", f"same paper as {t['title'][:60]}")
             state["removals"][-1]["auto"] = True  # doesn't use up a weekly removal: it's provably the same paper
             save_state(state)
@@ -4347,7 +4374,7 @@ def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
         return
     _zotero_reading.clear()
     _zotero_list.clear()
-    if new in ("read", "dropped") and any(t.get("zotero_key") == p["key"] and t["status"] == "open" for t in state["tasks"]):
+    if new in ("read", "dropped") and any(p["key"] in paper_keys(t) and t["status"] == "open" for t in state["tasks"]):
         flash(f"📄 Marked **{READING_LABELS[new].lower()}**. Its task is still open on your list.", "warning")
 
 
@@ -4398,7 +4425,7 @@ def render_reading_list(state: dict) -> None:
                    {"Read": "Nothing read yet.", "Dropped": "Nothing dropped."}.get(view, "All caught up."))
     st.markdown("<style>[class*='st-key-paper_tags_'] button{min-height:1.5rem;padding:0 .55rem}"
                 "[class*='st-key-paper_tags_'] button p{font-size:.74rem}</style>", unsafe_allow_html=True)
-    open_keys = {t.get("zotero_key") for t in state["tasks"] if t["status"] == "open"}
+    open_keys = {k for t in state["tasks"] if t["status"] == "open" for k in paper_keys(t)}
     seen_levels = {"last": object()}
 
     def _row(p: dict) -> None:
@@ -4408,10 +4435,11 @@ def render_reading_list(state: dict) -> None:
         if head and head != seen_levels["last"]:
             seen_levels["last"] = head
             st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(head)}</div>", unsafe_allow_html=True)
-        meta = " · ".join(x for x in (p["who"], p["journal"], "needs check" if p["needs_check"] else "") if x)
+        meta = " · ".join(html.escape(x) for x in (p["journal"], "needs check" if p["needs_check"] else "") if x)
+        who_ = f"<b style='color:#c9ccd4'>{html.escape(p['who'])}</b>" if p["who"] else "<i>author unknown</i>"
         num = f"<b>{html.escape(p['order'])}</b> · " if p["order"] else ""
         st.markdown(f"{num}<a href='{html.escape(p['url'], quote=True)}' target='_blank'>{html.escape(p['title'])}</a>"
-                    + (f"<br><small style='color:#8b909c'>{html.escape(meta)}</small>" if meta else ""),
+                    + f"<br><small style='color:#8b909c'>{who_}{' · ' + meta if meta else ''}</small>",
                     unsafe_allow_html=True)
         tags = _paper_tags(p)
         if tags:
@@ -4420,7 +4448,21 @@ def render_reading_list(state: dict) -> None:
             st.pills(f"Tags of {p['title'][:60]}", tags, selection_mode="multi", default=on, key=widget,
                      format_func=lambda t: t.split("|", 1)[1], label_visibility="collapsed",
                      on_change=_toggle_tag_filters, args=(widget, on))
-        c1, c2 = st.columns([4, 1.2], vertical_alignment="center")
+        c1, c3, c2 = st.columns([4, 1, 1.2], vertical_alignment="center")
+        with c3.popover(f"🔢 {p['order'] or 'order'}", use_container_width=True, help="Set this paper's reading order"):
+            lv_ = st.selectbox("Level", list(Z.LEVELS), key=f"ord_lv_{p['key']}",
+                               index=list(Z.LEVELS).index(p["order"][0]) if p["order"] else 1,
+                               format_func=lambda k: f"{k} · {Z.LEVELS[k]}")
+            nm_ = st.number_input("Number", 1, 99, int(p["order"][1:]) if p["order"] else 1, key=f"ord_n_{p['key']}")
+            if st.button("Save order", key=f"ord_go_{p['key']}", type="primary", use_container_width=True):
+                try:
+                    lab_ = Z.set_order(zc[0], zc[1], p["key"], lv_, nm_)
+                    _zotero_reading.clear()
+                    _zotero_list.clear()
+                    flash(f"🔢 **{p['title'][:60]}** is now {lab_}.")
+                except Exception as e:  # noqa: BLE001
+                    flash(f"Couldn't set the order: {e}", "error")
+                st.rerun()
         widget = f"paper_{p['key']}_{p['status']}"  # a new status starts a fresh control
         c1.segmented_control(f"Status of {p['title'][:60]}", list(READING_LABELS.values()),
                              default=READING_LABELS[p["status"]], key=widget, label_visibility="collapsed",
@@ -4432,7 +4474,7 @@ def render_reading_list(state: dict) -> None:
                          help="A 45-minute deep-work task, due tonight. Finishing it with proof earns coins and marks the paper read."):
                 nt = make_task(f"📄 Read: {p['title'][:80]}", f"Proof: photo/screenshot of your notes + a 2-line summary. {p['url']}",
                                datetime.combine(now().date(), dtime(23, 59), TZ), None, "", category="deep", minutes=45)
-                nt["zotero_key"] = p["key"]
+                nt["zotero_key"], nt["zotero_keys"] = p["key"], [p["key"]]
                 if daily.peek_day(state, now().date()).get("qualified"):
                     nt["mission_day"] = now().date().isoformat()
                 state["tasks"].append(nt)
