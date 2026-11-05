@@ -10,7 +10,10 @@ Rules:
     against the queued title. A failed lookup or a title mismatch still adds the paper, using what
     the queue supplied, but tags it "needs-check" and leaves the DOI off.
   - A paper already in the library is skipped. Existing items are never edited or deleted, apart
-    from one one-time step that adds earlier imports (tag "paper-scout") to "LCR HCR CVxR".
+    from one-time steps on earlier imports (tag "paper-scout"): adding them to "LCR HCR CVxR", and
+    writing the read order from reading-order.json.
+  - Read order lives in the item's Extra field as "Read order: B07 (Core)", so sorting by Extra in
+    Zotero and the list in Deadline or Die agree. A new paper's "level" puts it at the end of that level.
   - A queue file moves to done/ only once every paper in it has been handled.
 """
 from __future__ import annotations
@@ -34,6 +37,12 @@ UA = {"User-Agent": "deadline-or-die-paper-importer (github.com/Ssam232/deadline
 ROOT = Path(os.getenv("QUEUE_ROOT", "."))
 PROJECT = "LCR HCR CVxR"
 BACKFILL_MARKER = "backfill-lcr-hcr-cvxr.done"
+ORDER_FILE = "reading-order.json"
+ORDER_MARKER = "reading-order.done"
+LEVELS = {"foundational": ("A", "Foundational"), "core": ("B", "Core"),
+          "specialized": ("C", "Specialized"), "niche": ("D", "Niche")}
+LETTER_NAMES = {letter: name for letter, name in LEVELS.values()}
+ORDER_LINE = re.compile(r"^Read order:\s*([A-D])(\d+).*$", re.M | re.I)
 MATCH = 0.72
 BATCH = 50
 
@@ -167,6 +176,20 @@ def build_item(paper: dict, collections: list[str]) -> dict:
     return {"itemType": "journalArticle", **meta, "url": url, "tags": tags, "collections": collections, "relations": {}}
 
 
+def with_order(extra: str | None, code: str) -> str:
+    """Sets the read-order line in an Extra field and leaves any other lines alone."""
+    line = f"Read order: {code} ({LETTER_NAMES[code[0]]})"
+    rest = [ln for ln in (extra or "").splitlines() if ln.strip() and not ORDER_LINE.match(ln)]
+    return "\n".join([line, *rest])
+
+
+def next_code(level: str | None, used: dict[str, int]) -> str:
+    """The next free code at the end of a level. A paper with no level counts as specialized."""
+    letter = LEVELS.get((level or "").strip().lower(), LEVELS["specialized"])[0]
+    used[letter] = used.get(letter, 0) + 1
+    return f"{letter}{used[letter]:02d}"
+
+
 # ---- zotero ---------------------------------------------------------------------------------
 
 class Library:
@@ -232,6 +255,39 @@ class Library:
                 errors.append(f'{it["data"].get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
         return added, errors
 
+    def apply_order(self, order: list[dict]) -> tuple[int, list[str]]:
+        """Writes read order onto earlier imports. Papers are matched by DOI, or by title when there is no DOI."""
+        by_doi = {norm_doi(o["doi"]): o["code"] for o in order if o.get("doi")}
+        by_title = {norm_title(o["title"]): o["code"] for o in order}
+        written, matched, errors = 0, set(), []
+        for it in list(self._pages("/items/top", tag="paper-scout")):
+            d = it["data"]
+            code = by_doi.get(norm_doi(d.get("DOI"))) or by_title.get(norm_title(d.get("title")))
+            if not code:
+                continue
+            matched.add(code)
+            extra = with_order(d.get("extra"), code)
+            if extra == d.get("extra"):
+                continue
+            r = requests.patch(f"{self.base}/items/{it['key']}", json={"extra": extra},
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code in (200, 204):
+                written += 1
+            else:
+                errors.append(f'{d.get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        missing = [o["code"] for o in order if o["code"] not in matched]
+        if missing:
+            errors.append("no library item found for " + ", ".join(missing))
+        return written, errors
+
+    def used_codes(self) -> dict[str, int]:
+        used: dict[str, int] = {}
+        for it in self._pages("/items/top"):
+            m = ORDER_LINE.search(it["data"].get("extra") or "")
+            if m:
+                used[m[1].upper()] = max(used.get(m[1].upper(), 0), int(m[2]))
+        return used
+
     def create(self, items: list[dict]) -> list[str]:
         """Creates items, returns a failure message per item that did not save."""
         errors = []
@@ -255,7 +311,9 @@ def run() -> int:
         raise ImportFailure("Add ZOTERO_USER_ID and ZOTERO_API_KEY as GitHub Actions secrets, then re-run this workflow.")
     pending = sorted((ROOT / "queue").glob("*.json"))
     marker = ROOT / BACKFILL_MARKER
-    if not pending and marker.exists():
+    order_file, order_marker = ROOT / ORDER_FILE, ROOT / ORDER_MARKER
+    order_due = order_file.exists() and not order_marker.exists()
+    if not pending and marker.exists() and not order_due:
         print("Queue is empty.")
         return 0
     lib = Library(user, key)
@@ -272,7 +330,16 @@ def run() -> int:
         else:
             marker.write_text(f"Added {moved} earlier papers to {PROJECT}.\n")
             print(f"Added {moved} earlier papers to {PROJECT}.")
+    if order_due:
+        written, errors = lib.apply_order(json.loads(order_file.read_text()))
+        if errors:
+            failed_any = True
+            print("Could not set the whole read order:\n  " + "\n  ".join(errors))
+        else:
+            order_marker.write_text(f"Set the read order on {written} papers.\n")
+            print(f"Set the read order on {written} papers.")
     dois, titles = lib.known()
+    used = lib.used_codes()
     log = []
     (ROOT / "done").mkdir(exist_ok=True)
     for path in pending:
@@ -287,15 +354,18 @@ def run() -> int:
             if doi:
                 dois.add(doi)
             titles.add(title)
+            item["extra"] = with_order(item.get("extra"), next_code(p.get("level"), used))
             items.append(item)
             outcomes.append(("needs-check" if {"tag": "needs-check"} in item["tags"] else "added", item))
         errors = lib.create(items) if items else []
         if errors:
             failed_any = True
+            used = lib.used_codes()  # some may have saved: never hand out the same code twice
             print(f"{path.name} kept in the queue:\n  " + "\n  ".join(errors))
             continue
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        log += [{"date": stamp, "outcome": o, "title": i["title"], "doi": norm_doi(i.get("DOI")), "file": path.name}
+        log += [{"date": stamp, "outcome": o, "title": i["title"], "doi": norm_doi(i.get("DOI")), "file": path.name,
+                 **({"order": i["extra"].split()[2]} if o != "skipped: already in library" else {})}
                 for o, i in outcomes]
         path.rename(ROOT / "done" / path.name)
     if log:

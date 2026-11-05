@@ -55,6 +55,9 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"resultList": {"result": [h] if h else []}})
         if u.path.endswith("/collections"):
             return self.send(200, fake.collections)
+        if "/items/" in u.path and not u.path.endswith("/top"):
+            row = next((i for i in fake.items if i["key"] == u.path.rsplit("/", 1)[1]), None)
+            return self.send(200, row) if row else self.send(404, {})
         if u.path.endswith("/items/top"):
             ck = u.path.split("/collections/")[1].split("/")[0] if "/collections/" in u.path else None
             rows = [i for i in fake.items if not ck or ck in i["data"]["collections"]]
@@ -236,6 +239,70 @@ class Tests(unittest.TestCase):
         fake.reject_patch = set()
         self.assertEqual(self.m.run(), 0)
         self.assertEqual(len(fake.items[0]["data"]["collections"]), 2)
+
+    def order_file(self, entries):
+        (self.root / self.m.ORDER_FILE).write_text(json.dumps(entries))
+
+    def test_read_order_is_written_once_and_keeps_other_extra_lines(self):
+        self.scout_item()
+        fake.items[0]["data"].update({"DOI": "10.1/x", "extra": "My own note"})
+        self.scout_item("OLD2")
+        self.scout_item("MINE", tags=("my-own",))
+        self.order_file([{"code": "A01", "doi": "10.1/X", "title": "Different title"},
+                         {"code": "D01", "title": "Paper OLD2"}])
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(fake.items[0]["data"]["extra"], "Read order: A01 (Foundational)\nMy own note")
+        self.assertEqual(fake.items[1]["data"]["extra"], "Read order: D01 (Niche)")
+        self.assertNotIn("extra", fake.items[2]["data"])
+        fake.items[0]["data"]["extra"] = "Read order: B09 (Core)"  # a later hand edit is left alone
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(fake.items[0]["data"]["extra"], "Read order: B09 (Core)")
+
+    def test_unmatched_read_order_is_an_error_and_retried(self):
+        self.order_file([{"code": "A01", "title": "Nowhere"}])
+        self.assertEqual(self.m.run(), 1)
+        self.assertFalse((self.root / self.m.ORDER_MARKER).exists())
+
+    def test_new_paper_goes_to_the_end_of_its_level(self):
+        self.scout_item()
+        fake.items[0]["data"]["extra"] = "Read order: B07 (Core)"
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "level": "core"},
+                    {"doi": "10.1/none", "title": "No level given"},
+                    {"doi": "10.1/none2", "title": "Foundational one", "level": "Foundational"}])
+        self.assertEqual(self.m.run(), 0)
+        got = {i["data"]["title"]: i["data"].get("extra") for i in fake.items[1:]}
+        self.assertEqual(got["Good paper"], "Read order: B08 (Core)")
+        self.assertEqual(got["No level given"], "Read order: C01 (Specialized)")
+        self.assertEqual(got["Foundational one"], "Read order: A01 (Foundational)")
+
+    def test_app_lists_papers_in_read_order_and_tracks_status(self):
+        app = os.getenv("APP_CHECKOUT")
+        if not app:
+            self.skipTest("set APP_CHECKOUT to a checkout of main")
+        self.queue([{"doi": "10.1/none", "title": "Later", "level": "niche"},
+                    {"doi": "10.1/good", "title": "Good paper", "level": "foundational"},
+                    {"kind": "webpage", "title": "A protocol", "url": "https://x.org", "level": "core"}])
+        self.m.run()
+        fake.items.append({"key": "OWN", "version": 1, "data": {"itemType": "journalArticle", "title": "Own", "creators": [],
+                           "tags": [{"tag": "keep"}], "collections": [fake.collections[0]["key"]]}})
+        sys.path.insert(0, app)
+        sys.modules.pop("zotero", None)
+        import zotero as Z
+        Z.API = self.base
+        rl = Z.reading_list("1", "k", "To Read")
+        self.assertEqual([p["order"] for p in rl], ["A01", "B01", "D01", ""])
+        self.assertEqual([p["level"] for p in rl], ["Foundational", "Core", "Niche", None])
+        Z.set_status("1", "k", rl[0]["key"], "reading")
+        Z.set_status("1", "k", rl[0]["key"], "dropped")
+        Z.set_status("1", "k", "OWN", "read")
+        own = next(i for i in fake.items if i["key"] == "OWN")
+        self.assertEqual(own["data"]["tags"], [{"tag": "keep"}, {"tag": "read"}])
+        first = next(i for i in fake.items if i["key"] == rl[0]["key"])
+        self.assertNotIn({"tag": "reading"}, first["data"]["tags"])
+        self.assertIn({"tag": "paper-scout"}, first["data"]["tags"])
+        self.assertEqual([p["title"] for p in Z.to_read("1", "k", "To Read")], ["A protocol", "Later"])
+        Z.set_status("1", "k", rl[0]["key"], "unread")
+        self.assertEqual(Z.to_read("1", "k", "To Read")[0]["title"], "Good paper")
 
     def test_webpage_entry(self):
         self.queue([{"kind": "webpage", "title": "Protocol", "url": "https://x.org/p.pdf", "source": "TREAT-NMD"}])
