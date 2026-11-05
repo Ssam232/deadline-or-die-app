@@ -159,7 +159,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(d["date"], "2020-03")
         self.assertEqual(d["collections"], ["COLL0", "COLL1"])
         self.assertEqual([c["data"]["name"] for c in fake.collections], ["To Read", "LCR HCR CVxR", "Read", "Dropped"])
-        self.assertIn({"tag": "q1"}, d["tags"])
+        self.assertIn({"tag": "subject:q1"}, d["tags"])
+        self.assertIn({"tag": "year:2020"}, d["tags"])
         self.assertFalse(list((self.root / "queue").glob("*.json")))
         self.assertTrue((self.root / "done" / "2026-11-04.json").exists())
 
@@ -446,6 +447,46 @@ class Tests(unittest.TestCase):
             self.assertEqual(len(Z.reading_list("1", "k")), 2)
         Z.set_status("1", "k", item["key"], "read")
         self.assertEqual([p["title"] for p in Z.to_read("1", "k")], ["Other"])
+
+    def test_new_paper_gets_labelled_tags_and_bad_values_are_left_off(self):
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "tags": ["diet-muscle"], "species": "Rat",
+                     "sex": "unclear", "type": "study"}])
+        self.assertEqual(self.m.run(), 0)
+        tags = {t["tag"] for t in fake.items[0]["data"]["tags"]}
+        self.assertEqual(tags, {"subject:Diet and muscle", "year:2020", "species:rat", "type:study", "paper-scout"})
+
+    def test_earlier_papers_are_tagged_once_keeping_status_and_own_tags(self):
+        self.scout_item(tags=("paper-scout", "diet-muscle", "read", "my-own"))
+        fake.items[0]["data"].update({"DOI": "10.1/x", "date": "2016-11-17"})
+        (self.root / self.m.FACTS_FILE).write_text(json.dumps(
+            [{"doi": "10.1/X", "title": "Paper OLD1", "tags": ["diet-muscle"], "species": "rat", "sex": "male", "type": "study"}]))
+        self.assertEqual(self.m.run(), 0)
+        tags = {t["tag"] for t in fake.items[0]["data"]["tags"]}
+        self.assertEqual(tags, {"subject:Diet and muscle", "year:2016", "species:rat", "sex:male", "type:study",
+                                "paper-scout", "read", "my-own"})
+        fake.items[0]["data"]["tags"].append({"tag": "species:mouse"})  # a later hand edit is left alone
+        self.assertEqual(self.m.run(), 0)
+        self.assertIn({"tag": "species:mouse"}, fake.items[0]["data"]["tags"])
+
+    def test_missing_paper_in_facts_is_an_error_and_retried(self):
+        (self.root / self.m.FACTS_FILE).write_text(json.dumps([{"title": "Nowhere", "tags": ["diet-muscle"]}]))
+        self.assertEqual(self.m.run(), 1)
+        self.assertFalse((self.root / self.m.FACTS_MARKER).exists())
+
+    def test_app_reads_the_labelled_tags(self):
+        app = os.getenv("APP_CHECKOUT")
+        if not app:
+            self.skipTest("set APP_CHECKOUT to a checkout of main")
+        self.queue([{"doi": "10.1/good", "title": "Good paper", "tags": ["diet-muscle"], "species": "rat", "type": "study"}])
+        self.m.run()
+        sys.path.insert(0, app)
+        sys.modules.pop("zotero", None)
+        import zotero as Z
+        Z.API = self.base
+        p = Z.reading_list("1", "k")[0]
+        self.assertEqual(p["facets"], {"subject": ["Diet and muscle"], "species": ["rat"], "sex": [], "type": ["study"]})
+        self.assertEqual(p["year"], "2020")
+        self.assertFalse(p["needs_check"])
 
     def test_webpage_entry(self):
         self.queue([{"kind": "webpage", "title": "Protocol", "url": "https://x.org/p.pdf", "source": "TREAT-NMD"}])

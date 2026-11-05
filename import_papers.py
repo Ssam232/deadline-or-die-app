@@ -21,6 +21,8 @@ Rules:
   - A new paper goes before the title in its "before" field, or at the end of its "level" if there is
     none. Papers after it in that level move down one, which changes only their read-order line.
   - reading-order.json is rewritten from Zotero after each import, so the next search sees the real order.
+  - Papers get Zotero tags such as "subject:Diet and muscle", "year:2016", "species:rat", "sex:male" and
+    "type:study". The year comes from the paper's metadata; a detail not stated in the queue is left off.
   - At most MAX_NEW_PER_RUN papers are added per run. Any extras stay in the queue for the next run.
   - A queue file moves to done/ only once every paper in it has been handled.
 """
@@ -46,6 +48,14 @@ ROOT = Path(os.getenv("QUEUE_ROOT", "."))
 PROJECT = "LCR HCR CVxR"
 BACKFILL_MARKER = "backfill-lcr-hcr-cvxr.done"
 FOLDERS_MARKER = "folders.done"
+FACTS_FILE = "paper-facts.json"
+FACTS_MARKER = "paper-facts.done"
+SUBJECTS = {"hcr-lcr": "HCR and LCR rats", "remodeling": "Heart and diaphragm remodeling", "diet-muscle": "Diet and muscle",
+            "exercise-obese-muscle": "Exercise and obese muscle", "genetics-exercise": "Genetics and exercise",
+            "heart-diaphragm": "Heart and diaphragm failure", "strip-testing": "Muscle strip testing"}
+ALLOWED = {"species": {"rat", "mouse", "human"}, "sex": {"male", "female", "both"},
+           "type": {"review", "study", "methods"}}
+FACT_PREFIXES = ("subject:", "year:", "species:", "sex:", "type:")
 STATUS_FOLDERS = {"read": "Read", "dropped": "Dropped"}
 ORDER_FILE = "reading-order.json"
 ORDER_MARKER = "reading-order.done"
@@ -169,7 +179,7 @@ def resolve(paper: dict) -> tuple[dict | None, str]:
 
 
 def build_item(paper: dict, collections: list[str]) -> dict:
-    tags = [{"tag": t} for t in paper.get("tags", [])] + [{"tag": "paper-scout"}]
+    tags = fact_tags(paper, paper.get("date")) + [{"tag": "paper-scout"}]
     if paper.get("kind") == "webpage":
         return {"itemType": "webpage", "title": paper["title"], "url": paper.get("url", ""), "creators": [],
                 "websiteTitle": paper.get("source", ""), "date": paper.get("date", ""),
@@ -180,11 +190,25 @@ def build_item(paper: dict, collections: list[str]) -> dict:
         tags.append({"tag": "needs-check"})
         meta = {"title": paper.get("title", "(untitled)"), "creators": [], "abstractNote": "", "publicationTitle": "",
                 "volume": "", "issue": "", "pages": "", "date": paper.get("date", ""), "ISSN": "", "DOI": ""}
+    tags = fact_tags(paper, meta["date"]) + [t for t in tags if not t["tag"].startswith(FACT_PREFIXES)]
     doi = meta["DOI"]
     pmcid = paper.get("pmcid")
     url = (f"https://doi.org/{doi}" if doi else
            f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/" if pmcid else paper.get("url", ""))
     return {"itemType": "journalArticle", **meta, "url": url, "tags": tags, "collections": collections, "relations": {}}
+
+
+def fact_tags(paper: dict, date: str | None) -> list[dict]:
+    """The labelled tags for a paper: its subjects, year, and any species, sex and type that were stated."""
+    names = [f"subject:{SUBJECTS.get(t, t)}" for t in paper.get("tags", [])]
+    year = (date or "")[:4]
+    if year.isdigit():
+        names.append(f"year:{year}")
+    for facet, allowed in ALLOWED.items():
+        value = (paper.get(facet) or "").strip().lower()
+        if value in allowed:
+            names.append(f"{facet}:{value}")
+    return [{"tag": n} for n in names]
 
 
 def with_order(extra: str | None, code: str) -> str:
@@ -355,6 +379,31 @@ class Library:
             errors.append("no library item found for " + ", ".join(missing))
         return written, errors
 
+    def apply_facts(self, facts: list[dict]) -> tuple[int, list[str]]:
+        """Adds labelled tags to earlier imports. Replaces their old topic codes and keeps every other tag."""
+        by_doi = {norm_doi(f["doi"]): f for f in facts if f.get("doi")}
+        by_title = {norm_title(f["title"]): f for f in facts}
+        written, matched, errors = 0, set(), []
+        for it in list(self._pages("/items/top", tag="paper-scout")):
+            d = it["data"]
+            fact = by_doi.get(norm_doi(d.get("DOI"))) or by_title.get(norm_title(d.get("title")))
+            if not fact:
+                continue
+            matched.add(fact["title"])
+            keep = [t for t in d.get("tags", []) if not t.get("tag", "").startswith(FACT_PREFIXES)
+                    and t.get("tag") not in SUBJECTS]
+            tags = fact_tags(fact, d.get("date")) + keep
+            r = requests.patch(f"{self.base}/items/{it['key']}", json={"tags": tags},
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code in (200, 204):
+                written += 1
+            else:
+                errors.append(f'{d.get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        missing = [f["title"][:60] for f in facts if f["title"] not in matched]
+        if missing:
+            errors.append("no library item found for: " + "; ".join(missing))
+        return written, errors
+
     def ordered(self) -> list[dict]:
         """Every item with a read-order line, in order."""
         rows = []
@@ -403,7 +452,9 @@ def run() -> int:
     order_file, order_marker = ROOT / ORDER_FILE, ROOT / ORDER_MARKER
     order_due = order_file.exists() and not order_marker.exists()
     folders_marker = ROOT / FOLDERS_MARKER
-    if not pending and marker.exists() and not order_due and folders_marker.exists():
+    facts_file, facts_marker = ROOT / FACTS_FILE, ROOT / FACTS_MARKER
+    facts_due = facts_file.exists() and not facts_marker.exists()
+    if not pending and marker.exists() and not order_due and folders_marker.exists() and not facts_due:
         print("Queue is empty.")
         return 0
     lib = Library(user, key)
@@ -428,6 +479,14 @@ def run() -> int:
         else:
             folders_marker.write_text(f"Arranged To Read, Read and Dropped under {PROJECT}. Moved {moved} papers.\n")
             print(f"Arranged the folders and moved {moved} papers.")
+    if facts_due:
+        written, errors = lib.apply_facts(json.loads(facts_file.read_text()))
+        if errors:
+            failed_any = True
+            print("Could not tag every earlier paper:\n  " + "\n  ".join(errors))
+        else:
+            facts_marker.write_text(f"Tagged {written} earlier papers.\n")
+            print(f"Tagged {written} earlier papers.")
     if order_due:
         written, errors = lib.apply_order(json.loads(order_file.read_text()))
         if errors:

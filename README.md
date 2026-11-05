@@ -11,5 +11,5 @@ Processed files move to `done/`, and `imported.jsonl` records every outcome.
 Needs the `ZOTERO_USER_ID` and `ZOTERO_API_KEY` Actions secrets, and the key needs write access.
 After fixing a failed run, open it in the Actions tab and choose "Re-run all jobs".
 
-Queue entry: `doi`, `pmcid` or `pmid`, plus `title`, `tags` and `level` (foundational, core, specialized or niche). Add `before` with a title from `reading-order.json` to place it ahead of that paper; otherwise it joins the end of its level. Each run adds at most 2 papers. For a page with no identifier, use
+Queue entry: `doi`, `pmcid` or `pmid`, plus `title`, `tags` and `level` (foundational, core, specialized or niche). Optional details become Zotero tags: `species` (rat, mouse, human), `sex` (male, female, both) and `type` (review, study, methods). Add `before` with a title from `reading-order.json` to place it ahead of that paper; otherwise it joins the end of its level. Each run adds at most 2 papers. For a page with no identifier, use
 `"kind": "webpage"` with `title`, `url` and `source`.
