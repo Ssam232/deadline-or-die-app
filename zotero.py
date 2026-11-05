@@ -37,16 +37,35 @@ def _get(path: str, key: str, params: dict | None = None):
     return r.json()
 
 
-def find_collection(user: str, key: str, name: str) -> str | None:
-    start = 0
+def _collections(user: str, key: str) -> list[dict]:
+    out, start = [], 0
     while True:
         cols = _get(f"/users/{user}/collections", key, {"limit": 100, "start": start})
-        for c in cols:
-            if c["data"]["name"].strip().lower() == name.strip().lower():
-                return c["key"]
+        out += cols
         if len(cols) < 100:
-            return None
+            return out
         start += 100
+
+
+def find_collection(user: str, key: str, name: str) -> str | None:
+    for c in _collections(user, key):
+        if c["data"]["name"].strip().lower() == name.strip().lower():
+            return c["key"]
+    return None
+
+
+def status_folders(user: str, key: str, collection: str = "To Read") -> dict | None:
+    """The "To Read" collection and the "Read" and "Dropped" folders beside it under the same parent.
+    None if the library isn't arranged that way, in which case a paper's status is only its tag."""
+    cols = _collections(user, key)
+    me = next((c for c in cols if c["data"]["name"].strip().lower() == collection.strip().lower()), None)
+    parent = me and me["data"].get("parentCollection")
+    if not parent:
+        return None
+    beside = {c["data"]["name"].strip().lower(): c["key"] for c in cols if c["data"].get("parentCollection") == parent}
+    if "read" not in beside or "dropped" not in beside:
+        return None
+    return {"unread": me["key"], "reading": me["key"], "read": beside["read"], "dropped": beside["dropped"]}
 
 
 def _status(tags: list[dict]) -> str:
@@ -54,30 +73,38 @@ def _status(tags: list[dict]) -> str:
     return next((t for t in (READ_TAG, DROPPED_TAG, READING_TAG) if t in names), "unread")
 
 
+def _folder_items(user: str, key: str, folder: str):
+    start = 0
+    while True:
+        items = _get(f"/users/{user}/collections/{folder}/items/top", key,
+                     {"limit": 100, "start": start, "sort": "dateAdded", "direction": "asc"})
+        yield from items
+        if len(items) < 100:
+            return
+        start += 100
+
+
 def reading_list(user: str, key: str, collection: str = "To Read") -> list[dict]:
     """Every paper in the collection in read order, whatever its status. Papers with no order come last, oldest first."""
     ck = find_collection(user, key, collection)
     if not ck:
         raise ZoteroError(f'No Zotero collection called "{collection}".')
-    out, start = [], 0
-    while True:
-        items = _get(f"/users/{user}/collections/{ck}/items/top", key,
-                     {"limit": 100, "start": start, "sort": "dateAdded", "direction": "asc"})
-        for it in items:
-            d = it.get("data", {})
-            if d.get("itemType") in SKIP_TYPES:
-                continue
-            authors = [c.get("lastName") or c.get("name", "") for c in d.get("creators", []) if c.get("creatorType") == "author"]
-            who = (authors[0] + (" et al." if len(authors) > 1 else "")) if authors else ""
-            m = _ORDER.search(d.get("extra") or "")
-            out.append({"key": it["key"], "title": d.get("title") or "(untitled)", "who": who,
-                        "year": (d.get("date") or "")[:4], "journal": d.get("publicationTitle") or d.get("websiteTitle") or "",
-                        "url": d.get("url") or f"https://www.zotero.org/users/{user}/items/{it['key']}",
-                        "status": _status(d.get("tags", [])),
-                        "order": f"{m[1].upper()}{int(m[2]):02d}" if m else "", "level": LEVELS.get(m[1].upper()) if m else None})
-        if len(items) < 100:
-            break
-        start += 100
+    folders = status_folders(user, key, collection)
+    keys = list(dict.fromkeys(folders.values())) if folders else [ck]
+    out, seen = [], set()
+    for it in (it for folder in keys for it in _folder_items(user, key, folder)):
+        d = it.get("data", {})
+        if d.get("itemType") in SKIP_TYPES or it["key"] in seen:
+            continue
+        seen.add(it["key"])
+        authors = [c.get("lastName") or c.get("name", "") for c in d.get("creators", []) if c.get("creatorType") == "author"]
+        who = (authors[0] + (" et al." if len(authors) > 1 else "")) if authors else ""
+        m = _ORDER.search(d.get("extra") or "")
+        out.append({"key": it["key"], "title": d.get("title") or "(untitled)", "who": who,
+                    "year": (d.get("date") or "")[:4], "journal": d.get("publicationTitle") or d.get("websiteTitle") or "",
+                    "url": d.get("url") or f"https://www.zotero.org/users/{user}/items/{it['key']}",
+                    "status": _status(d.get("tags", [])),
+                    "order": f"{m[1].upper()}{int(m[2]):02d}" if m else "", "level": LEVELS.get(m[1].upper()) if m else None})
     out.sort(key=lambda p: p["order"] or "~")  # stable: unordered papers keep their oldest-first order at the end
     return out
 
@@ -92,10 +119,12 @@ def label(p: dict) -> str:
     return p["title"][:90] + (f" ({meta})" if meta else "")
 
 
-def set_status(user: str, key: str, item_key: str, status: str) -> None:
-    """Sets one paper to unread, reading, read or dropped. Only the status tags change. Needs a key with write access."""
+def set_status(user: str, key: str, item_key: str, status: str, collection: str = "To Read") -> None:
+    """Sets one paper to unread, reading, read or dropped: changes its status tag and moves it to the matching
+    folder (To Read, Read or Dropped), leaving its other tags and collections alone. Needs a key with write access."""
     if status not in ("unread", *STATUS_TAGS):
         raise ValueError(status)
+    folders = status_folders(user, key, collection)
     for attempt in (1, 2):
         r = requests.get(f"{API}/users/{user}/items/{item_key}", headers=_h(key), timeout=20)
         if r.status_code != 200:
@@ -103,11 +132,17 @@ def set_status(user: str, key: str, item_key: str, status: str) -> None:
         it = r.json()
         old = it["data"].get("tags", [])
         tags = [t for t in old if t.get("tag") not in STATUS_TAGS] + ([{"tag": status}] if status != "unread" else [])
-        if tags == old:
+        body = {"tags": tags}
+        if folders:
+            colls = it["data"].get("collections", [])
+            moved = [c for c in colls if c not in folders.values()] + [folders[status]]
+            if set(moved) != set(colls):
+                body["collections"] = moved
+        if tags == old and "collections" not in body:
             return
         r = requests.patch(f"{API}/users/{user}/items/{item_key}",
                            headers={**_h(key), "If-Unmodified-Since-Version": str(it["version"])},
-                           json={"tags": tags}, timeout=20)
+                           json=body, timeout=20)
         if r.status_code in (200, 204):
             return
         if r.status_code != 412 or attempt == 2:  # 412: it changed in Zotero since we read it, so read it again once
@@ -115,9 +150,9 @@ def set_status(user: str, key: str, item_key: str, status: str) -> None:
             raise ZoteroError(f"Zotero couldn't save that ({r.status_code}): {detail}")
 
 
-def mark_read(user: str, key: str, item_key: str) -> None:
+def mark_read(user: str, key: str, item_key: str, collection: str = "To Read") -> None:
     """Best-effort: needs a key with write access."""
-    set_status(user, key, item_key, READ_TAG)
+    set_status(user, key, item_key, READ_TAG, collection)
 
 
 def health(user: str, key: str, collection: str = "To Read") -> str:

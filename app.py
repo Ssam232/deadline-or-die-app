@@ -1740,7 +1740,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     if t.get("zotero_key") and zotero_cfg(state):
         zc, zk = zotero_cfg(state), t["zotero_key"]
         def _zot():
-            Z.mark_read(zc[0], zc[1], zk)
+            Z.mark_read(zc[0], zc[1], zk, zc[2])
             _zotero_list.clear()  # so the To Read list drops it
             _zotero_reading.clear()
         jobs.append(("Couldn't tag it read in Zotero", _zot))
@@ -4166,7 +4166,7 @@ def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
         st.session_state[widget] = READING_LABELS[p["status"]]
         return
     try:
-        Z.set_status(zc[0], zc[1], p["key"], new)
+        Z.set_status(zc[0], zc[1], p["key"], new, zc[2])
     except Exception as e:
         st.session_state[widget] = READING_LABELS[p["status"]]
         flash(f"Couldn't update that paper: {e}", "error")
