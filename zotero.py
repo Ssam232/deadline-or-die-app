@@ -21,6 +21,7 @@ SKIP_TYPES = {"attachment", "note", "annotation"}
 LEVELS = {"A": "Foundational", "B": "Core", "C": "Specialized", "D": "Niche"}
 FACETS = ("question", "subject", "species", "sex", "type")  # Zotero tags written as "subject:Diet and muscle"
 _ORDER = re.compile(r"^Read order:\s*([A-D])(\d+)", re.M | re.I)
+_LEFTOVER = re.compile(r"^\s*\((Foundational|Core|Specialized|Niche)\)\s*$", re.I)
 
 
 class ZoteroError(RuntimeError):
@@ -116,12 +117,31 @@ def reading_list(user: str, key: str, collection: str = "To Read") -> list[dict]
                     "needs_check": any(t.get("tag") == "needs-check" for t in d.get("tags", [])),
                     "order": f"{m[1].upper()}{int(m[2]):02d}" if m else "", "level": LEVELS.get(m[1].upper()) if m else None})
     out.sort(key=lambda p: p["order"] or "~")  # stable: unordered papers keep their oldest-first order at the end
+    rank_papers(out)
     return out
+
+
+def rank_papers(papers: list[dict]) -> None:
+    """Absolute rank (1 = read next) for papers still ahead; read and dropped papers get None. No AI, recomputed on
+    every load, so it moves as you read: what you're reading now comes first, levels keep foundational → niche, and
+    inside a level a paper whose questions you've read least about moves up (ties keep the A01-style read order)."""
+    done = {}
+    for p in papers:
+        if p["status"] == READ_TAG:
+            for q in p["facets"]["question"]:
+                done[q] = done.get(q, 0) + 1
+    ahead = [p for p in papers if p["status"] in ("unread", READING_TAG)]
+    ahead.sort(key=lambda p: (p["status"] != READING_TAG, p["order"][:1] or "~",
+                              min((done.get(q, 0) for q in p["facets"]["question"]), default=9999), p["order"] or "~"))
+    for p in papers:
+        p["rank"] = None
+    for n, p in enumerate(ahead, 1):
+        p["rank"] = n
 
 
 def to_read(user: str, key: str, collection: str = "To Read", limit: int = 50) -> list[dict]:
     """What's still ahead of you, in read order. Papers you've read or dropped stay out of suggestions."""
-    return [p for p in reading_list(user, key, collection) if p["status"] in ("unread", READING_TAG)][:limit]
+    return sorted((p for p in reading_list(user, key, collection) if p["rank"]), key=lambda p: p["rank"])[:limit]
 
 
 def who_of(creators: list[dict]) -> str:
@@ -176,7 +196,8 @@ def set_order(user: str, key: str, item_key: str, level: str, num: int) -> str:
         raise ZoteroError(f"Zotero {r.status_code}")
     it = r.json()
     lab = f"{level.upper()}{int(num):02d}"
-    extra = _ORDER.sub("", it["data"].get("extra") or "").strip("\n")
+    extra = "\n".join(ln for ln in (it["data"].get("extra") or "").splitlines()
+                      if ln.strip() and not _ORDER.match(ln) and not _LEFTOVER.match(ln))
     extra = (f"Read order: {lab}\n" + extra).strip("\n")
     r = requests.patch(f"{API}/users/{user}/items/{item_key}",
                        headers={**_h(key), "If-Unmodified-Since-Version": str(it["version"])},

@@ -4366,7 +4366,8 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
 
 
 READING_LABELS = {"unread": "To read", "reading": "Reading", "read": "Read", "dropped": "Dropped"}
-READING_SORTS = {"Read order": lambda p: p["order"] or "~",
+READING_SORTS = {"Rank": lambda p: p.get("rank") or 9999,
+                 "Read order": lambda p: p["order"] or "~",
                  "Newest first": lambda p: -int(p["year"]) if p["year"].isdigit() else 1,
                  "Oldest first": lambda p: int(p["year"]) if p["year"].isdigit() else 9999,
                  "Title": lambda p: p["title"].casefold(),
@@ -4468,7 +4469,8 @@ def render_reading_list(state: dict) -> None:
     seen_levels = {"last": object()}
 
     def _row(p: dict) -> None:
-        head = (p["level"] or "Not ordered yet") if sort == "Read order" else \
+        head = ("Reading now" if p["status"] == "reading" else "Up next" if p.get("rank") else READING_LABELS[p["status"]]) \
+            if sort == "Rank" else (p["level"] or "Not ordered yet") if sort == "Read order" else \
                ((sorted(p["facets"]["question"]) or ["No question"])[0] if sort == "Question" else
                 ((p["facets"]["subject"] or ["No subject"])[0] if sort == "Subject" else None))
         if head and head != seen_levels["last"]:
@@ -4476,7 +4478,8 @@ def render_reading_list(state: dict) -> None:
             st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(head)}</div>", unsafe_allow_html=True)
         meta = " · ".join(html.escape(x) for x in (p["journal"], "needs check" if p["needs_check"] else "") if x)
         who_ = f"<b style='color:#c9ccd4'>{html.escape(p['who'])}</b>" if p["who"] else "<i>author unknown</i>"
-        num = f"<b>{html.escape(p['order'])}</b> · " if p["order"] else ""
+        num = (f"<b style='color:#e10600'>#{p['rank']}</b> · " if p.get("rank") else "") + \
+              (f"<b>{html.escape(p['order'])}</b> · " if p["order"] else "")
         st.markdown(f"{num}<a href='{html.escape(p['url'], quote=True)}' target='_blank'>{html.escape(p['title'])}</a>"
                     + f"<br><small style='color:#8b909c'>{who_}{' · ' + meta if meta else ''}</small>",
                     unsafe_allow_html=True)
@@ -4522,7 +4525,7 @@ def render_reading_list(state: dict) -> None:
                 st.rerun()
 
     # the next few papers; the rest stay a tap away. Sorting or filtering shows everything that matches.
-    first = 6 if view == "To read" and sort == "Read order" and not filtered else len(shown)
+    first = 6 if view == "To read" and sort in ("Rank", "Read order") and not filtered else len(shown)
     for p in shown[:first]:
         _row(p)
     if len(shown) > first:
