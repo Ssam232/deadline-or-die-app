@@ -657,6 +657,25 @@ def _journal_header(state: dict, d: date, pm: dict) -> str:
             + (f" ({', '.join(t['title'] for t in done[:4])})" if done else ""))
 
 
+def _recap_cards(items: list, tone: str, empty: str, clip: int = 240) -> str:
+    """Journal snippets as cards: a day badge, the text, and long ones folded behind 'See more' (opens in place)."""
+    if not items:
+        return f"<div class='dod-rc-empty'>{empty}</div>"
+    out = []
+    for d_, txt in items:
+        txt = (txt or "").strip()
+        day = f"<span class='dod-rc-day'>{d_:%a}</span>"
+        body = html.escape(txt).replace("\n", "<br>")
+        if len(txt) <= clip:
+            out.append(f"<div class='dod-rc {tone}'>{day}<div class='dod-rc-t'>{body}</div></div>")
+        else:
+            cut = txt[:clip].rsplit(" ", 1)[0].rstrip(",.;: ")
+            out.append(f"<details class='dod-rc {tone}'><summary>{day}<span class='dod-rc-less'>Show less ▴</span>"
+                       f"<div class='dod-rc-t'>{html.escape(cut)}…<span class='dod-rc-more'>See more · "
+                       f"{len(txt.split())} words</span></div></summary><div class='dod-rc-full'>{body}</div></details>")
+    return "<div class='dod-rc-list'>" + "".join(out) + "</div>"
+
+
 def import_notion_journal(state: dict, days: int = 7) -> list[str]:
     """Days you journaled straight into the Notion journal become app entries (they count, and pay if written
     in that day's window). Days you journaled in the app are left alone, and nothing is written back."""
@@ -664,6 +683,11 @@ def import_notion_journal(state: dict, days: int = 7) -> list[str]:
     if not jc:
         return []
     jm = _journal_map(*jc)
+    for e_ in (state.get("journal") or {}).values():  # tidy entries already imported (template helper text)
+        pm_ = (e_ or {}).get("pm") if isinstance(e_, dict) else None
+        if pm_ and pm_.get("notion_source"):
+            JN.strip_hints(pm_)
+            pm_["notion_sig"] = _jr_sig(pm_)  # still yours in Notion: never write the app's copy into that page
     rev_mood = {w: k for k, w in J.MOOD_WORDS.items()}
     known = {pm["notion_page"]: pm.get("notion_edited") for e in (state.get("journal") or {}).values()
              if isinstance(e, dict) for pm in [e.get("pm") or {}] if pm.get("notion_source") and pm.get("notion_page")}
@@ -3614,13 +3638,11 @@ def render_journal(state: dict) -> None:
                    f"{r['focus_low_mood']:.0f} min.")
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("**🏆 Wins**")
-        st.markdown("\n".join(f"- *{d_:%a}* {html.escape(w)}" for d_, w in r["wins"]) or "<span class='m'>None "
-                    "written yet.</span>", unsafe_allow_html=True)
+        st.markdown(f"<div class='dod-rc-h'>🏆 Wins <span>{len(r['wins'])}</span></div>"
+                    + _recap_cards(r["wins"], "win", "None written yet."), unsafe_allow_html=True)
     with c2:
-        st.markdown("**🧱 What got in the way**")
-        st.markdown("\n".join(f"- *{d_:%a}* {html.escape(b)}" for d_, b in r["blockers"]) or "<span class='m'>"
-                    "Nothing logged.</span>", unsafe_allow_html=True)
+        st.markdown(f"<div class='dod-rc-h'>🧱 What got in the way <span>{len(r['blockers'])}</span></div>"
+                    + _recap_cards(r["blockers"], "block", "Nothing logged."), unsafe_allow_html=True)
     with fold("jr_recap", "📋 Recap to paste", False):
         st.code(J.recap_text(r), language=None)
     if journal_cfg(state):
@@ -4922,6 +4944,22 @@ CSS = """<style>
 .dod-boot-bar{width:180px;height:4px;border-radius:4px;background:var(--track,#262b36);overflow:hidden}
 .dod-boot-bar i{display:block;width:40%;height:100%;background:var(--y);border-radius:4px;animation:dodSlide 1.1s ease-in-out infinite}
 @keyframes dodBob{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+/* ── weekly recap cards (wins / what got in the way) ── */
+.dod-rc-h{font-weight:700;margin:.4rem 0 .5rem;display:flex;gap:8px;align-items:baseline}
+.dod-rc-h span{font-weight:500;color:var(--muted);font-size:.85rem}
+.dod-rc-list{display:flex;flex-direction:column;gap:8px}
+.dod-rc{display:block;background:var(--card,#141821);border:1px solid var(--line);border-left:3px solid #2ec4b6;
+  border-radius:10px;padding:9px 12px;line-height:1.5;font-size:.93rem}
+.dod-rc.block{border-left-color:#ff6a5c}
+.dod-rc>summary{list-style:none;cursor:pointer}.dod-rc>summary::-webkit-details-marker{display:none}
+.dod-rc-day{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted);background:rgba(255,255,255,.05);border-radius:6px;padding:1px 7px;margin-bottom:4px}
+.dod-rc-t{color:#d8d4cb}
+.dod-rc-more,.dod-rc-less{display:inline-block;margin-left:6px;color:var(--y);font-weight:600;font-size:.82rem;white-space:nowrap}
+.dod-rc-less{display:none;float:right;margin:0}details.dod-rc[open] .dod-rc-less{display:inline-block}
+details.dod-rc[open]>summary .dod-rc-t{display:none}
+.dod-rc-full{color:#d8d4cb;animation:dodIn .2s ease-out}
+.dod-rc-empty{color:var(--muted);font-size:.9rem}
 /* ── the loading screen (sign-in check + first load) ── */
 .dod-load{min-height:72vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
   background:radial-gradient(60% 45% at 50% 42%,rgba(245,197,24,.07),transparent 70%);animation:dodIn .35s ease-out both}

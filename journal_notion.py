@@ -196,6 +196,27 @@ def write_day(n: Notion, m: dict, d: date, pm: dict, questions, header: str, moo
     return {"notion_page": page, "notion_blocks": [b["id"] for b in res.get("results", [])]}
 
 
+def strip_hints(answers: dict) -> dict:
+    """Your template's helper text under a heading (e.g. 'Why did it bother you? Does it seem true?…') isn't part of
+    your answer: drop it from the front of each answer. Edits `answers` in place."""
+    for k_ in list(answers):
+        hint, v_ = CORE.get(k_, ("", ""))[1], answers[k_]
+        if not isinstance(v_, str):
+            continue
+        norm = lambda x: re.sub(r"\W+", " ", x).lower().strip()
+        if hint and norm(v_).startswith(norm(hint)):
+            words, cut = len(norm(hint).split()), 0
+            for mt in re.finditer(r"\w+", v_):  # cut after the hint's last word
+                words -= 1
+                if words == 0:
+                    cut = mt.end()
+                    break
+            answers[k_] = v_[cut:].lstrip(" ?.!:\n")
+            if not answers[k_]:
+                answers.pop(k_)
+    return answers
+
+
 def read_entries(n: Notion, m: dict, since: date, skip_edited: dict | None = None) -> list[dict]:
     """Day pages you wrote straight into the Notion journal (on/after `since`): your answers under each prompt,
     matched to the app's questions. Stops at the app's own section. `skip_edited` {page id: last_edited_time}
@@ -225,6 +246,7 @@ def read_entries(n: Notion, m: dict, since: date, skip_edited: dict | None = Non
         if extra:
             answers["note"] = (answers.get("note", "") + "\n" + "\n".join(extra)).strip()
         answers.pop("when", None)
+        strip_hints(answers)
         if sum(len(v) for v in answers.values()) < 15:
             continue  # an empty template, not an entry
         mood_word = ""
