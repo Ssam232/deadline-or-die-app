@@ -3536,7 +3536,7 @@ def _journal_form(state: dict, d, key: str) -> None:
 
 
 def render_close_day(state: dict) -> None:
-    """5 PM to 2 AM: a short end-of-day questionnaire (after midnight it's still for the day you're closing)."""
+    """5 PM to 4 AM: a short end-of-day questionnaire (after midnight it's still for the day you're closing)."""
     if not J.pm_open(now()):
         return
     d = J.journal_date(now())
@@ -3547,7 +3547,7 @@ def render_close_day(state: dict) -> None:
                     "</div>", unsafe_allow_html=True)
         return
     late = d != now().date()
-    with fold("closeday", "📓 **Close the day**" + (f" :gray[{d:%A} · open till 2 AM]" if late else ""), card=True):
+    with fold("closeday", "📓 **Close the day**" + (f" :gray[{d:%A} · open till {J.PM_CLOSES} AM]" if late else ""), card=True):
         st.caption(f"Two taps and a few lines. +{J.PM_BASE} for the taps, +{J.PM_PER_ANSWER} per real answer "
                    f"(up to +{J.PM_MAX}). It all lands in Stats → Journal and your weekly recap.")
         _journal_form(state, d, "cd")
@@ -3597,11 +3597,11 @@ def render_journal(state: dict) -> None:
     with fold("jr_recap", "📋 Recap to paste", False):
         st.code(J.recap_text(r), language=None)
     st.markdown("#### 📓 Days")
-    jd = J.journal_date(now())  # yesterday until 2 AM · none 2–6 AM · today from 6 AM
+    jd = J.journal_date(now())  # yesterday until 4 AM · none 4–6 AM · today from 6 AM
     if jd is None:
         st.caption(f"🌙 The journal reopens at {J.NEW_DAY_AT} AM for the new day.")
     elif not J.peek(state, jd).get("pm"):
-        with fold("jr_today", ("✏️ Today" if jd == today else f"✏️ {jd:%A} (open till 2 AM)")
+        with fold("jr_today", ("✏️ Today" if jd == today else f"✏️ {jd:%A} (open till {J.PM_CLOSES} AM)")
                   + f", {jd:%a %b} {jd.day} · not journaled yet", False):
             _journal_form(state, jd, "jt")
     ents = J.entries(state)

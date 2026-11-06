@@ -42,17 +42,17 @@ MULTILINE = {"happened", "blocker", "tomorrow", "grateful", "vibe", "note"}
 def answer_keys(entry: dict) -> list[str]:
     return [k for k in entry if k not in ("mood", "energy", "at", "paid") and not k.startswith("notion_")]
 PM_OPENS = 17        # the evening journal opens at 5 PM…
-PM_CLOSES = 2        # …and stays open for that day until 2 AM
+PM_CLOSES = 4        # …and stays open for that day until 4 AM
 NEW_DAY_AT = 6       # the next day's entries (morning check-in, today's journal) start at 6 AM
 
 
 def pm_open(at: datetime) -> bool:
-    """Is the evening journal open right now? 5 PM → 2 AM (the hours after midnight still belong to yesterday)."""
+    """Is the evening journal open right now? 5 PM → 4 AM (the hours after midnight still belong to yesterday)."""
     return at.hour >= PM_OPENS or at.hour < PM_CLOSES
 
 
 def journal_date(at: datetime) -> date | None:
-    """The day you're journaling for: yesterday until 2 AM, nothing 2–6 AM, today from 6 AM."""
+    """The day you're journaling for: yesterday until 4 AM, nothing 4–6 AM, today from 6 AM."""
     if at.hour < PM_CLOSES:
         return at.date() - timedelta(days=1)
     if at.hour < NEW_DAY_AT:
