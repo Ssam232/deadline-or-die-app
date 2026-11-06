@@ -657,6 +657,33 @@ def _journal_header(state: dict, d: date, pm: dict) -> str:
             + (f" ({', '.join(t['title'] for t in done[:4])})" if done else ""))
 
 
+def import_notion_journal(state: dict, days: int = 7) -> list[str]:
+    """Days you journaled straight into the Notion journal become app entries (they count, and pay if written
+    in that day's window). Days you journaled in the app are left alone, and nothing is written back."""
+    jc = journal_cfg(state)
+    if not jc:
+        return []
+    jm = _journal_map(*jc)
+    rev_mood = {w: k for k, w in J.MOOD_WORDS.items()}
+    known = {pm["notion_page"]: pm.get("notion_edited") for e in (state.get("journal") or {}).values()
+             if isinstance(e, dict) for pm in [e.get("pm") or {}] if pm.get("notion_source") and pm.get("notion_page")}
+    got = []
+    for x in JN.read_entries(Notion(jc[0]), jm, now().date() - timedelta(days=days), known):
+        d, cur = x["date"], J.peek(state, x["date"]).get("pm") or {}
+        if cur and not cur.get("notion_source"):
+            continue  # you journaled this day in the app: that entry wins
+        times = [parse_dt(t_) for t_ in (x["created"], x["edited"]) if t_]
+        on_time = next((t_ for t_ in times if J.journal_date(t_.astimezone(TZ)) == d), None)
+        mood = rev_mood.get(x["mood_word"]) or (int(float(x["mood_word"])) if x["mood_word"][:1].isdigit() else 3)
+        entry = {**x["answers"], "mood": max(1, min(5, mood)), "energy": cur.get("energy", 3)}
+        paid = J.close_day(state, d, entry, (on_time or times[-1]).astimezone(TZ), bank)
+        pm = J.peek(state, d)["pm"]
+        pm.update(notion_page=x["page"], notion_edited=x["edited"], notion_source=True)
+        pm["notion_sig"] = _jr_sig(pm)  # it came from Notion: never write the app's copy back into your page
+        got.append(f"📓 Imported your Notion journal for **{d:%a %b} {d.day}**" + (f" · +{paid} 🪙" if paid else ""))
+    return got
+
+
 def sync_journal(n: Notion, jm: dict, state: dict) -> list[str]:
     """Evening entries → your Notion journal, one page per day (only days since you linked it)."""
     errs, since = [], state["settings"].get("journal_since", "9999")
@@ -3596,6 +3623,18 @@ def render_journal(state: dict) -> None:
                     "Nothing logged.</span>", unsafe_allow_html=True)
     with fold("jr_recap", "📋 Recap to paste", False):
         st.code(J.recap_text(r), language=None)
+    if journal_cfg(state):
+        if st.button("🔄 Pull entries I wrote in Notion", key="jr_pull", help="Brings in the last 7 days of entries you "
+                     "wrote straight into your Notion journal (this also runs by itself when you open the app)."):
+            try:
+                got_ = import_notion_journal(state)
+                if got_:
+                    save_state(state)
+                for m_ in got_ or ["📓 Nothing new in your Notion journal."]:
+                    flash(m_)
+            except Exception as e:  # noqa: BLE001
+                flash(f"Couldn't read your Notion journal: {e}", "warning")
+            st.rerun()
     st.markdown("#### 📓 Days")
     jd = J.journal_date(now())  # yesterday until 4 AM · none 4–6 AM · today from 6 AM
     if jd is None:
@@ -6829,6 +6868,12 @@ if _SYNC_LATER:
         _sm, _changed = sync_from_notion(state)
     except Exception as e:  # noqa: BLE001
         _sm, _changed = [("warning", f"Couldn't sync tasks with Notion: {e}")], False
+    try:
+        _jr = import_notion_journal(state)
+        if _jr:
+            _sm, _changed = list(_sm) + [("success", m_) for m_ in _jr], True
+    except Exception as e:  # noqa: BLE001 — the journal import never blocks the app
+        _sm = list(_sm) + [("warning", f"Couldn't read your Notion journal: {e}")]
     if _changed:
         save_state(state)
     if _sm or _changed:

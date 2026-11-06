@@ -194,3 +194,44 @@ def write_day(n: Notion, m: dict, d: date, pm: dict, questions, header: str, moo
     blocks = blocks_for(pm, questions, header, when)
     res = n.req("PATCH", f"/blocks/{page}/children", json={"children": blocks})
     return {"notion_page": page, "notion_blocks": [b["id"] for b in res.get("results", [])]}
+
+
+def read_entries(n: Notion, m: dict, since: date, skip_edited: dict | None = None) -> list[dict]:
+    """Day pages you wrote straight into the Notion journal (on/after `since`): your answers under each prompt,
+    matched to the app's questions. Stops at the app's own section. `skip_edited` {page id: last_edited_time}
+    skips pages unchanged since the last import. Returns [{date, page, edited, created, answers, mood_word}]."""
+    if not m["date"]:
+        return []
+    out, skip_edited = [], skip_edited or {}
+    body = {"filter": {"property": m["date"], "date": {"on_or_after": since.isoformat()}}, "page_size": 20}
+    for page in n.req("POST", f"/databases/{m['db']}/query", json=body).get("results", []):
+        start = ((page.get("properties", {}).get(m["date"]) or {}).get("date") or {}).get("start")
+        if not start or skip_edited.get(page["id"]) == page.get("last_edited_time"):
+            continue
+        answers, cur, extra = {}, None, []
+        for b in n.children(page["id"]):
+            text = _txt(b)
+            if text.startswith(APP_MARK):
+                break  # the app's own section: not yours
+            if _is_prompt(b):
+                cur = core_of(text) or ("note:" + re.sub(r"\s+", " ", text).strip(" :"))
+                continue
+            if not text:
+                continue
+            if cur and not cur.startswith("note:"):
+                answers[cur] = (answers.get(cur, "") + "\n" + text).strip()
+            else:
+                extra.append((f"{cur[5:]}: " if cur else "") + text)
+        if extra:
+            answers["note"] = (answers.get("note", "") + "\n" + "\n".join(extra)).strip()
+        answers.pop("when", None)
+        if sum(len(v) for v in answers.values()) < 15:
+            continue  # an empty template, not an entry
+        mood_word = ""
+        if m["mood"]:
+            p = page["properties"].get(m["mood"]) or {}
+            mood_word = ((p.get("select") or {}).get("name") or plain(p.get("rich_text")) or
+                         (str(p.get("number")) if p.get("number") is not None else "")).strip().lower()
+        out.append({"date": date.fromisoformat(start[:10]), "page": page["id"], "edited": page.get("last_edited_time"),
+                    "created": page.get("created_time"), "answers": answers, "mood_word": mood_word})
+    return out
