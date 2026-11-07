@@ -246,6 +246,7 @@ def default_state() -> dict:
                 "parts": {k: 0 for k in PARTS}, "condition": 100},
         "goals": [],
         "tasks": [],
+        "todos": [],
         "penalty_box": [],
         "ledger": [],
         "races": [],
@@ -2701,6 +2702,19 @@ def render_qualify_form(state: dict) -> None:
                 groups["z"].append(k)
         except Exception as e:
             st.caption(f"(Couldn't read Zotero: {e})")
+    # 📝 to-dos (no due date) and 🗺️ roadmap blocks booked for later days: pull either into today
+    for d_ in [x for x in state.get("todos", []) if not x.get("done")][:10]:
+        k = f"d:{d_['id']}"
+        opts[k] = (f"{d_['title'][:48]}" + (f" · {min_label(d_['minutes'])}" if d_.get("minutes") else ""), d_)
+        groups.setdefault("d", []).append(k)
+    gname = {g_["id"]: g_["title"] for g_ in state.get("goals", [])}
+    for t in sorted((t for t in state["tasks"] if t["status"] == "open" and t.get("goal_id")
+                     and (t.get("block") or {}).get("date", "") > today.isoformat()),
+                    key=lambda t: t["block"]["date"])[:8]:
+        k = f"g:{t['id']}"
+        bd = date.fromisoformat(t["block"]["date"])
+        opts[k] = (f"{t['title'][:40]} · {min_label(t['block']['minutes'])} · booked {bd:%a}", t)
+        groups.setdefault("g", []).append(k)
     # 🕘 recents: things you did (or planned) on earlier days, to reuse with one tap
     open_titles = {t["title"].strip().lower() for t in state["tasks"] if t["status"] == "open"}
     seen = set()
@@ -2716,11 +2730,12 @@ def render_qualify_form(state: dict) -> None:
             break
     picked = []
     qualified_ = daily.peek_day(state, today).get("qualified")
-    heads = {"t": "Your tasks", "b": "From your board · an hour of prep on it", "z": "Reading list",
-             "r": "🕘 Recent · do it again"}
+    heads = {"t": "Your tasks", "d": "📝 To-do", "g": "🗺️ From your roadmaps · do it today instead",
+             "b": "From your board · an hour of prep on it", "z": "Reading list", "r": "🕘 Recent · do it again"}
     if any(groups.values()):
         st.markdown("<div class='dod-step'><b>1</b> Pick what you'll do today</div>", unsafe_allow_html=True)
-    for g, keys in groups.items():
+    for g in [g_ for g_ in ("t", "d", "g", "b", "z", "r") if g_ in groups]:
+        keys = groups[g]
         if keys:
             picked += st.pills(heads[g], keys, selection_mode="multi", key=f"q_pick_{g}{fk}",
                                default=default_t if g == "t" else None, format_func=lambda k: opts[k][0]) or []
@@ -2781,7 +2796,8 @@ def render_qualify_form(state: dict) -> None:
         p_["minutes"], p_["category"] = mins_, cat_
         parsed.append(p_)
     minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked
-                   if k[:2] in ("t:", "r:") and V.counts_for_qualifying(opts[k][1]))
+                   if k[:2] in ("t:", "r:", "g:") and V.counts_for_qualifying(opts[k][1]))
+               + sum((opts[k][1].get("minutes") or 30) for k in picked if k.startswith("d:"))
                + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
                + sum(p_["minutes"] for p_ in parsed if V.counts_for_qualifying(p_)))  # 🔧 pit checks don't count
     if dl <= now() + timedelta(minutes=5):  # late at night (or a time that's gone by): same time tomorrow
@@ -2801,6 +2817,15 @@ def render_qualify_form(state: dict) -> None:
         kind, obj = k[0], opts[k][1]
         if kind == "t":
             ids.append(obj["id"])
+        elif kind == "g":  # a roadmap block from a later day: move it to today (same start), keep any own deadline
+            bk = obj["block"]
+            obj.update(R.block_fields(today, bk["start"], int(bk["minutes"]), TZ))
+            if obj.get("own_deadline") and parse_dt(obj["own_deadline"]) > parse_dt(obj["deadline"]):
+                obj["deadline"] = obj["own_deadline"]
+            ids.append(obj["id"])
+        elif kind == "d":  # a to-do becomes a real task today
+            t = todo_to_task(state, obj, late_dl)
+            ids.append(t["id"])
         elif kind == "r":  # 🕘 a recent one, again: a fresh task with the same name, size and type
             t = make_task(obj["title"], obj.get("details", ""), late_dl, None, obj.get("consequence", ""),
                           obj.get("goal_id"), category=obj.get("category"), minutes=obj.get("minutes"))
@@ -3340,6 +3365,59 @@ def _book_now(state: dict, g: dict, mins: int = 45) -> dict | None:
     state["tasks"].append(t)
     daily.auto_qualify(state, n_, bank)
     return t
+
+
+def todo_to_task(state: dict, d_: dict, due: datetime) -> dict:
+    """A to-do (no due date) becomes a real task, due `due`. From then on it counts and can die like any task."""
+    p_ = Q.parse(d_["title"], now())
+    t = make_task(p_.get("title") or d_["title"], d_.get("note", ""), due, None, "", None,
+                  category=p_.get("category"), minutes=d_.get("minutes") or p_.get("minutes") or 30)
+    state["tasks"].append(t)
+    state["todos"] = [x for x in state.get("todos", []) if x["id"] != d_["id"]]
+    return t
+
+
+def render_todo(state: dict) -> None:
+    """📝 Things to do some time, no due date and no penalty. Tick them off, or pull one into today (then it's a
+    real task due tonight). They also show up as picks when you qualify."""
+    todos = state.setdefault("todos", [])
+    open_ = [x for x in todos if not x.get("done")]
+    with fold("todo", f"📝 **To-do** :gray[{len(open_)} · no due dates]", default=True, card=True):
+        with st.form("todo_add", clear_on_submit=True, border=False):
+            c1, c2 = st.columns([5, 1.2], vertical_alignment="bottom")
+            txt = c1.text_input("Add a to-do", placeholder="Something to do some time… (add “45m” for a length)",
+                                label_visibility="collapsed", key="todo_txt")
+            if c2.form_submit_button("Add", use_container_width=True, key="todo_add_go") and (txt or "").strip():
+                p_ = Q.parse(txt.strip(), now())
+                todos.append({"id": uuid.uuid4().hex[:8], "title": (p_.get("title") or txt).strip(),
+                              "minutes": p_.get("minutes") if re.search(r"\d\s*(m|min|h|hr)", txt, re.I) else None,
+                              "created": now().isoformat()})
+                save_state(state)
+                st.rerun()
+        if not open_:
+            st.caption("Nothing here. Park anything without a deadline: it'll be offered when you plan your day.")
+        qual = daily.peek_day(state, now().date()).get("qualified")
+        for d_ in open_:
+            c1, c2, c3 = st.columns([6, 1.6, .8], vertical_alignment="center")
+            if c1.checkbox(d_["title"] + (f" · {min_label(d_['minutes'])}" if d_.get("minutes") else ""),
+                           key=f"todo_ck_{d_['id']}"):
+                d_.update(done=True, done_at=now().isoformat())
+                state["todos"] = [x for x in todos if not x.get("done")] + [x for x in todos if x.get("done")][-20:]
+                save_state(state)
+                flash(f"📝 Ticked off **{d_['title'][:60]}**.")
+                st.rerun()
+            if c2.button("➕ Today", key=f"todo_today_{d_['id']}", use_container_width=True,
+                         help="Make it a real task due tonight" + (" and add it to today's mission." if qual else ".")):
+                t = todo_to_task(state, d_, datetime.combine(now().date(), dtime(23, 59), TZ))
+                if qual:
+                    t["mission_day"] = now().date().isoformat()
+                save_state(state)
+                flash(f"➕ **{t['title']}** is a task now, due tonight" + (" · in today's mission." if qual else "."))
+                st.rerun()
+            if c3.button("✕", key=f"todo_x_{d_['id']}", help="Remove (no penalty)"):
+                state["todos"] = [x for x in todos if x["id"] != d_["id"]]
+                save_state(state)
+                st.rerun()
 
 
 def render_goals_today(state: dict) -> None:
@@ -5057,7 +5135,7 @@ CSS = """<style>
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *{order:50;margin-bottom:1rem}
   .st-key-today_grid .st-key-tg_checkin{order:1}.st-key-today_grid .st-key-tg_today{order:2}
   .st-key-today_grid .st-key-tg_timer{order:3}.st-key-today_grid .st-key-tg_dailies{order:4}
-  .st-key-today_grid .st-key-tg_goals{order:5}.st-key-today_grid .st-key-tg_close{order:6}
+  .st-key-today_grid .st-key-tg_goals{order:5}.st-key-today_grid .st-key-tg_todo{order:5}.st-key-today_grid .st-key-tg_close{order:6}
   .st-key-today_grid .st-key-tg_board{order:7}.st-key-today_grid .st-key-tg_status{order:8}
   .st-key-today_grid .st-key-tg_car{order:9;display:none!important}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_checkin){order:1}
@@ -5065,6 +5143,7 @@ CSS = """<style>
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_timer){order:3}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_dailies){order:4}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_goals){order:5}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_todo){order:5}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_close){order:6}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_board){order:7}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_status){order:8}
@@ -5843,6 +5922,8 @@ with tab_today:
                 render_today(state)
             with st.container(key="tg_goals"):
                 render_goals_today(state)
+            with st.container(key="tg_todo"):
+                render_todo(state)
             with st.container(key="tg_close"):
                 render_close_day(state)
             with st.container(key="tg_board"):
