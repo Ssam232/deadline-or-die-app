@@ -140,12 +140,19 @@ CARS = [
      "blurb": "The wing says it all."},
     {"id": "nsx", "name": "Honda NSX (NA1)", "base": 85, "cost": 3500, "level": 5, "body": "super",
      "blurb": "The one that embarrassed Ferrari."},
-    {"id": "nsx_s", "name": "Honda NSX Type S", "base": 100, "cost": 6000, "level": 7, "body": "super",
+    {"id": "nsx_s", "name": "Honda NSX Type S", "base": 100, "cost": 6000, "level": 7, "body": "super2",
      "blurb": "Final form of the road car."},
     {"id": "nsx_gt3", "name": "Honda NSX GT3 Evo", "base": 120, "cost": 10000, "level": 9, "body": "gt3",
      "blurb": "The race car. Same class as your rig — park it next to it."},
 ]
 CAR_BY_ID = {c["id"]: c for c in CARS}
+SHOWROOM_PAINT = {"civic_si": ("#b3122a", 21), "integra_r": ("#f1f0ea", 11), "s2000": ("#1f4aa8", 2),
+                  "ctr": ("#e7e6e1", 1), "nsx": ("#c8102e", 8), "nsx_s": ("#e8a43a", 30), "nsx_gt3": ("#f2f2ee", 30)}
+# what each one comes with from the factory, so the showroom shows it at its best stock spec
+SHOWROOM_SPEC = {"civic_si": {"tires": 1}, "integra_r": {"tires": 2, "aero": 1, "brakes": 1},
+                 "s2000": {"tires": 2, "brakes": 1}, "ctr": {"tires": 3, "aero": 3, "brakes": 3},
+                 "nsx": {"tires": 3, "brakes": 2}, "nsx_s": {"tires": 4, "aero": 2, "brakes": 4},
+                 "nsx_gt3": {"tires": 5, "aero": 5, "brakes": 5, "weight": 4}}
 
 TRACKS = [  # prizes stay a side-dish to real work at every stage (see race_sim in the README)
     {"name": "Parking Lot Sprint", "laps": 3, "level": 1, "fee": 8, "ai": (30, 48), "prize": [50, 25, 12]},
@@ -4995,6 +5002,12 @@ CSS = """<style>
 .dod-flow-chk{background:rgba(41,227,255,.08);border:1px solid rgba(41,227,255,.35);border-radius:10px;padding:8px 12px;
   margin:4px 0 8px;animation:dodPulse 2s ease-in-out infinite}.dod-flow-chk span{display:block;color:var(--muted);font-size:.85rem}
 @keyframes dodPulse{0%,100%{box-shadow:0 0 0 0 rgba(41,227,255,.0)}50%{box-shadow:0 0 0 4px rgba(41,227,255,.12)}}
+/* ── showroom ── */
+.dod-sr{border-radius:14px;overflow:hidden;margin:-.2rem 0 .2rem}
+.dod-sr svg{display:block;transition:transform .35s ease}.dod-sr:hover svg{transform:scale(1.015)}
+.dod-sr.locked svg{filter:grayscale(.85) brightness(.6)}
+.dod-sr-n{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:800;font-size:1.15rem;letter-spacing:.01em}
+.dod-sr-s{color:var(--muted);font-size:.85rem}
 /* ── weekly recap cards (wins / what got in the way) ── */
 .dod-rc-h{font-weight:700;margin:.4rem 0 .5rem;display:flex;gap:8px;align-items:baseline}
 .dod-rc-h span{font-weight:500;color:var(--muted);font-size:.85rem}
@@ -6478,28 +6491,35 @@ with tab_garage:
         lvl_now = level_of(state["xp"])
         owned = car.setdefault("owned", ["civic_si"])
         for m in CARS:
-            c1, c2 = st.columns([3, 2])
+            paint_, num_ = SHOWROOM_PAINT.get(m["id"], ("#c8102e", 1))
+            locked_ = lvl_now < m["level"] and m["id"] not in owned
             tag = "🟢 driving" if m["id"] == car.get("model") else "✅ owned" if m["id"] in owned else \
                   ("🔒 level " + str(m["level"]) if lvl_now < m["level"] else f"{m['cost']:,} 🪙")
-            c1.markdown(f"**{m['name']}** · base {m['base']} · tunes to L{G.cap(m['id'])}  \n"
-                        f"<small>{m['blurb']}</small>", unsafe_allow_html=True)
-            if m["id"] == car.get("model"):
-                c2.caption(tag)
-            elif m["id"] in owned:
-                if c2.button("Drive it", key=f"drive_{m['id']}"):
+            with st.container(border=True, key=f"sr_{m['id']}"):
+                st.markdown(f"<div class='dod-sr{' locked' if locked_ else ''}'>"
+                            + carart.car_svg(m["body"], paint_, num_, SHOWROOM_SPEC.get(m["id"], {}), 100, width=640,
+                                             studio=True) + "</div>", unsafe_allow_html=True)
+                c1, c2 = st.columns([3, 2], vertical_alignment="center")
+                c1.markdown(f"<div class='dod-sr-n'>{m['name']}</div><div class='dod-sr-s'>Base {m['base']} · tunes to "
+                            f"L{G.cap(m['id'])} · {m['blurb']}</div>", unsafe_allow_html=True)
+                if m["id"] == car.get("model"):
+                    c2.caption(tag)
+                elif m["id"] in owned:
+                    if c2.button("Drive it", key=f"drive_{m['id']}", use_container_width=True):
+                        car["model"] = m["id"]
+                        save_state(state)
+                        st.rerun()
+                elif lvl_now < m["level"]:
+                    c2.caption(tag)
+                elif c2.button(f"Buy · {m['cost']:,} 🪙", key=f"buy_{m['id']}", disabled=state["coins"] < m["cost"],
+                               type="primary", use_container_width=True):
+                    bank(state, -m["cost"], f"🏢 Bought {m['name']}")
+                    owned.append(m["id"])
                     car["model"] = m["id"]
                     save_state(state)
+                    flash(f"🔑 **{m['name']}** is yours. Every coin of it came from finished work.", celebrate=True,
+                          sound="jackpot")
                     st.rerun()
-            elif lvl_now < m["level"]:
-                c2.caption(tag)
-            elif c2.button(f"Buy · {m['cost']:,} 🪙", key=f"buy_{m['id']}", disabled=state["coins"] < m["cost"]):
-                bank(state, -m["cost"], f"🏢 Bought {m['name']}")
-                owned.append(m["id"])
-                car["model"] = m["id"]
-                save_state(state)
-                flash(f"🔑 **{m['name']}** is yours. Every coin of it came from finished work.", celebrate=True,
-                      sound="jackpot")
-                st.rerun()
 
     st.subheader("Upgrades")
     cap_now = G.cap(model["id"])
