@@ -112,7 +112,7 @@ def replay_html(track: str, history: list[list[float]], names: list[str], colors
     finish = max(max(row) for row in history) or 1
     data = {"h": [[round(d / finish, 4) for d in row] for row in history], "names": names, "colors": colors,
             "you": you_idx, "laps": laps, "ticker": ticker, "dnf": dnf_tick, "ms": int(seconds * 1000),
-            "start": int(start_ms) if start_ms else None}
+            "start": int(start_ms) if start_ms else None, "srv": int(__import__("time").time() // 60 * 60000)}
     path = TRACK_SHAPES.get(track, TRACK_SHAPES["Parking Lot Sprint"])
     return f"""<div style="font-family:system-ui,sans-serif;color:#eee;background:#0d0f14;border-radius:12px;padding:8px">
 <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
@@ -158,7 +158,7 @@ function frame(t){{const f=Math.max(0,Math.min(1,(t-st)/D.ms)),x=f*T,i=Math.floo
   tk.prepend(d);shown++;}}
  if(f<1)requestAnimationFrame(frame);else document.getElementById('again').style.display='inline-block';}}
 // wall-clock start: a refresh picks up where the race is, a finished race shows the finish
-let st=performance.now()-(D.start?Math.max(0,Date.now()-D.start):0);requestAnimationFrame(frame);
+const OFF=D.srv?(d=>Math.abs(d)>120000?Math.round(d/900000)*900000:0)(D.srv-Date.now()):0;let st=performance.now()-(D.start?Math.max(0,Date.now()+OFF-D.start):0);requestAnimationFrame(frame);
 document.getElementById('again').onclick=e=>{{e.preventDefault();tk.innerHTML='';shown=0;
  document.getElementById('again').style.display='none';st=performance.now();requestAnimationFrame(frame);}};
 </script>"""

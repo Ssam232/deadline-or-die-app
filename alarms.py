@@ -231,6 +231,12 @@ def _timer(save: dict, now: datetime) -> list[dict]:
         return [end_a] + slots
     work, brk = tm.get("work"), tm.get("brk")
     eff = PM.effective_elapsed(tm, now.timestamp())  # minutes on the clock so far
+    if tm.get("flow"):  # 🌊 no finish line: one buzz at the check-in
+        chk = now + timedelta(minutes=tm.get("check", 90) - eff)
+        if chk > now:
+            end_a.update(at=chk, wanted=True, title="🌊 Still flowing?",
+                         message=f"{title}: {int(tm.get('check', 90))} min in. Tap 'keep going' in the app, or it logs up to here.")
+        return [end_a] + slots
     wall = PM.wall_minutes(tm["planned"], work, brk)
     end = now + timedelta(minutes=wall - eff)
     if end > now:

@@ -3892,6 +3892,12 @@ def _pomo_pick(state: dict, where=None) -> tuple[int | None, int | None]:
 
 NEW_SESSION = "__new__"
 TIMER_LENGTHS = [25, 30, 45, 50, 60, 90, 120]
+FLOW_MODE = -1          # 🌊 Flow: count up, no breaks, check-ins instead of a finish line
+FLOW_CHECK = 90         # first check-in (a deep-work wave)…
+FLOW_AGAIN = 30         # …then every 30 min after a "keep going"
+FLOW_GRACE = 20         # no answer this long after a check-in → it stops and logs up to the check-in
+FLOW_CAP = 240          # hard ceiling for one flow session
+FLOW_REST_AT = 120      # past this it suggests a real break
 
 
 def _timer_task(state: dict, name: str, planned: int, wall: int) -> dict:
@@ -3916,9 +3922,15 @@ def render_timer(state: dict) -> None:
             c1, c2 = st.columns([1.6, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
-            planned = c2.selectbox("Minutes", TIMER_LENGTHS + [0], key="timer_len", label_visibility="collapsed",
-                                   format_func=lambda m: f"{m} min" if m else "Custom…")
-            if not planned:
+            planned = c2.selectbox("Minutes", TIMER_LENGTHS + [0, FLOW_MODE], key="timer_len", label_visibility="collapsed",
+                                   format_func=lambda m: "🌊 Flow (count up)" if m == FLOW_MODE else
+                                   f"{m} min" if m else "Custom…")
+            flow = planned == FLOW_MODE
+            if flow:
+                planned = FLOW_CAP
+                st.caption(f"🌊 **Flow:** counts up, no breaks. At {FLOW_CHECK} min it checks you're still going (one tap); "
+                           f"no answer in {FLOW_GRACE} min and it logs up to the check-in. Loot rolls every 25 min.")
+            elif not planned:
                 planned = int(c2.number_input("Custom minutes", 5, 240, int(state["settings"].get("timer_custom", 40)),
                                               5, key="timer_custom", label_visibility="collapsed"))
                 if planned != state["settings"].get("timer_custom"):
@@ -3930,7 +3942,7 @@ def render_timer(state: dict) -> None:
                                          label_visibility="collapsed")
                 st.caption("Becomes a task due tonight. Run the timer and it's your proof — finish it after.")
             c3, c4 = st.columns([1.6, 1])
-            work, brk = _pomo_pick(state, c3)
+            work, brk = (None, None) if flow else _pomo_pick(state, c3)
             if c4.button("🎲 Pick for me", use_container_width=True, key="pick_next",
                          help="Picks your best next task and starts the timer"):
                 pick = Q.pick_next(state["tasks"], now(), deep_hour=I.in_peak(PROFILE, now().hour))
@@ -3944,12 +3956,15 @@ def render_timer(state: dict) -> None:
                           sound="win")
                     st.rerun()
             wall = PM.wall_minutes(planned, work, brk)
-            if st.button(f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
+            if st.button("▶️ Start flow · open-ended" if flow else
+                         f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
                          type="primary", use_container_width=True):
                 if tid == NEW_SESSION:
-                    tid = _timer_task(state, new_name, planned, PM.wall_minutes(planned, work, brk))["id"]
+                    tid = _timer_task(state, new_name, 60 if flow else planned, 60 if flow else wall)["id"]
                 state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned,
                                   "work": work, "brk": brk}
+                if flow:
+                    state["timer"].update(flow=True, check=FLOW_CHECK)
                 _mark_started(next(x for x in state["tasks"] if x["id"] == tid))
                 save_state(state)
                 st.rerun()
@@ -3960,7 +3975,7 @@ def render_timer(state: dict) -> None:
                     st.markdown(f"✅ ~~{ch['label']}~~")
                 elif ch["start"] <= now() < ch["end"]:
                     st.markdown(f"🔥 **LIVE CHALLENGE:** {ch['label']} — {fmt_left(ch['end'] - now())} left to start")
-            drops_left = EV.DROPS_PER_DAY - sum(1 for x in state.get("focus_log", [])
+            drops_left = EV.DROPS_PER_DAY - sum(x.get("drops", 1) for x in state.get("focus_log", [])
                                                  if x["date"] == now().date().isoformat() and x.get("drop"))
             st.caption(f"Today **{focus_today(state)} min** · timer-verified tasks pay +{int(V.TIMER_BONUS * 100)}% · "
                        f"25+ min sessions drop loot ({max(0, drops_left)} left) · surprise challenges buzz your phone"
@@ -4020,6 +4035,26 @@ def _timer_controls(state: dict) -> None:
     eff = PM.effective_elapsed(tm, now_ts)
     ph, left = PM.phase(eff, work, brk, tm["planned"])
     paused = bool(tm.get("paused_at"))
+    if tm.get("flow") and not paused:
+        chk = tm.get("check", FLOW_CHECK)
+        if eff >= chk + FLOW_GRACE or eff >= FLOW_CAP:  # no answer at the check-in (or the 4 h ceiling): wrap it up
+            mins = min(eff, chk if eff >= chk + FLOW_GRACE else FLOW_CAP)
+            state.pop("timer", None)
+            if t:
+                _log_session(state, t, start, mins, tm)
+            flash(f"🌊 Flow ended at {int(mins)} min" + (" (no answer at the check-in, so it's logged up to there)."
+                                                         if mins < FLOW_CAP else " (the 4-hour ceiling)."), "info")
+            st.rerun(scope="app")
+        if eff >= chk:
+            st.markdown(f"<div class='dod-flow-chk'>🌊 <b>{int(eff)} min in. Still flowing?</b> "
+                        f"<span>No answer by {int(chk + FLOW_GRACE)} min and it logs up to {int(chk)}.</span></div>",
+                        unsafe_allow_html=True)
+            if st.button("🌊 Yes, keep going", type="primary", use_container_width=True, key="tm_flow_ok"):
+                tm["check"] = int(eff) + FLOW_AGAIN
+                save_state(state)
+                st.rerun(scope="app")
+        elif eff >= FLOW_REST_AT:
+            st.caption(f"🌊 {int(eff)} min deep. A real break soon would bank this well.")
     c1, c2 = st.columns(2)
     if paused:
         if c1.button("▶️ Resume", use_container_width=True, key="tm_resume", type="primary"):
@@ -4038,11 +4073,12 @@ def _timer_controls(state: dict) -> None:
         st.rerun()
     if st.session_state.pop("_tm_redraw", False):
         st.rerun(scope="app")  # the clock lives outside these controls: redraw it with the new times
-    c2.button("☕ Skip break", use_container_width=True, key="tm_skip", on_click=_skip_break, args=(state,),
-              help="Jump straight to the next work block (works whenever you're on a break).")
+    if not tm.get("flow"):
+        c2.button("☕ Skip break", use_container_width=True, key="tm_skip", on_click=_skip_break, args=(state,),
+                  help="Jump straight to the next work block (works whenever you're on a break).")
     wd_now = PM.work_done(eff, work, brk)
     near_end = tm["planned"] - wd_now <= FLOW_WINDOW
-    if not paused and ph != "break" and near_end and tm.get("ext", 0) < FLOW_MAX_EXT:
+    if not tm.get("flow") and not paused and ph != "break" and near_end and tm.get("ext", 0) < FLOW_MAX_EXT:
         if st.button(f"🌊 In the zone? +{FLOW_STEP} min", use_container_width=True, key="tm_ext",
                      help=f"Keep going while it flows. Extra minutes pay a small flow bonus (+1 per {FLOW_COIN_PER} "
                           f"min) and the whole thing logs as one block, so a 50 + 15 counts as your 1-hour block."):
@@ -4141,7 +4177,8 @@ svg{{width:100%;max-width:340px;height:auto;display:block}}
 try{{if(navigator.audioSession)navigator.audioSession.type='ambient';
  if(parent.navigator.audioSession)parent.navigator.audioSession.type='ambient';}}catch(e){{}}
 const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},LIM={limit},ACC='{acc}';
-const TICKS=[{ticks}],EXT={ext};
+const OFF=(d=>Math.abs(d)>120000?Math.round(d/900000)*900000:0)({int(time.time() // 60 * 60000)}-Date.now());  // a device clock set wrong by hours (e.g. the wrong time zone picked) can't skew the timer
+const TICKS=[{ticks}],EXT={ext},FL={'true' if tm.get('flow') else 'false'},CHK={int(tm.get('check', 0))};
 function finish(){{  // whole-page "you're done" you can catch from across the room: once per session
  let P;try{{P=parent.document;}}catch(e){{return;}}
  const key='dodfin:'+S;try{{if(parent.sessionStorage.getItem(key))return;parent.sessionStorage.setItem(key,'1');}}catch(e){{}}
@@ -4208,7 +4245,7 @@ function place(f,pit){{
  if(pit){{car.setAttribute('transform','translate('+PX+','+PY+') rotate('+(a0*180/Math.PI)+') scale(.85)');return;}}
  const [a,ang]=at(f);car.setAttribute('transform','translate('+a.x+','+a.y+') rotate('+(ang*180/Math.PI)+') scale(.85)');}}
 function frame(){{
- const now=Date.now(),e=eff(now),wd=Math.min(wdone(e),T),f=wd/T;
+ const now=Date.now()+OFF,e=eff(now),wd=Math.min(wdone(e),T),f=FL?(e%25)/25:wd/T;  // flow: a lap every 25 min
  let ph='work',left=(T-e)*60000;
  if(wd>=T)ph='done';
  else if(W&&B){{const c=W+B,r=e%c;if(r<W)left=Math.min(W-r,T-wd)*60000;else{{ph='break';left=(c-r)*60000;}}}}
@@ -4227,10 +4264,14 @@ function frame(){{
     p.textContent='🏁 Chequered flag';s.textContent='Session complete. Stop & log it.';}}
   else if(pit){{t.textContent=mmss(left);t.style.fill='#2ec4b6';trail.style.stroke=ACC;
     p.textContent='🔧 Pit stop';s.textContent='Tyres, water, stretch. No phone in the pit lane.';}}
+  else if(FL){{t.textContent=mmss(e*60000);t.style.fill=e>=CHK?'#29e3ff':ACC;trail.style.stroke=ACC;
+    p.textContent=e>=CHK?'🌊 Check-in':'🌊 Flow · lap '+(Math.floor(e/25)+1);
+    s.textContent=e>=CHK?'Still flowing? Tap below to keep going.':'Counting up · check-in at '+CHK+' min · phone face-down';
+    if(e>=CHK&&last!=='chk'){{beep(2);last='chk';}}}}
   else{{t.textContent=mmss(left);t.style.fill=ACC;trail.style.stroke=ACC;
     p.textContent=EXT>0?('🌊 Flow · +'+EXT+' min'):stints>1?('Stint '+blk+' of '+stints):'Green flag';
     s.textContent=Math.round(wd)+' of '+T+' min · phone face-down';}}
-  const key=PA?'pause':ph;if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;
+  const key=PA?'pause':ph;if(!FL){{if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;}}
   if(ph==='done'&&!PA)finish();}}
  requestAnimationFrame(frame);}}
 frame();
@@ -4255,7 +4296,7 @@ def flow_bonus(tm: dict, mins: float) -> tuple[int, float]:
 
 def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -> None:
     """Credit a finished/stopped focus session: focus minutes, XP, loot drop, focus challenge."""
-    full = mins >= tm["planned"]
+    full = mins >= 25 if tm.get("flow") else mins >= tm["planned"]
     t["focus_min"] = round(t.get("focus_min", 0) + mins, 1)
     state.setdefault("focus_log", []).append({"date": start.date().isoformat(), "task": t["id"],
                                               "min": round(mins, 1), "full": full,
@@ -4264,9 +4305,13 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
     state["xp"] += int(mins // 5)
     drop_msg, snd = "", ("win" if full else None)
     today_log = [x for x in state["focus_log"] if x["date"] == now().date().isoformat()]
-    if full and mins >= 25 and sum(1 for x in today_log if x.get("drop")) < EV.DROPS_PER_DAY:
+    rolls = int(mins // 25) if tm.get("flow") else 1  # a flow run gets a roll per 25 min, like a stack of sessions
+    left_today = EV.DROPS_PER_DAY - sum(x.get("drops", 1) for x in today_log if x.get("drop"))
+    msgs_ = []
+    for _r in range(max(0, min(rolls, left_today)) if full and mins >= 25 else 0):
         kind = EV.roll_drop()
         state["focus_log"][-1]["drop"] = kind
+        state["focus_log"][-1]["drops"] = _r + 1
         tok = state.setdefault("tokens", {"double": 0, "upgrade": 0})
         if kind == "xp":
             state["xp"] += 20
@@ -4282,7 +4327,10 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
         else:
             tok["upgrade"] = tok.get("upgrade", 0) + 1
             drop_msg = "🎁 Session drop: **🔧 free-upgrade token** — install any part for free in the Garage."
-        snd = "jackpot" if kind in ("double_token", "upgrade_token") else "win"
+        msgs_.append(drop_msg)
+        snd = "jackpot" if kind in ("double_token", "upgrade_token") or snd == "jackpot" else "win"
+    if len(msgs_) > 1:
+        drop_msg = "  \n".join(msgs_)
     done_ch = state.setdefault("challenge_claims", [])
     for ch in EV.focus_challenges(now().date(), TZ):
         if ch["id"] not in done_ch and ch["start"] <= start < ch["end"] and mins >= ch["minutes"]:
@@ -4944,6 +4992,9 @@ CSS = """<style>
 .dod-boot-bar{width:180px;height:4px;border-radius:4px;background:var(--track,#262b36);overflow:hidden}
 .dod-boot-bar i{display:block;width:40%;height:100%;background:var(--y);border-radius:4px;animation:dodSlide 1.1s ease-in-out infinite}
 @keyframes dodBob{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+.dod-flow-chk{background:rgba(41,227,255,.08);border:1px solid rgba(41,227,255,.35);border-radius:10px;padding:8px 12px;
+  margin:4px 0 8px;animation:dodPulse 2s ease-in-out infinite}.dod-flow-chk span{display:block;color:var(--muted);font-size:.85rem}
+@keyframes dodPulse{0%,100%{box-shadow:0 0 0 0 rgba(41,227,255,.0)}50%{box-shadow:0 0 0 4px rgba(41,227,255,.12)}}
 /* ── weekly recap cards (wins / what got in the way) ── */
 .dod-rc-h{font-weight:700;margin:.4rem 0 .5rem;display:flex;gap:8px;align-items:baseline}
 .dod-rc-h span{font-weight:500;color:var(--muted);font-size:.85rem}
