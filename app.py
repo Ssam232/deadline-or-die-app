@@ -4520,9 +4520,22 @@ def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
         st.caption(f"(Couldn't check the Zotero Inbox: {e})")
         return
     if not box or not items:
+        st.session_state.pop("inbox_open", None)
+        return
+    n_ = f"{len(items)} paper{'s' * (len(items) != 1)}"
+    if not st.session_state.get("inbox_open"):
+        c1, c2 = st.columns([3, 1.3], vertical_alignment="center")
+        c1.markdown(f"📥 **{n_} in your Zotero Inbox**")
+        if c2.button("📥 Import from Inbox", key="inbox_import", type="primary", use_container_width=True):
+            st.session_state["inbox_open"] = True
+            st.rerun()
         return
     with st.container(border=True):
-        st.markdown(f"#### 📥 Inbox · {len(items)} paper{'s' * (len(items) != 1)} you added")
+        h1, h2 = st.columns([3, 1], vertical_alignment="center")
+        h1.markdown(f"#### 📥 Import from Inbox · {n_}")
+        if h2.button("Later", key="inbox_close", use_container_width=True):
+            st.session_state.pop("inbox_open", None)
+            st.rerun()
         for it in items:
             k = it["key"]
             st.markdown(f"<a href='{html.escape(it['url'], quote=True)}' target='_blank'>{html.escape(it['title'])}</a>"
