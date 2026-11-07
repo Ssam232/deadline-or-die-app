@@ -277,6 +277,11 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
         dl_today = (save.get("habit_log") or {}).get(now.date().isoformat())
         print(f"::notice title=save freshness::rev {save.get('rev')} · folds {len(save.get('folds') or {})} · "
               f"last ledger {last[:16]} · coins {save.get('coins')} · dailies today {json.dumps(dl_today)[:80] if dl_today else '-'}")
+        tm_ = save.get("timer")
+        if tm_:
+            print(f"::notice title=timer::start {str(tm_.get('start'))[:19]} · planned {tm_.get('planned')} · work/brk "
+                  f"{tm_.get('work')}/{tm_.get('brk')} · skipped {round(tm_.get('skipped', 0) / 60, 1)}m · paused "
+                  f"{round(tm_.get('paused_total', 0) / 60, 1)}m{' (now)' if tm_.get('paused_at') else ''} · ext {tm_.get('ext', 0)}")
         pl = (save.get("perf_log") or [])[-4:]
         if pl:
             print("::notice title=login speed::" + " | ".join(
