@@ -4534,7 +4534,29 @@ INBOX_READ_PER_DAY = 3   # rewards stop after 3 a day; filing still works
 
 
 def _inbox_rewards_today(state: dict) -> int:
-    return sum(1 for x in state.get("focus_log", []) if x.get("task") == "inbox-read" and x["date"] == now().date().isoformat())
+    """Rewarded inbox filings made today (counted by when you filed them, not when you read them)."""
+    return sum(1 for t in state["tasks"] if t.get("source") == "inbox-read" and t.get("earned")
+               and (t.get("created") or "")[:10] == now().date().isoformat())
+
+
+def _file_already_read(state: dict, it: dict, when: datetime, rewarded: bool) -> dict:
+    """Records a paper you'd already read as a finished 30-minute deep-work task at the time you read it, so it
+    counts in Stats, the recap and the scrapbook like any other task. The reward is the small inbox one."""
+    when = min(when, now())
+    t = make_task(f"📄 Read: {it['title'][:80]}", f"Already read before it reached the list (filed from the Inbox). {it['url']}",
+                  when, category="deep", minutes=INBOX_READ_MIN, source="inbox-read")
+    coins = INBOX_READ_COINS if rewarded else 0
+    t.update({"status": "done", "completed_at": when.isoformat(), "reward": coins, "earned": coins,
+              "minutes": INBOX_READ_MIN, "focus_min": INBOX_READ_MIN, "zotero_key": it["key"], "zotero_keys": [it["key"]],
+              "proof_note": f"Already read. {INBOX_READ_MIN} min logged."})
+    state["tasks"].append(t)
+    start = when - timedelta(minutes=INBOX_READ_MIN)
+    state.setdefault("focus_log", []).append({"date": start.date().isoformat(), "task": t["id"], "min": INBOX_READ_MIN,
+                                              "full": False, "start": start.isoformat(), "cat": "deep"})
+    if rewarded:
+        bank(state, coins, f"📥 Already read: {it['title'][:50]}")
+        state["xp"] += INBOX_READ_MIN // 5
+    return t
 
 
 def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
@@ -4572,6 +4594,10 @@ def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
                                          default="Not yet", key=f"inbox_read_{k}") or "Not yet"
             qs = st.multiselect("Questions it answers", Z.QUESTIONS, key=f"inbox_q_{k}", placeholder="Optional")
             lv = num = None
+            if done_ != "Not yet":
+                c1, c2 = st.columns(2)
+                rd = c1.date_input("Read on", now().date(), max_value=now().date(), key=f"inbox_d_{k}")
+                rt = c2.time_input("Finished at", now().replace(second=0, microsecond=0).time(), step=900, key=f"inbox_t_{k}")
             if done_ == "Not yet":
                 c1, c2 = st.columns(2)
                 lv = c1.selectbox("Level", [*Z.LEVELS, ""], key=f"inbox_lv_{k}", index=1,
@@ -4590,16 +4616,12 @@ def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
                 except Exception as e:  # noqa: BLE001
                     flash(f"Couldn't file that paper: {e}", "error")
                     st.rerun()
-                if done_ != "Not yet" and left > 0:
-                    bank(state, INBOX_READ_COINS, f"📥 Already read: {it['title'][:50]}")
-                    state.setdefault("focus_log", []).append({"date": now().date().isoformat(), "task": "inbox-read",
-                                                              "min": INBOX_READ_MIN, "full": False,
-                                                              "start": now().isoformat(), "cat": "deep"})
-                    state["xp"] += INBOX_READ_MIN // 5
+                if done_ != "Not yet":
+                    t_ = _file_already_read(state, it, datetime.combine(rd, rt, TZ), left > 0)
                     save_state(state)
-                    flash(f"📚 Filed as read · +{INBOX_READ_COINS} coins · {INBOX_READ_MIN} min logged.")
-                elif done_ != "Not yet":
-                    flash(f"📚 Filed as read. (Rewards cap at {INBOX_READ_PER_DAY} a day.)")
+                    when_ = parse_dt(t_["completed_at"])
+                    flash(f"📚 Filed as read on {when_:%a %b} {when_.day}, {when_:%H:%M} · {INBOX_READ_MIN} min logged"
+                          + (f" · +{INBOX_READ_COINS} coins." if left > 0 else f". (Coins cap at {INBOX_READ_PER_DAY} a day.)"))
                 else:
                     flash(f"➕ Added to your reading list{' as ' + code if code else ', not ordered yet'}.")
                 _zotero_inbox.clear()
