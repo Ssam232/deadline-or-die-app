@@ -268,9 +268,9 @@ class Tests(unittest.TestCase):
         self.assertEqual(fake.items[0]["data"]["extra"], "Read order: A01 (Foundational)\nMy own note")
         self.assertEqual(fake.items[1]["data"]["extra"], "Read order: D01 (Niche)")
         self.assertNotIn("extra", fake.items[2]["data"])
-        fake.items[0]["data"]["extra"] = "Read order: B09 (Core)"  # a later hand edit is left alone
-        self.assertEqual(self.m.run(), 0)
-        self.assertEqual(fake.items[0]["data"]["extra"], "Read order: B09 (Core)")
+        fake.items[0]["data"]["extra"] = "Read order: B09 (Core)"  # a later hand edit keeps its level, and is not
+        self.assertEqual(self.m.run(), 0)                          # overwritten by reading-order.json again
+        self.assertEqual(fake.items[0]["data"]["extra"], "Read order: B01 (Core)")  # only renumbered without the gap
 
     def test_unmatched_read_order_is_an_error_and_retried(self):
         self.order_file([{"code": "A01", "title": "Nowhere"}])
@@ -279,7 +279,7 @@ class Tests(unittest.TestCase):
 
     def ordered_item(self, key, code, title=None, extra_lines=""):
         self.scout_item(key)
-        fake.items[-1]["data"].update({"title": title or f"Paper {key}", "extra": f"Read order: {code} (x){extra_lines}"})
+        fake.items[-1]["data"].update({"title": title or f"Paper {key}", "extra": f"Read order: {code} ({self.m.LETTER_NAMES[code[0]]}){extra_lines}"})
 
     def codes(self):
         return {i["data"]["title"]: (i["data"].get("extra") or "").split("\n")[0].replace("Read order: ", "").split(" ")[0]
@@ -314,6 +314,91 @@ class Tests(unittest.TestCase):
         self.assertEqual([r["code"] for r in saved], ["A01", "B01", "B02", "B03", "B04", "C01"])
         self.assertEqual(saved[2]["title"], "Good paper")
         self.assertEqual(sum(1 for i in fake.items if i["version"] > 3), 2)  # only the two that moved were written
+
+    # ---- daily tidy: renumbering, ranks, placements ----
+
+    def to_read_key(self):
+        fake.collections.append({"key": "TR", "version": 1, "data": {"name": "To Read", "parentCollection": False}})
+        for k in (self.m.BACKFILL_MARKER, self.m.FOLDERS_MARKER, self.m.ORDER_MARKER):
+            (self.root / k).write_text("done")
+        return "TR"
+
+    def paper(self, key, extra=None, status=None, added="2026-01-01", colls=("TR",)):
+        d = {"title": f"Paper {key}", "itemType": "journalArticle", "collections": list(colls), "dateAdded": added,
+             "tags": [{"tag": status}] if status else []}
+        if extra is not None:
+            d["extra"] = extra
+        fake.items.append({"key": key, "version": 3, "data": d})
+
+    def extra(self, key):
+        return next(i for i in fake.items if i["key"] == key)["data"].get("extra")
+
+    def test_ranks_put_reading_first_then_read_order_then_unordered_and_skip_read(self):
+        self.to_read_key()
+        self.paper("B1", "Read order: B01 (Core)")
+        self.paper("A1", "Read order: A01 (Foundational)\nMy note")
+        self.paper("C1", "Read order: C01 (Specialized)", status="reading")
+        self.paper("R1", "Read order: A02 (Foundational)\nReading rank: 1", status="read")
+        self.paper("N2", added="2026-03-01")
+        self.paper("N1", added="2026-02-01")
+        self.paper("ELSE", "Read order: D01 (Niche)", colls=("OTHER",))
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(self.extra("C1"), "Read order: C01 (Specialized)\nReading rank: 1")
+        self.assertEqual(self.extra("A1"), "Read order: A01 (Foundational)\nReading rank: 2\nMy note")
+        self.assertEqual(self.extra("B1"), "Read order: B01 (Core)\nReading rank: 3")
+        self.assertEqual((self.extra("N1"), self.extra("N2")), ("Reading rank: 4", "Reading rank: 5"))
+        self.assertEqual(self.extra("R1"), "Read order: A02 (Foundational)")  # read papers lose their rank
+        self.assertEqual(self.extra("ELSE"), "Read order: D01 (Niche)")  # not in To Read, so no rank
+        unranked = json.loads((self.root / "unranked.json").read_text())
+        self.assertEqual([u["key"] for u in unranked], ["N1", "N2"])
+        versions = {i["key"]: i["version"] for i in fake.items}
+        self.assertEqual(self.m.run(), 0)  # a second run with nothing new writes nothing
+        self.assertEqual({i["key"]: i["version"] for i in fake.items}, versions)
+
+    def test_marking_a_paper_read_moves_the_others_up(self):
+        self.to_read_key()
+        self.paper("A1", "Read order: A01 (Foundational)")
+        self.paper("A2", "Read order: A02 (Foundational)")
+        self.m.run()
+        fake.items[0]["data"]["tags"] = [{"tag": "read"}]
+        self.m.run()
+        self.assertEqual((self.extra("A1"), self.extra("A2")),
+                         ("Read order: A01 (Foundational)", "Read order: A02 (Foundational)\nReading rank: 1"))
+
+    def test_gaps_and_repeats_are_renumbered_and_leftovers_cleaned(self):
+        self.to_read_key()
+        self.paper("X", "Read order: B03\n (Core)", added="2026-01-02")
+        self.paper("Y", "Read order: B03 (Core)", added="2026-01-01")
+        self.paper("Z", "Read order: B07 (Core)")
+        self.m.run()
+        self.assertEqual([self.extra(k).split("\n")[0] for k in ("Y", "X", "Z")],
+                         ["Read order: B01 (Core)", "Read order: B02 (Core)", "Read order: B03 (Core)"])
+        self.assertEqual(self.extra("X").count("(Core)"), 1)
+
+    def test_placement_gives_an_existing_paper_its_place(self):
+        self.to_read_key()
+        self.paper("B1", "Read order: B01 (Core)")
+        self.paper("B2", "Read order: B02 (Core)")
+        self.paper("NEW", "My note")
+        self.paper("WRONG")
+        (self.root / "placements").mkdir()
+        (self.root / "placements" / "2026-11-07.json").write_text(json.dumps({"papers": [
+            {"key": "NEW", "title": "Paper NEW", "level": "core", "before": "Paper B2"}]}))
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(self.extra("NEW"), "Read order: B02 (Core)\nReading rank: 2\nMy note")
+        self.assertEqual(self.extra("B2"), "Read order: B03 (Core)\nReading rank: 3")
+        self.assertTrue((self.root / "done" / "placed-2026-11-07.json").exists())
+        self.assertEqual([u["key"] for u in json.loads((self.root / "unranked.json").read_text())], ["WRONG"])
+
+    def test_placement_with_a_title_that_does_not_match_is_kept(self):
+        self.to_read_key()
+        self.paper("NEW")
+        (self.root / "placements").mkdir()
+        (self.root / "placements" / "p.json").write_text(json.dumps({"papers": [
+            {"key": "NEW", "title": "A completely different study of plants", "level": "core"}]}))
+        self.assertEqual(self.m.run(), 1)
+        self.assertTrue((self.root / "placements" / "p.json").exists())
+        self.assertEqual(self.extra("NEW"), "Reading rank: 1")
 
     def test_two_papers_in_one_run_keep_their_places(self):
         self.ordered_item("B1", "B01")
@@ -486,9 +571,22 @@ class Tests(unittest.TestCase):
         Z.API = self.base
         p = Z.reading_list("1", "k")[0]
         self.assertEqual(p["facets"], {"question": ["Q3 How does diet change muscle?"], "subject": ["Diet and muscle"],
-                                       "species": ["rat"], "sex": [], "type": ["study"]})
+                                       "species": ["rat"], "sex": [], "type": ["study"], "source": []})
         self.assertEqual(p["year"], "2020")
         self.assertFalse(p["needs_check"])
+
+    def test_app_renumber_bumps_the_level_and_closes_the_gap(self):
+        app = os.getenv("APP_CHECKOUT")
+        if not app:
+            self.skipTest("set APP_CHECKOUT to a checkout of main")
+        sys.path.insert(0, app)
+        sys.modules.pop("zotero", None)
+        import zotero as Z
+        ps = [{"key": k, "order": o} for k, o in (("a", "A01"), ("b", "A02"), ("c", "B01"), ("d", "B02"), ("n", ""))]
+        self.assertEqual(Z.renumber(ps, "n", "A", 2), {"n": "A02", "b": "A03"})
+        self.assertEqual(Z.renumber(ps, "c", "A", 1), {"c": "A01", "a": "A02", "b": "A03", "d": "B01"})
+        self.assertEqual(Z.renumber(ps, "n", "D", 9), {"n": "D01"})
+        self.assertEqual(Z._facets([{"tag": "manual entry"}])["source"], ["Manual entry"])
 
     def test_questions_go_on_earlier_papers_once_and_touch_nothing_else(self):
         self.scout_item(tags=("paper-scout", "subject:Diet and muscle", "species:mouse", "year:2016", "read", "my-own"))
