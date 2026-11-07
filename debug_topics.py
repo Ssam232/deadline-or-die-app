@@ -1,16 +1,14 @@
 import os, requests, json
 u, k = os.environ["ZOTERO_USER_ID"], os.environ["ZOTERO_API_KEY"]
 b = f"https://api.zotero.org/users/{u}"; h = {"Zotero-API-Key": k, "Zotero-API-Version": "3"}
-r = requests.get(f"{b}/items", headers=h, params={"itemType": "note", "q": "search topics", "qmode": "everything", "limit": 10})
-print("library notes matching:", r.status_code, [(i["key"], i["data"].get("collections"), i["data"].get("parentItem"), i["data"]["note"][:120]) for i in r.json()])
-cols = {c["data"]["name"]: c["key"] for c in requests.get(f"{b}/collections", headers=h, params={"limit": 100}).json()}
-print("project key:", cols.get("LCR HCR CVxR"))
-r = requests.get(f"{b}/collections/{cols.get('LCR HCR CVxR')}/items", headers=h, params={"itemType": "note", "limit": 100})
-print("project notes:", r.status_code, len(r.json()))
-if not r.json():
-    body = [{"itemType": "note", "note": "<p>Deadline or Die search topics</p><p>Diaphragm anatomy and remodelling</p>",
-             "collections": [cols.get("LCR HCR CVxR")], "tags": [], "relations": {}}]
-    p = requests.post(f"{b}/items", headers={**h, "Content-Type": "application/json"}, data=json.dumps(body))
-    print("create:", p.status_code, json.dumps(p.json())[:600])
-    r = requests.get(f"{b}/collections/{cols.get('LCR HCR CVxR')}/items", headers=h, params={"itemType": "note", "limit": 100})
-    print("project notes after:", r.status_code, [(i["key"], i["data"]["note"][:80]) for i in r.json()])
+it = requests.get(f"{b}/items/PSXIX6IE", headers=h).json()
+print("note item:", it["data"].get("collections"), it["data"].get("deleted"))
+allnotes = requests.get(f"{b}/items", headers=h, params={"itemType": "note", "limit": 100}).json()
+print("all notes:", [(i["key"], i["data"].get("collections"), i["data"]["note"][:50]) for i in allnotes if "search topics" in i["data"]["note"]])
+proj = it["data"]["collections"][0]
+rows = requests.get(f"{b}/collections/{proj}/items", headers=h, params={"limit": 100}).json()
+print("project items (any type):", len(rows), [(i["key"], i["data"]["itemType"]) for i in rows if i["data"]["itemType"] == "note"])
+rows = requests.get(f"{b}/collections/{proj}/items", headers=h, params={"itemType": "note"}).json()
+print("project, itemType=note:", len(rows))
+rows = requests.get(f"{b}/collections/{proj}/items", headers=h, params={"itemType": "note", "limit": 100, "start": 0}).json()
+print("project, itemType=note, limit/start:", len(rows))
