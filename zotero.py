@@ -7,6 +7,7 @@ plus write access if you want finished papers tagged "read" automatically).
 """
 from __future__ import annotations
 
+import html
 import os
 import re
 
@@ -323,3 +324,50 @@ def file_from_inbox(user: str, key: str, item_key: str, status: str, questions: 
         if r.status_code != 412 or attempt == 2:
             raise ZoteroError(f"Zotero couldn't file that ({r.status_code}): "
                               + ("the key needs write access" if r.status_code == 403 else r.text[:120]))
+
+
+# ---- extra search topics for the Sunday search ------------------------------------------------
+
+TOPICS_MARK = "Deadline or Die search topics"  # first line of the note; the Sunday code pass looks for it
+
+
+def _project(user: str, key: str, collection: str) -> str | None:
+    me = next((c for c in _collections(user, key) if c["data"]["name"].strip().lower() == collection.strip().lower()), None)
+    return me and me["data"].get("parentCollection") or None
+
+
+def _topics_note(user: str, key: str, project: str) -> dict | None:
+    for it in _get(f"/users/{user}/collections/{project}/items", key, {"itemType": "note", "limit": 100}):
+        if TOPICS_MARK.lower() in (it["data"].get("note") or "").lower():
+            return it
+    return None
+
+
+def search_topics(user: str, key: str, collection: str = "To Read") -> list[str]:
+    project = _project(user, key, collection)
+    it = project and _topics_note(user, key, project)
+    if not it:
+        return []
+    parts = re.findall(r"<(?:p|li|h\d)[^>]*>(.*?)</(?:p|li|h\d)>", it["data"].get("note") or "", re.S | re.I)
+    lines = [html.unescape(re.sub(r"<[^>]+>", "", x)).strip() for x in parts]
+    return [x for x in lines if x and x != TOPICS_MARK]
+
+
+def save_search_topics(user: str, key: str, topics: list[str], collection: str = "To Read") -> None:
+    """Keeps the topics in one Zotero note in the project folder (made the first time). Needs write access."""
+    project = _project(user, key, collection)
+    if not project:
+        raise ZoteroError("To Read needs to sit inside the project folder")
+    note = "".join(f"<p>{html.escape(x)}</p>" for x in [TOPICS_MARK, *topics])
+    it = _topics_note(user, key, project)
+    if it:
+        r = requests.patch(f"{API}/users/{user}/items/{it['key']}", json={"note": note}, timeout=20,
+                           headers={**_h(key), "If-Unmodified-Since-Version": str(it["version"])})
+        ok = r.status_code in (200, 204)
+    else:
+        r = requests.post(f"{API}/users/{user}/items", json=[{"itemType": "note", "note": note, "collections": [project],
+                                                               "tags": [], "relations": {}}], headers=_h(key), timeout=20)
+        ok = r.status_code == 200 and bool(r.json().get("successful"))
+    if not ok:
+        raise ZoteroError(f"Couldn't save the topics ({r.status_code}): "
+                          + ("the key needs write access" if r.status_code == 403 else r.text[:120]))

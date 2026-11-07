@@ -357,6 +357,7 @@ def zotero_fresh(zc: tuple | None) -> None:
             _zotero_list.clear()
             _zotero_reading.clear()
             _zotero_inbox.clear()
+            _zotero_topics.clear()
         seen["v"] = v
 
 
@@ -4633,6 +4634,46 @@ def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
                    "They're all tagged “manual entry”.")
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _zotero_topics(user: str, key: str, coll: str) -> list[str]:
+    return Z.search_topics(user, key, coll)
+
+
+def render_search_topics(zc: tuple) -> None:
+    """🔎 Extra topics the Sunday search looks for, beyond the guiding questions. Search only: no tags."""
+    try:
+        topics = _zotero_topics(*zc)
+    except Exception as e:  # noqa: BLE001
+        st.caption(f"(Couldn't read the search topics: {e})")
+        return
+    with fold("search_topics", f"🔎 Sunday search topics ({len(topics)})", False):
+        st.caption("The Sunday run searches these on top of your guiding questions. Papers it finds for them join the "
+                   "reading list like any other; no tag is added for a topic.")
+
+        def _save(new: list[str], msg: str) -> None:
+            try:
+                Z.save_search_topics(zc[0], zc[1], new, zc[2])
+                _zotero_topics.clear()
+                flash(msg)
+            except Exception as e:  # noqa: BLE001
+                flash(f"Couldn't save that: {e}", "error")
+            st.rerun()
+
+        for i, t_ in enumerate(topics):
+            c1, c2 = st.columns([6, 1], vertical_alignment="center")
+            c1.markdown(f"• {html.escape(t_)}")
+            if c2.button("✕", key=f"topic_rm_{i}", help="Stop searching for this", use_container_width=True):
+                _save([x for j, x in enumerate(topics) if j != i], f"🔎 Removed **{t_}**.")
+        with st.form("topic_add", clear_on_submit=True, border=False):
+            c1, c2 = st.columns([6, 1], vertical_alignment="bottom")
+            new_ = c1.text_input("New topic", placeholder="e.g. Diaphragm anatomy and remodelling")
+            if c2.form_submit_button("Add", use_container_width=True) and new_.strip():
+                if new_.strip().casefold() in {x.casefold() for x in topics}:
+                    flash("That topic is already on the list.", "warning")
+                    st.rerun()
+                _save([*topics, new_.strip()], f"🔎 Added **{new_.strip()}**. The next Sunday run searches for it.")
+
+
 def render_reading_list(state: dict) -> None:
     zc = zotero_cfg(state)
     zotero_fresh(zc)
@@ -4750,6 +4791,7 @@ def render_reading_list(state: dict) -> None:
             for p in shown[first:]:
                 _row(p)
     st.caption("Ticking a paper here only tracks it. Coins come from finishing its task with proof.")
+    render_search_topics(zc)
 
 
 def render_contracts(state: dict) -> None:
