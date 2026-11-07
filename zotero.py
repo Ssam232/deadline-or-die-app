@@ -328,46 +328,51 @@ def file_from_inbox(user: str, key: str, item_key: str, status: str, questions: 
 
 # ---- extra search topics for the Sunday search ------------------------------------------------
 
-TOPICS_MARK = "Deadline or Die search topics"  # first line of the note; the Sunday code pass looks for it
+TOPICS_FOLDER = "Search topics"  # under the project; each subfolder's name is one topic. The Sunday code pass reads them.
 
 
-def _project(user: str, key: str, collection: str) -> str | None:
-    me = next((c for c in _collections(user, key) if c["data"]["name"].strip().lower() == collection.strip().lower()), None)
-    return me and me["data"].get("parentCollection") or None
+def _topics_folder(user: str, key: str, collection: str, create: bool = False) -> tuple[str | None, list[dict]]:
+    cols = _collections(user, key)
+    me = next((c for c in cols if c["data"]["name"].strip().lower() == collection.strip().lower()), None)
+    project = me and me["data"].get("parentCollection")
+    if not project:
+        if create:
+            raise ZoteroError("To Read needs to sit inside the project folder")
+        return None, []
+    folder = next((c["key"] for c in cols if c["data"].get("parentCollection") == project
+                   and c["data"]["name"].strip().lower() == TOPICS_FOLDER.lower()), None)
+    if not folder and create:
+        folder = _make_collection(user, key, TOPICS_FOLDER, project)
+    return folder, [c for c in cols if folder and c["data"].get("parentCollection") == folder]
 
 
-def _topics_note(user: str, key: str, project: str) -> dict | None:
-    for it in _get(f"/users/{user}/collections/{project}/items", key, {"itemType": "note", "limit": 100}):
-        if TOPICS_MARK.lower() in (it["data"].get("note") or "").lower():
-            return it
-    return None
+def _make_collection(user: str, key: str, name: str, parent: str) -> str:
+    r = requests.post(f"{API}/users/{user}/collections", headers=_h(key), timeout=20,
+                      json=[{"name": name, "parentCollection": parent}])
+    made = r.json().get("successful", {}) if r.status_code == 200 else {}
+    if "0" not in made:
+        raise ZoteroError(f"Couldn't save that ({r.status_code}): "
+                          + ("the key needs write access" if r.status_code == 403 else r.text[:120]))
+    return made["0"]["key"]
 
 
 def search_topics(user: str, key: str, collection: str = "To Read") -> list[str]:
-    project = _project(user, key, collection)
-    it = project and _topics_note(user, key, project)
-    if not it:
-        return []
-    parts = re.findall(r"<(?:p|li|h\d)[^>]*>(.*?)</(?:p|li|h\d)>", it["data"].get("note") or "", re.S | re.I)
-    lines = [html.unescape(re.sub(r"<[^>]+>", "", x)).strip() for x in parts]
-    return [x for x in lines if x and x != TOPICS_MARK]
+    _, kids = _topics_folder(user, key, collection)
+    return sorted((c["data"]["name"].strip() for c in kids), key=str.casefold)
 
 
-def save_search_topics(user: str, key: str, topics: list[str], collection: str = "To Read") -> None:
-    """Keeps the topics in one Zotero note in the project folder (made the first time). Needs write access."""
-    project = _project(user, key, collection)
-    if not project:
-        raise ZoteroError("To Read needs to sit inside the project folder")
-    note = "".join(f"<p>{html.escape(x)}</p>" for x in [TOPICS_MARK, *topics])
-    it = _topics_note(user, key, project)
-    if it:
-        r = requests.patch(f"{API}/users/{user}/items/{it['key']}", json={"note": note}, timeout=20,
-                           headers={**_h(key), "If-Unmodified-Since-Version": str(it["version"])})
-        ok = r.status_code in (200, 204)
-    else:
-        r = requests.post(f"{API}/users/{user}/items", json=[{"itemType": "note", "note": note, "collections": [project],
-                                                               "tags": [], "relations": {}}], headers=_h(key), timeout=20)
-        ok = r.status_code == 200 and bool(r.json().get("successful"))
-    if not ok:
-        raise ZoteroError(f"Couldn't save the topics ({r.status_code}): "
-                          + ("the key needs write access" if r.status_code == 403 else r.text[:120]))
+def add_search_topic(user: str, key: str, topic: str, collection: str = "To Read") -> None:
+    folder, kids = _topics_folder(user, key, collection, create=True)
+    if topic.strip().casefold() not in {c["data"]["name"].strip().casefold() for c in kids}:
+        _make_collection(user, key, topic.strip()[:250], folder)
+
+
+def remove_search_topic(user: str, key: str, topic: str, collection: str = "To Read") -> None:
+    """Deletes the topic's subfolder (only ever an empty folder Deadline or Die made; no papers are touched)."""
+    _, kids = _topics_folder(user, key, collection)
+    for c in kids:
+        if c["data"]["name"].strip().casefold() == topic.strip().casefold():
+            r = requests.delete(f"{API}/users/{user}/collections/{c['key']}", timeout=20,
+                                headers={**_h(key), "If-Unmodified-Since-Version": str(c["version"])})
+            if r.status_code not in (200, 204):
+                raise ZoteroError(f"Couldn't remove that ({r.status_code}): {r.text[:120]}")

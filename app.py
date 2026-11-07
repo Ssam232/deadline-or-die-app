@@ -4648,11 +4648,12 @@ def render_search_topics(zc: tuple) -> None:
         return
     with fold("search_topics", f"🔎 Sunday search topics ({len(topics)})", False):
         st.caption("The Sunday run searches these on top of your guiding questions. Papers it finds for them join the "
-                   "reading list like any other; no tag is added for a topic.")
+                   "reading list like any other; no tag is added for a topic. They're kept as folders under "
+                   "LCR HCR CVxR → Search topics in Zotero, so you can add one there too.")
 
-        def _save(new: list[str], msg: str) -> None:
+        def _save(fn, topic: str, msg: str) -> None:
             try:
-                Z.save_search_topics(zc[0], zc[1], new, zc[2])
+                fn(zc[0], zc[1], topic, zc[2])
                 _zotero_topics.clear()
                 flash(msg)
             except Exception as e:  # noqa: BLE001
@@ -4663,7 +4664,7 @@ def render_search_topics(zc: tuple) -> None:
             c1, c2 = st.columns([6, 1], vertical_alignment="center")
             c1.markdown(f"• {html.escape(t_)}")
             if c2.button("✕", key=f"topic_rm_{i}", help="Stop searching for this", use_container_width=True):
-                _save([x for j, x in enumerate(topics) if j != i], f"🔎 Removed **{t_}**.")
+                _save(Z.remove_search_topic, t_, f"🔎 Removed **{t_}**.")
         with st.form("topic_add", clear_on_submit=True, border=False):
             c1, c2 = st.columns([6, 1], vertical_alignment="bottom")
             new_ = c1.text_input("New topic", placeholder="e.g. Diaphragm anatomy and remodelling")
@@ -4671,7 +4672,7 @@ def render_search_topics(zc: tuple) -> None:
                 if new_.strip().casefold() in {x.casefold() for x in topics}:
                     flash("That topic is already on the list.", "warning")
                     st.rerun()
-                _save([*topics, new_.strip()], f"🔎 Added **{new_.strip()}**. The next Sunday run searches for it.")
+                _save(Z.add_search_topic, new_.strip(), f"🔎 Added **{new_.strip()}**. The next Sunday run searches for it.")
 
 
 def render_reading_list(state: dict) -> None:
