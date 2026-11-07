@@ -6208,7 +6208,7 @@ with tab_goals:
 VIZ = {"normal": "#3987e5", "dead": "#d95926", "peak": "#199e70", "low": "#1d2735", "grid": "#2b2e36"}
 
 
-PERIODS = ["Week", "Month", "Year"]
+PERIODS = ["Week", "30 days", "Month", "Year"]
 
 
 def _period(kind: str, back: int, today: date) -> tuple[date, date, str]:
@@ -6216,6 +6216,10 @@ def _period(kind: str, back: int, today: date) -> tuple[date, date, str]:
         lo = today - timedelta(days=today.weekday()) - timedelta(weeks=back)
         hi = lo + timedelta(days=6)
         return lo, hi, ("This week" if back == 0 else "Last week" if back == 1 else f"Week of {lo:%b} {lo.day}")
+    if kind == "30 days":  # rolling: the last 30 days up to today, then 30-day steps back
+        hi = today - timedelta(days=30 * back)
+        lo = hi - timedelta(days=29)
+        return lo, hi, ("Last 30 days" if back == 0 else f"{lo:%b} {lo.day} – {hi:%b} {hi.day}")
     if kind == "Month":
         y, m = today.year, today.month - back
         while m < 1:
@@ -6270,8 +6274,9 @@ def render_focus_periods(state: dict) -> None:
         rows = [{"When": date(lo.year, m, 1).strftime("%b"), "i": m,
                  "Hours": round(sum(v for d, v in g["day"].items() if d.month == m) / 60, 1)} for m in range(1, 13)]
     else:
-        label_of = (lambda d: f"{d:%a}") if kind == "Week" else (lambda d: str(d.day))  # noqa: E731
-        rows = [{"When": (f"{d:%a}" if kind == "Week" else str(d.day)), "i": i,
+        label_of = ((lambda d: f"{d:%a}") if kind == "Week" else (lambda d: f"{d.month}/{d.day}") if kind == "30 days"
+                    else (lambda d: str(d.day)))  # noqa: E731
+        rows = [{"When": label_of(d), "i": i,
                  "Hours": round(g["day"].get(d, 0) / 60, 2), "now": d == today}
                 for i, d in enumerate(lo + timedelta(days=k) for k in range((hi - lo).days + 1))]
     df = pd.DataFrame(rows)
@@ -6281,8 +6286,9 @@ def render_focus_periods(state: dict) -> None:
     # one selection drives both charts: tap bars here and "When in the day" narrows to them
     pick = alt.selection_point(name="pick", fields=["When"], toggle="true", empty=True)
     top_chart = alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=acc,
-                                       **({} if kind == "Month" else {"size": 26})).encode(
-        x=alt.X("When:N", sort=alt.SortField("i"), title=None, axis=alt.Axis(labelAngle=0)),
+                                       **({} if kind in ("Month", "30 days") else {"size": 26})).encode(
+        x=alt.X("When:N", sort=alt.SortField("i"), title=None,
+                axis=alt.Axis(labelAngle=-50 if kind == "30 days" else 0, labelFontSize=9 if kind == "30 days" else 11)),
         y=alt.Y("Hours:Q", title="Hours"), tooltip=["When", "Hours"],
         opacity=alt.condition(pick, alt.value(1), alt.value(.3))).add_params(pick).properties(height=190)
     try:
