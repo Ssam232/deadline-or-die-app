@@ -4011,6 +4011,18 @@ FLOW_AGAIN = 30         # …then every 30 min after a "keep going"
 FLOW_GRACE = 20         # no answer this long after a check-in → it stops and logs up to the check-in
 FLOW_CAP = 240          # hard ceiling for one flow session
 FLOW_REST_AT = 120      # past this it suggests a real break
+FLOW_EVERY_OPTS = [20, 30, 45, 60, 90, 120]  # you pick how often flow checks in (first one, then every so often)
+
+
+def _flow_every_pick(state: dict, key: str, where=None) -> int:
+    """Only shown once 🌊 Flow is picked: how often it checks you're still going. Remembers your last pick."""
+    cur = int(state["settings"].get("flow_every", FLOW_CHECK))
+    opts = sorted({*FLOW_EVERY_OPTS, cur})
+    v = (where or st).selectbox("🌊 Check in every", opts, index=opts.index(cur), key=key,
+                                format_func=lambda m: f"{m} min" if m < 60 else f"{m // 60} h" + (f" {m % 60} min" if m % 60 else ""))
+    if v != state["settings"].get("flow_every"):
+        state["settings"]["flow_every"] = int(v)
+    return int(v)
 
 
 def _timer_task(state: dict, name: str, planned: int, wall: int) -> dict:
@@ -4039,9 +4051,11 @@ def render_timer(state: dict) -> None:
                                    format_func=lambda m: "🌊 Flow (count up)" if m == FLOW_MODE else
                                    f"{m} min" if m else "Custom…")
             flow = planned == FLOW_MODE
+            every = FLOW_CHECK
             if flow:
                 planned = FLOW_CAP
-                st.caption(f"🌊 **Flow:** counts up, no breaks. At {FLOW_CHECK} min it checks you're still going (one tap); "
+                every = _flow_every_pick(state, "timer_every")
+                st.caption(f"🌊 **Flow:** counts up, no breaks. Every {every} min it checks you're still going (one tap); "
                            f"no answer in {FLOW_GRACE} min and it logs up to the check-in. Loot rolls every 25 min.")
             elif not planned:
                 planned = int(c2.number_input("Custom minutes", 5, 240, int(state["settings"].get("timer_custom", 40)),
@@ -4077,7 +4091,7 @@ def render_timer(state: dict) -> None:
                 state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned,
                                   "work": work, "brk": brk}
                 if flow:
-                    state["timer"].update(flow=True, check=FLOW_CHECK)
+                    state["timer"].update(flow=True, check=every, every=every)
                 _mark_started(next(x for x in state["tasks"] if x["id"] == tid))
                 save_state(state)
                 st.rerun()
@@ -4163,7 +4177,7 @@ def _timer_controls(state: dict) -> None:
                         f"<span>No answer by {int(chk + FLOW_GRACE)} min and it logs up to {int(chk)}.</span></div>",
                         unsafe_allow_html=True)
             if st.button("🌊 Yes, keep going", type="primary", use_container_width=True, key="tm_flow_ok"):
-                tm["check"] = int(eff) + FLOW_AGAIN
+                tm["check"] = int(eff) + int(tm.get("every") or FLOW_AGAIN)
                 save_state(state)
                 st.rerun(scope="app")
         elif eff >= FLOW_REST_AT:
@@ -5355,6 +5369,10 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 [class*="st-key-mrow_"] [data-testid="stColumn"]{min-width:0!important}
 [class*="st-key-mrow_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
 [class*="st-key-qrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
+[class*="st-key-bplays_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
+[class*="st-key-bplays_"] [data-testid="stColumn"]{min-width:0!important}
+[class*="st-key-bplays_"] [data-testid="stColumn"]:first-child p{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[class*="st-key-bplays_"] [data-testid="stColumn"]:last-child{flex:0 0 3rem!important;width:3rem!important}
 [class*="st-key-qrow_"] [data-testid="stColumn"]{min-width:0!important}
 [class*="st-key-qrow_"] [data-testid="stColumn"]:first-child p{margin:0;overflow:hidden;text-overflow:ellipsis}
 [class*="st-key-qrow_"] [data-testid="stColumn"]:last-child{flex:0 0 2.6rem!important;width:2.6rem!important}
@@ -6401,9 +6419,66 @@ def render_flow(state: dict, g: dict) -> None:
             t = next((x for x in state["tasks"] if x["id"] == sel[2:]), None)
             c1.markdown(f"**✏️ {html.escape(t['title']) if t else 'Block'}**")
             if t and t["status"] == "open":  # booked or deadline-only: the same block editor
+                render_block_play(state, t, kp="fbp")
                 render_block_editor(state, g, only=t["id"], kp="fbe")
             else:
                 render_task_quick_edit(state, g, sel[2:])
+
+
+def start_block(state: dict, t: dict, mins: int, every: int = FLOW_CHECK) -> None:
+    """▶ on a roadmap block: start the focus timer on it — 🌊 flow (FLOW_MODE) or a set length."""
+    if mins == FLOW_MODE:
+        _start_timer(state, t, FLOW_CAP)
+        state["timer"].update(flow=True, check=int(every), every=int(every), work=None, brk=None)
+        save_state(state)
+        flash(f"🌊 **{t['title']}** — flow timer counting up. Checks in every {every} min.", sound="win")
+    else:
+        _start_timer(state, t, mins)
+        flash(f"▶️ **{t['title']}** — {mins}-min focus timer running. Phone face-down.", sound="win")
+
+
+def render_block_play(state: dict, t: dict, kp: str = "bp") -> None:
+    """The ▶ on a block: asks flow (default) or a set timer, then starts it."""
+    if t["status"] != "open":
+        return
+    running = state.get("timer")
+    with st.popover("▶", help="Start the focus timer on this block", use_container_width=True):
+        if running:
+            cur = next((x["title"] for x in state["tasks"] if x["id"] == running.get("task_id")), "another task")
+            st.warning(f"⏱️ A timer is already running on **{cur}**. Stop it first.")
+            return
+        own = int((t.get("block") or {}).get("minutes") or t.get("minutes") or 0)
+        lens = [FLOW_MODE] + sorted({*TIMER_LENGTHS[:5], *([own] if 5 <= own <= 240 else [])})
+        m = st.radio("How long?", lens, key=f"{kp}_len_{t['id']}", horizontal=True,
+                     format_func=lambda x: "🌊 Flow" if x == FLOW_MODE else
+                     f"{x} min" + (" (block)" if x == own else ""))
+        every = FLOW_CHECK
+        if m == FLOW_MODE:
+            every = _flow_every_pick(state, f"{kp}_every_{t['id']}")
+            st.caption(f"🌊 Flow counts up with no breaks and checks you're still going every {every} min.")
+        else:
+            st.caption("A set timer with your usual break setting.")
+        if st.button("▶️ Start", type="primary", use_container_width=True, key=f"{kp}_go_{t['id']}"):
+            start_block(state, t, m, every)
+            st.rerun()
+
+
+def render_block_plays(state: dict, g: dict) -> None:
+    """A ▶ for every open block under the goal's flow chart."""
+    open_ = sorted((x for x in state["tasks"] if x.get("goal_id") == g["id"] and x["status"] == "open"),
+                   key=lambda x: (x.get("block") or {}).get("date") or x["deadline"][:10])
+    if not open_:
+        return
+    with st.container(key=f"bplays_{g['id']}"):
+        for t in open_:
+            c1, c2 = st.columns([7, 1], vertical_alignment="center")
+            b = t.get("block")
+            when = (f"{date.fromisoformat(b['date']):%a %b %d} · {b['start']} · {b['minutes']} min" if b
+                    else f"due {parse_dt(t['deadline']):%b %d}")
+            c1.markdown(f"{html.escape(t['title'])} <small style='color:var(--muted)'>· {when}</small>",
+                        unsafe_allow_html=True)
+            with c2:
+                render_block_play(state, t, kp=f"bp_{g['id']}")
 
 
 def render_goal_edit(state: dict, g: dict, k0: str = "ge") -> None:
@@ -6543,6 +6618,7 @@ with tab_goals:
             big = R.goal_bonus(g, state["tasks"])
             if R.stages(g) or any(t.get("block") for t in gtasks):
                 render_flow(state, g)
+                render_block_plays(state, g)
                 if st.toggle("↕ Drag to rearrange", key=f"rm_arr_{g['id']}",
                              help="Drag steps between stages, or up/down to change which comes first."):
                     render_roadmap_arrange(state, g)
