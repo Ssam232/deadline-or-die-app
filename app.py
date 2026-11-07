@@ -83,6 +83,7 @@ import journal as J
 import nudges as NU
 import prep as P
 import roadmap as R
+import notion_goals as NG
 import backups as BK
 import journal_notion as JN
 import quickparse as Q
@@ -7431,7 +7432,43 @@ with tab_set:
                 st.rerun()
 
 
+# 🎯 Goals mirrored into Notion (a page per goal: stages as headings, blocks as sub-headings), off the click path
+def goals_to_notion(state: dict) -> None:
+    cfg = notion_cfg()
+    if not cfg or state.get("settings", {}).get("goals_notion") is False:
+        return
+    import sys as _sys
+    box = _sys.__dict__.setdefault("_dod_goals_sync", {"busy": False, "known": None, "err": None})
+    if box["known"] is not None and box["known"] != state.get("notion_goals"):
+        state["notion_goals"] = box["known"]  # what the last background run built: keep it, so pages are reused
+        save_state(state)
+    if box["busy"]:
+        return
+    goals, tasks, today = [dict(g) for g in state.get("goals", [])], json.loads(json.dumps(state["tasks"])), now().date()
+    known = dict(state.get("notion_goals") or {})
+    want = NG.wanted(goals, tasks, TZ, today)
+    have = {k: (v or {}).get("sig") for k, v in known.items() if k != "_root"}
+    if want == have and known.get("_root"):
+        return
+    box["busy"] = True
+    token, parent = cfg
+
+    def run():
+        try:
+            box["known"] = NG.sync(Notion(token), parent, goals, tasks, known, TZ, today)
+            box["err"] = None
+        except Exception as e:  # noqa: BLE001 — a mirror never breaks the app
+            box["err"] = str(e)[:200]
+        finally:
+            box["busy"] = False
+    threading.Thread(target=run, daemon=True).start()
+
+
 # ── after the page is drawn ──
+try:
+    goals_to_notion(state)
+except Exception:  # noqa: BLE001
+    pass
 if _boot is not None and notion_cfg():  # how long this login took, by stage (read by the health check)
     _pl = state.setdefault("perf_log", [])
     _pl.append({"at": now().isoformat()[:16], "cold": bool(st.session_state.get("_cold")),
