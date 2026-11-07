@@ -333,6 +333,33 @@ def _board_range(token: str, db: str, start_iso: str, days: int) -> list[dict]:
     return B.pull_range(Notion(token), m, date.fromisoformat(start_iso), days, tz=TZ)
 
 
+@st.cache_resource
+def _zotero_seen() -> dict:
+    return {"v": None}  # process-wide, like the caches it guards (app.py's own globals reset on every rerun)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _zotero_version(user: str, key: str) -> str:
+    try:
+        return Z.library_version(user, key)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def zotero_fresh(zc: tuple | None) -> None:
+    """Drops the cached Zotero lists as soon as anything changes in Zotero (checked at most every 20 s), so papers
+    saved, moved or edited there show up right away instead of after the 10-minute cache."""
+    if not zc:
+        return
+    v, seen = _zotero_version(zc[0], zc[1]), _zotero_seen()
+    if v and v != seen["v"]:
+        if seen["v"] is not None:
+            _zotero_list.clear()
+            _zotero_reading.clear()
+            _zotero_inbox.clear()
+        seen["v"] = v
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _zotero_list(user: str, key: str, coll: str) -> list[dict]:
     return Z.to_read(user, key, coll)
@@ -4495,7 +4522,7 @@ def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
         flash(f"📄 Marked **{READING_LABELS[new].lower()}**. Its task is still open on your list.", "warning")
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _zotero_inbox(user: str, key: str, coll: str) -> tuple[str | None, list[dict]]:
     box = Z.inbox_folder(user, key, coll, create=True)
     return box, (Z.inbox_items(user, key, box) if box else [])
@@ -4586,6 +4613,7 @@ def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
 
 def render_reading_list(state: dict) -> None:
     zc = zotero_cfg(state)
+    zotero_fresh(zc)
     if not zc:
         st.caption("Add ZOTERO_USER_ID and ZOTERO_API_KEY in Settings to see your reading list here.")
         return

@@ -50,6 +50,12 @@ def _collections(user: str, key: str) -> list[dict]:
         start += 100
 
 
+def library_version(user: str, key: str) -> str:
+    """The library's version number: it goes up whenever anything in the library changes. One small request."""
+    r = requests.get(f"{API}/users/{user}/items/top", headers=_h(key), params={"limit": 1, "format": "keys"}, timeout=10)
+    return r.headers.get("Last-Modified-Version", "") if r.status_code == 200 else ""
+
+
 def find_collection(user: str, key: str, name: str) -> str | None:
     for c in _collections(user, key):
         if c["data"]["name"].strip().lower() == name.strip().lower():
