@@ -122,17 +122,10 @@ def reading_list(user: str, key: str, collection: str = "To Read") -> list[dict]
 
 
 def rank_papers(papers: list[dict]) -> None:
-    """Absolute rank (1 = read next) for papers still ahead; read and dropped papers get None. No AI, recomputed on
-    every load, so it moves as you read: what you're reading now comes first, levels keep foundational → niche, and
-    inside a level a paper whose questions you've read least about moves up (ties keep the A01-style read order)."""
-    done = {}
-    for p in papers:
-        if p["status"] == READ_TAG:
-            for q in p["facets"]["question"]:
-                done[q] = done.get(q, 0) + 1
-    ahead = [p for p in papers if p["status"] in ("unread", READING_TAG)]
-    ahead.sort(key=lambda p: (p["status"] != READING_TAG, p["order"][:1] or "~",
-                              min((done.get(q, 0) for q in p["facets"]["question"]), default=9999), p["order"] or "~"))
+    """Absolute rank (1 = read next) for papers still ahead; read and dropped papers get None. Just a running count
+    through the read order (A01, A02 ... D02), with whatever you're reading now first, so it shrinks as you read."""
+    ahead = sorted((p for p in papers if p["status"] in ("unread", READING_TAG)),
+                   key=lambda p: (p["status"] != READING_TAG, p["order"] or "~"))
     for p in papers:
         p["rank"] = None
     for n, p in enumerate(ahead, 1):
