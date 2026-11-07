@@ -179,7 +179,11 @@ def _q(s: str) -> str:
 def _fmt_block(t: dict, tz) -> str:
     at = block_at(t, tz)
     if at:
-        return f"{at:%a %b} {at.day} · {at:%I:%M %p}".replace(" 0", " ") + f" · {t['block']['minutes']}m"
+        out = f"{at:%a %b} {at.day} · {at:%I:%M %p}".replace(" 0", " ") + f" · {t['block']['minutes']}m"
+        if t.get("own_deadline"):
+            dl = datetime.fromisoformat(t["own_deadline"])
+            out += f" · due {dl:%a %b} {dl.day}"
+        return out
     dl = datetime.fromisoformat(t["deadline"])
     return f"due {dl:%a %b} {dl.day}"
 

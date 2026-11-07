@@ -5972,6 +5972,53 @@ def render_new_goal(state: dict) -> None:
         st.rerun()
 
 
+def render_goal_task_form(state: dict, g: dict) -> None:
+    """📌 A deliverable for this goal with its own deadline (required). Optionally book time for it too: it then
+    sits on the calendar like a block, but only dies at its deadline, not at the end of the booked day."""
+    gid, opts = g["id"], _stage_opts(g)
+    target = date.fromisoformat(g["target"]) if g.get("target") else None
+    what = st.text_input("What", placeholder="A deliverable, e.g. Submit ethics amendment · Send draft to Walter",
+                         key=f"gt_what_{gid}")
+    under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"gt_under_{gid}")
+    c1, c2, c3 = st.columns(3)
+    due_d = c1.date_input("Deadline (required)", value=None, min_value=now().date(), key=f"gt_due_{gid}",
+                          help="Like every block, it needs a date it's due by.")
+    due_t = c2.time_input("Due at", value=dtime(23, 59), step=900, key=f"gt_due_t_{gid}")
+    mins = c3.selectbox("Est. length", BLOCK_LENGTHS, index=3, format_func=min_label, key=f"gt_len_{gid}")
+    cat = st.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"gt_cat_{gid}")
+    book = st.toggle("🗓️ Also book time for it", key=f"gt_book_{gid}",
+                     help="Puts it on a day and time like a block (calendar, phone heads-up, that day's mission). "
+                          "Miss the slot and it isn't dead: it's due at its deadline.")
+    if book:
+        b1, b2 = st.columns(2)
+        bday = b1.date_input("Work on it", value=now().date(), min_value=now().date(), key=f"gt_bday_{gid}")
+        bstart = b2.time_input("Start", value=dtime(9, 0), step=900, key=f"gt_bstart_{gid}")
+    if target and due_d and due_d > target:
+        st.caption(f"⚠️ That's after the goal's target ({target:%a %b} {target.day}).")
+    if st.button("📌 Add it", type="primary", key=f"gt_go_{gid}"):
+        if not (what or "").strip():
+            st.error("Name it first.")
+        elif not due_d:
+            st.error("Set a deadline: every task on a roadmap needs one.")
+        elif book and bday > due_d:
+            st.error("The booked day is after the deadline: move one of them.")
+        else:
+            due = datetime.combine(due_d, due_t, TZ)
+            t = make_task(what.strip(), f"🗺️ {g['title']}", due, None, "", gid,
+                          category=None if cat == "auto" else cat, minutes=int(mins))
+            t["node"] = under or None
+            if book:
+                t.update(R.block_fields(bday, bstart.strftime("%H:%M"), int(mins), TZ))
+                t["deadline"], t["own_deadline"] = due.isoformat(), due.isoformat()
+            state["tasks"].append(t)
+            save_state(state)
+            flash(f"📌 **{t['title']}** added · due {_when(due)}"
+                  + (f" · booked {_when(R.block_at(t, TZ))}" if book else "") + ".")
+            for k_ in (f"gt_what_{gid}", f"gt_due_{gid}"):
+                st.session_state.pop(k_, None)
+            st.rerun()
+
+
 def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str = "be") -> None:
     """Move, resize, rename or drop a booked block. The Notion calendar card follows.
     only=<task id>: edit that block straight away (tapped on the flow chart)."""
@@ -6005,6 +6052,8 @@ def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str =
         t["title"] = title.strip()
         t["node"] = under or None
         t.update(R.block_fields(day, start.strftime("%H:%M"), int(mins), TZ))
+        if t.get("own_deadline") and parse_dt(t["own_deadline"]) > parse_dt(t["deadline"]):
+            t["deadline"] = t["own_deadline"]  # a task with its own deadline stays due then, not at the booked day's end
         if int(mins) != int(t.get("minutes") or 0):
             v = V.value(t["category"], int(mins))
             t.update(minutes=int(mins), reward=v["reward"], penalty=v["penalty"], xp=v["xp"],
@@ -6259,10 +6308,12 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
     """Stages (nestable) + scheduled work blocks for one goal."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t0, t1, t4, t2, t3 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "✏️ Edit blocks", "🧩 Add a stage",
-                                  "🧩 Edit stages"])
+    t0, t1, t5, t4, t2, t3 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "📌 Add a task", "✏️ Edit blocks",
+                                      "🧩 Add a stage", "🧩 Edit stages"])
     with t0:
         render_roadmap_draft(state, g)
+    with t5:
+        render_goal_task_form(state, g)
     with t4:
         render_block_editor(state, g)
     with t1:
