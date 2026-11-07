@@ -599,8 +599,8 @@ class Library:
                 return topics_from_note(text)
         return []
 
-    def add_topics(self, project: str, new: list[str]) -> str | None:
-        """Adds topics to the search-topics note (made if missing). Returns an error message or None."""
+    def add_topics(self, project: str, new: list[str]) -> tuple[list[str], str | None]:
+        """Adds topics to the search-topics note (made if missing). Returns (all topics, error message or None)."""
         note = next((it for it in self._pages(f"/collections/{project}/items", itemType="note")
                      if TOPICS_MARK.lower() in (it["data"].get("note") or "").lower()), None)
         have = topics_from_note(note["data"]["note"]) if note else []
@@ -609,11 +609,11 @@ class Library:
         if note:
             r = requests.patch(f"{self.base}/items/{note['key']}", json={"note": body}, timeout=30,
                                headers={**self.h, "If-Unmodified-Since-Version": str(note["version"])})
-            return None if r.status_code in (200, 204) else f"{r.status_code} {r.text[:100]}"
+            return topics, None if r.status_code in (200, 204) else f"{r.status_code} {r.text[:100]}"
         r = requests.post(f"{self.base}/items", json=[{"itemType": "note", "note": body, "collections": [project],
                                                         "tags": [], "relations": {}}],
                           headers={**self.h, "Zotero-Write-Token": uuid.uuid4().hex}, timeout=30)
-        return None if r.status_code == 200 and r.json().get("successful") else f"{r.status_code} {r.text[:100]}"
+        return topics, None if r.status_code == 200 and r.json().get("successful") else f"{r.status_code} {r.text[:100]}"
 
     def sweep_manual(self, project: str, to_read: str, file_inbox: bool = True) -> tuple[int, int, list[str]]:
         """Papers you add yourself. Anything in the Inbox folder (under the project, made if missing) moves to To Read,
@@ -824,15 +824,19 @@ def run() -> int:
         failed_any = True
         print("Could not update every rank:\n  " + "\n  ".join(errors))
     print(f"Updated the order or rank on {len(changes) - len(errors)} paper(s). {len(unranked)} paper(s) to read have no order.")
-    add = ROOT / "add-topics.json"
+    add, topics = ROOT / "add-topics.json", None
     if add.exists():
-        if err := lib.add_topics(project, json.loads(add.read_text()).get("topics", [])):
+        topics, err = lib.add_topics(project, json.loads(add.read_text()).get("topics", []))
+        if err:
+            topics = None
             failed_any = True
             print(f"Could not add the search topics: {err}")
         else:
             (ROOT / "done").mkdir(exist_ok=True)
             add.rename(ROOT / "done" / f"add-topics-{datetime.now(timezone.utc):%Y-%m-%d}.json")
-    (ROOT / TOPICS_FILE).write_text(json.dumps(lib.search_topics(project), indent=1, ensure_ascii=False) + "\n")
+    topics = topics if topics is not None else lib.search_topics(project)  # just saved: Zotero can list it a moment late
+    print(f"{len(topics)} extra search topic(s).")
+    (ROOT / TOPICS_FILE).write_text(json.dumps(topics, indent=1, ensure_ascii=False) + "\n")
     (ROOT / UNRANKED_FILE).write_text(json.dumps(unranked, indent=1, ensure_ascii=False) + "\n")
     current = [{"code": r["code"], "doi": r["doi"], "title": r["title"]} for r in lib.ordered()]
     (ROOT / ORDER_FILE).write_text(json.dumps(current, indent=1, ensure_ascii=False) + "\n")
