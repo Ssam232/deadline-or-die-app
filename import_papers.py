@@ -31,7 +31,7 @@ Rules:
   - placements/*.json place papers that are already in Zotero, such as ones added by hand. Each entry names the
     item's Zotero key, its title, an optional level and "before" title (placed like a new import, only if it has
     no order yet), and optional question "tags" (added; existing tags stay). The file then moves to done/.
-  - search-topics.json lists the extra topics you add in Deadline or Die (kept in a Zotero note), for the Sunday search.
+  - search-topics.json lists the extra topics you add in Deadline or Die (kept as subfolders of "Search topics" in Zotero), for the Sunday search.
   - Every run (Sunday afternoon before the weekly search, and after every push) also keeps the order tidy: each level is renumbered 1, 2, 3...
     without gaps or repeats, and every paper still to read in "To Read" gets an absolute
     "Reading rank: N" line. Papers marked reading come first, then the rest in read order, then any
@@ -87,7 +87,7 @@ RANK_LINE = re.compile(r"^Reading rank:.*$", re.I)
 LEFTOVER = re.compile(r"^\s*\((Foundational|Core|Specialized|Niche)\)\s*$", re.I)  # left by an older order editor
 UNRANKED_FILE = "unranked.json"
 TOPICS_FILE = "search-topics.json"
-TOPICS_MARK = "Deadline or Die search topics"  # first line of the Zotero note that Deadline or Die keeps them in
+TOPICS_FOLDER = "Search topics"  # under the project; each subfolder's name is one topic. Deadline or Die manages them.
 INBOX = "Inbox"
 MANUAL_TAG = "manual entry"
 STATUS_TAGS = ("read", "reading", "dropped")
@@ -237,13 +237,6 @@ def fact_tags(paper: dict, date: str | None) -> list[dict]:
         if value in allowed:
             names.append(f"{facet}:{value}")
     return [{"tag": n} for n in names]
-
-
-def topics_from_note(note_html: str) -> list[str]:
-    """The topics in the search-topics note: one per paragraph or list item, after the heading line."""
-    parts = re.findall(r"<(?:p|li|h\d)[^>]*>(.*?)</(?:p|li|h\d)>", note_html or "", re.S | re.I) or (note_html or "").splitlines()
-    lines = [html.unescape(re.sub(r"<[^>]+>", "", x)).strip() for x in parts]
-    return [x for x in lines if x and x != TOPICS_MARK]
 
 
 def with_order(extra: str | None, code: str) -> str:
@@ -591,29 +584,37 @@ class Library:
                 errors.append(f"{k}: {r.status_code} {r.text[:100]}")
         return errors
 
+    def _topics_folder(self, project: str, create: bool) -> tuple[str | None, list[dict]]:
+        """The "Search topics" folder under the project, and its subfolders (one per topic)."""
+        cols = list(self._pages("/collections"))
+        folder = next((c["key"] for c in cols if c["data"].get("parentCollection") == project
+                       and c["data"]["name"].strip().lower() == TOPICS_FOLDER.lower()), None)
+        if not folder and create:
+            r = requests.post(f"{self.base}/collections", json=[{"name": TOPICS_FOLDER, "parentCollection": project}],
+                              headers={**self.h, "Zotero-Write-Token": uuid.uuid4().hex}, timeout=30)
+            made = r.json().get("successful", {}) if r.status_code == 200 else {}
+            folder = made.get("0", {}).get("key")
+        kids = [c for c in cols if folder and c["data"].get("parentCollection") == folder]
+        return folder, kids
+
     def search_topics(self, project: str) -> list[str]:
-        """Extra topics for the Sunday search, from the note Deadline or Die keeps in the project folder."""
-        for it in self._pages(f"/collections/{project}/items", itemType="note"):
-            text = it["data"].get("note") or ""
-            if TOPICS_MARK.lower() in text.lower():
-                return topics_from_note(text)
-        return []
+        """Extra topics for the Sunday search: the subfolders of "Search topics", which Deadline or Die manages."""
+        _, kids = self._topics_folder(project, create=False)
+        return sorted((c["data"]["name"].strip() for c in kids), key=str.casefold)
 
     def add_topics(self, project: str, new: list[str]) -> tuple[list[str], str | None]:
-        """Adds topics to the search-topics note (made if missing). Returns (all topics, error message or None)."""
-        note = next((it for it in self._pages(f"/collections/{project}/items", itemType="note")
-                     if TOPICS_MARK.lower() in (it["data"].get("note") or "").lower()), None)
-        have = topics_from_note(note["data"]["note"]) if note else []
-        topics = have + [t for t in new if t.casefold() not in {h.casefold() for h in have}]
-        body = "".join(f"<p>{html.escape(t)}</p>" for t in [TOPICS_MARK, *topics])
-        if note:
-            r = requests.patch(f"{self.base}/items/{note['key']}", json={"note": body}, timeout=30,
-                               headers={**self.h, "If-Unmodified-Since-Version": str(note["version"])})
-            return topics, None if r.status_code in (200, 204) else f"{r.status_code} {r.text[:100]}"
-        r = requests.post(f"{self.base}/items", json=[{"itemType": "note", "note": body, "collections": [project],
-                                                        "tags": [], "relations": {}}],
-                          headers={**self.h, "Zotero-Write-Token": uuid.uuid4().hex}, timeout=30)
-        return topics, None if r.status_code == 200 and r.json().get("successful") else f"{r.status_code} {r.text[:100]}"
+        """Adds topics as subfolders of "Search topics" (made if missing). Returns (all topics, error or None)."""
+        folder, kids = self._topics_folder(project, create=True)
+        if not folder:
+            return [], f'could not create "{TOPICS_FOLDER}"'
+        have = [c["data"]["name"].strip() for c in kids]
+        add = [t.strip() for t in new if t.strip() and t.strip().casefold() not in {h.casefold() for h in have}]
+        if add:
+            r = requests.post(f"{self.base}/collections", json=[{"name": t, "parentCollection": folder} for t in add],
+                              headers={**self.h, "Zotero-Write-Token": uuid.uuid4().hex}, timeout=30)
+            if r.status_code != 200 or r.json().get("failed"):
+                return have, f"{r.status_code} {r.text[:100]}"
+        return sorted(have + add, key=str.casefold), None
 
     def sweep_manual(self, project: str, to_read: str, file_inbox: bool = True) -> tuple[int, int, list[str]]:
         """Papers you add yourself. Anything in the Inbox folder (under the project, made if missing) moves to To Read,

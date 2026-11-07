@@ -100,11 +100,13 @@ class H(BaseHTTPRequestHandler):
             return self.send(412, {})
         if self.path.endswith("/collections"):
             fake.tokens.add(token)
-            key = f"COLL{len(fake.collections)}"
-            row = {"key": key, "version": 1, "data": {"name": body[0]["name"],
-                                                      "parentCollection": body[0].get("parentCollection", False)}}
-            fake.collections.append(row)
-            return self.send(200, {"successful": {"0": row}, "failed": {}})
+            made = {}
+            for i, b in enumerate(body):
+                row = {"key": f"COLL{len(fake.collections)}", "version": 1,
+                       "data": {"name": b["name"], "parentCollection": b.get("parentCollection", False)}}
+                fake.collections.append(row)
+                made[str(i)] = row
+            return self.send(200, {"successful": made, "failed": {}})
         ok, bad = {}, {}
         for n, it in enumerate(body):
             if it["title"] in fake.reject_titles:
@@ -688,20 +690,17 @@ class Tests(unittest.TestCase):
         self.assertFalse((self.root / "to-inbox.json").exists())
         self.assertEqual([u["key"] for u in json.loads((self.root / "unranked.json").read_text())], [])
 
-    def test_search_topics_come_from_the_note(self):
-        self.assertEqual(self.m.topics_from_note("<p>Deadline or Die search topics</p><p>Diaphragm anatomy &amp; remodelling</p><p> </p>"),
-                         ["Diaphragm anatomy & remodelling"])
+    def test_search_topics_are_the_subfolders_of_search_topics(self):
         self.assertEqual(self.m.run(), 0)
         self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), [])
-        proj = next(c["key"] for c in fake.collections if c["data"]["name"] == "LCR HCR CVxR")
-        fake.items.append({"key": "NOTE", "version": 1, "data": {"itemType": "note", "collections": [proj], "tags": [],
-                           "note": "<p>Deadline or Die search topics</p><p>Diaphragm anatomy and remodelling</p>"}})
+        (self.root / "add-topics.json").write_text(json.dumps({"topics": ["Diaphragm anatomy and remodelling"]}))
         self.assertEqual(self.m.run(), 0)
         self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), ["Diaphragm anatomy and remodelling"])
-        (self.root / "add-topics.json").write_text(json.dumps({"topics": ["diaphragm anatomy and remodelling", "New one"]}))
-        self.assertEqual(self.m.run(), 0)
-        self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), ["Diaphragm anatomy and remodelling", "New one"])
         self.assertFalse((self.root / "add-topics.json").exists())
+        (self.root / "add-topics.json").write_text(json.dumps({"topics": ["diaphragm anatomy and remodelling", "Another"]}))
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), ["Another", "Diaphragm anatomy and remodelling"])
+        self.assertEqual(sum(c["data"]["name"] == "Diaphragm anatomy and remodelling" for c in fake.collections), 1)
 
     def test_every_question_code_has_a_short_numbered_tag(self):
         self.assertEqual(set(self.m.QUESTIONS), set(self.m.SUBJECTS))

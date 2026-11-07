@@ -2,7 +2,7 @@ name: Import papers to Zotero
 on:
   push:
     branches: [paper-queue]
-    paths: ["queue/**", "placements/**", "import_papers.py", "reading-order.json", "paper-facts.json", "paper-questions.json", "to-inbox.json", "add-topics.json", "debug_topics.py"]
+    paths: ["queue/**", "placements/**", "import_papers.py", "reading-order.json", "paper-facts.json", "paper-questions.json", "to-inbox.json", "add-topics.json"]
   schedule:
     - cron: "43 23 * * 0"  # Sundays 4:43 PM in Calgary, two hours before the weekly search: file the Inbox, tag manual entries, renumber, list papers to place
   workflow_dispatch:
@@ -22,11 +22,6 @@ jobs:
           python-version: "3.12"
       - run: pip install --quiet requests
       - run: python import_papers.py
-        env:
-          ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
-          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
-      - run: python debug_topics.py
-        if: hashFiles('debug_topics.py') != ''
         env:
           ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
           ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
