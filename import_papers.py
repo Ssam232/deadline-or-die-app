@@ -25,6 +25,16 @@ Rules:
     "year:2016", "species:rat", "sex:male" and "type:study". A paper's "tags" set its questions and subjects. The year comes from the paper's metadata; a detail not stated in the queue is left off.
   - At most MAX_NEW_PER_RUN papers are added per run. Any extras stay in the queue for the next run.
   - A queue file moves to done/ only once every paper in it has been handled.
+  - Papers you add yourself: anything in the "Inbox" folder under LCR HCR CVxR moves to To Read, and every paper
+    in the project's folders that the search didn't add (no "paper-scout" tag) is tagged "manual entry".
+  - placements/*.json place papers that are already in Zotero, such as ones added by hand. Each entry names the
+    item's Zotero key, its title, an optional level and "before" title (placed like a new import, only if it has
+    no order yet), and optional question "tags" (added; existing tags stay). The file then moves to done/.
+  - Every run (Sunday afternoon before the weekly search, and after every push) also keeps the order tidy: each level is renumbered 1, 2, 3...
+    without gaps or repeats, and every paper still to read in "To Read" gets an absolute
+    "Reading rank: N" line. Papers marked reading come first, then the rest in read order, then any
+    without an order, oldest first. Read and dropped papers lose their rank. unranked.json lists the
+    papers to read that still have no read order or no question tag, for the Sunday search to place by title.
 """
 from __future__ import annotations
 
@@ -68,8 +78,14 @@ ORDER_MARKER = "reading-order.done"
 LEVELS = {"foundational": ("A", "Foundational"), "core": ("B", "Core"),
           "specialized": ("C", "Specialized"), "niche": ("D", "Niche")}
 LETTER_NAMES = {letter: name for letter, name in LEVELS.values()}
-MAX_NEW_PER_RUN = 2
+MAX_NEW_PER_RUN = 5
 ORDER_LINE = re.compile(r"^Read order:\s*([A-D])(\d+).*$", re.M | re.I)
+RANK_LINE = re.compile(r"^Reading rank:.*$", re.I)
+LEFTOVER = re.compile(r"^\s*\((Foundational|Core|Specialized|Niche)\)\s*$", re.I)  # left by an older order editor
+UNRANKED_FILE = "unranked.json"
+INBOX = "Inbox"
+MANUAL_TAG = "manual entry"
+STATUS_TAGS = ("read", "reading", "dropped")
 MATCH = 0.72
 BATCH = 50
 
@@ -221,9 +237,58 @@ def fact_tags(paper: dict, date: str | None) -> list[dict]:
 def with_order(extra: str | None, code: str) -> str:
     """Sets the read-order line in an Extra field and leaves any other lines alone."""
     line = f"Read order: {code} ({LETTER_NAMES[code[0]]})"
-    rest = [ln for ln in (extra or "").splitlines() if ln.strip() and not ORDER_LINE.match(ln)]
+    rest = [ln for ln in (extra or "").splitlines() if ln.strip() and not ORDER_LINE.match(ln) and not LEFTOVER.match(ln)]
     return "\n".join([line, *rest])
 
+
+def with_rank(extra: str | None, rank: int | None) -> str:
+    """Sets (or, for None, removes) the "Reading rank: N" line, just under the read-order line."""
+    lines = [ln for ln in (extra or "").splitlines() if ln.strip() and not RANK_LINE.match(ln)]
+    if rank:
+        lines.insert(1 if lines and ORDER_LINE.match(lines[0]) else 0, f"Reading rank: {rank}")
+    return "\n".join(lines)
+
+
+def status_of(tags: list[dict]) -> str:
+    names = {t.get("tag") for t in tags or []}
+    return next((s for s in STATUS_TAGS if s in names), "unread")
+
+
+def tidy(items: list[dict], to_read: str) -> tuple[dict[str, str], list[dict]]:
+    """Works out what every item's Extra should say. Returns {item key: new Extra} for the items that change,
+    and the papers still to read that have no read order or no question tag (with their order, if any).
+
+    Each level is renumbered without gaps or repeats, keeping its order (ties go to the paper added first).
+    Ranks cover the papers in To Read marked unread or reading: reading first, then by read order, then the
+    ones with no order, oldest first.
+    """
+    codes, groups = {}, {}
+    for it in items:
+        m = ORDER_LINE.search(it["data"].get("extra") or "")
+        if m:
+            groups.setdefault(m[1].upper(), []).append((int(m[2]), it["data"].get("dateAdded") or "", it["key"]))
+    for letter, group in groups.items():
+        for n, (_, _, key) in enumerate(sorted(group), 1):
+            codes[key] = f"{letter}{n:02d}"
+    ahead = [it for it in items if to_read in it["data"].get("collections", [])
+             and status_of(it["data"].get("tags")) in ("unread", "reading")]
+    ahead.sort(key=lambda it: (status_of(it["data"].get("tags")) != "reading", codes.get(it["key"], "~"),
+                               it["data"].get("dateAdded") or ""))
+    ranks = {it["key"]: n for n, it in enumerate(ahead, 1)}
+    changes = {}
+    for it in items:
+        old = it["data"].get("extra") or ""
+        new = with_order(old, codes[it["key"]]) if it["key"] in codes else old
+        new = with_rank(new, ranks.get(it["key"]))
+        if new != old:
+            changes[it["key"]] = new
+    def no_question(it):  # only papers you added by hand: the search always tags its own
+        tags = {t.get("tag", "") for t in it["data"].get("tags", [])}
+        return MANUAL_TAG in tags and not any(t.startswith("question:") for t in tags)
+    unranked = [{"key": it["key"], "title": it["data"].get("title", ""), "added": (it["data"].get("dateAdded") or "")[:10],
+                 "order": codes.get(it["key"], ""), "questions": not no_question(it)}
+                for it in ahead if it["key"] not in codes or no_question(it)]
+    return changes, unranked
 
 def place(rows: list[dict], new: list[tuple[dict, dict]]) -> list[tuple[dict, str]]:
     """Fits new papers into the read order and numbers each level 1, 2, 3...
@@ -448,6 +513,85 @@ class Library:
         rows.sort(key=lambda r: (r["code"][0], r["num"]))
         return rows
 
+    def papers(self) -> list[dict]:
+        """Every top-level item that is a paper, not a note or attachment."""
+        return [it for it in self._pages("/items/top") if it["data"].get("itemType") not in ("note", "attachment", "annotation")]
+
+    def patch_extra(self, item: dict, extra: str) -> str | None:
+        r = requests.patch(f"{self.base}/items/{item['key']}", json={"extra": extra},
+                           headers={**self.h, "If-Unmodified-Since-Version": str(item["version"])}, timeout=30)
+        return None if r.status_code in (200, 204) else f'{item["data"].get("title", "?")[:60]}: {r.status_code} {r.text[:100]}'
+
+    def place_existing(self, papers: list[dict]) -> tuple[int, list[str]]:
+        """Gives a read order and question tags to papers already in Zotero, named by key, such as ones you added
+        by hand. A paper that already has an order keeps it and only gets the tags. Existing tags all stay."""
+        by_key = {it["key"]: it for it in self.papers()}
+        pairs, targets, errors = [], [], []
+        for p in papers:
+            it = by_key.get(p.get("key", ""))
+            if not it or not same_title(it["data"].get("title"), p.get("title")):
+                errors.append(f'no item {p.get("key")} titled "{(p.get("title") or "")[:60]}"')
+                continue
+            entry = {"extra": it["data"].get("extra")}
+            if p.get("level") and not ORDER_LINE.search(it["data"].get("extra") or ""):
+                pairs.append((p, entry))
+            targets.append((it, entry, p))
+        changes = place(self.ordered(), pairs)
+        for it, entry, p in targets:
+            d = it["data"]
+            have = {t.get("tag") for t in d.get("tags", [])}
+            extra_tags = [t for t in fact_tags(p, d.get("date")) if t["tag"] not in have]
+            body = {**({"extra": entry["extra"]} if entry["extra"] != d.get("extra") else {}),
+                    **({"tags": d.get("tags", []) + extra_tags} if extra_tags else {})}
+            if not body:
+                continue
+            r = requests.patch(f"{self.base}/items/{it['key']}", json=body,
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code not in (200, 204):
+                errors.append(f'{d.get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        if not errors:
+            errors += self.write_codes(changes)
+        return len(targets), errors
+
+    def sweep_manual(self, project: str, to_read: str) -> tuple[int, int, list[str]]:
+        """Papers you add yourself. Anything in the Inbox folder (under the project, made if missing) moves to To Read,
+        and every paper in the project's folders that the search didn't add gets the tag "manual entry".
+        Returns (moved out of the Inbox, newly tagged, errors)."""
+        cols = list(self._pages("/collections"))
+        inbox = next((c["key"] for c in cols if c["data"].get("parentCollection") == project
+                      and c["data"]["name"].strip().lower() == INBOX.lower()), None)
+        if not inbox:
+            r = requests.post(f"{self.base}/collections", json=[{"name": INBOX, "parentCollection": project}],
+                              headers={**self.h, "Zotero-Write-Token": uuid.uuid4().hex}, timeout=30)
+            made = r.json().get("successful", {}) if r.status_code == 200 else {}
+            if "0" not in made:
+                return 0, 0, [f'could not create "{INBOX}" ({r.status_code}): {r.text[:120]}']
+            inbox = made["0"]["key"]
+        mine = {project, inbox} | {c["key"] for c in cols if c["data"].get("parentCollection") == project}
+        moved = tagged = 0
+        errors = []
+        for it in self.papers():
+            d = it["data"]
+            colls = d.get("collections", [])
+            if not mine & set(colls):
+                continue
+            names = {t.get("tag") for t in d.get("tags", [])}
+            body = {}
+            if inbox in colls:
+                body["collections"] = list(dict.fromkeys([c for c in colls if c != inbox] + [to_read, project]))
+            if "paper-scout" not in names and MANUAL_TAG not in names:
+                body["tags"] = d.get("tags", []) + [{"tag": MANUAL_TAG}]
+            if not body:
+                continue
+            r = requests.patch(f"{self.base}/items/{it['key']}", json=body,
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code in (200, 204):
+                moved += "collections" in body
+                tagged += "tags" in body
+            else:
+                errors.append(f'{d.get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        return moved, tagged, errors
+
     def write_codes(self, changes: list[tuple[dict, str]]) -> list[str]:
         errors = []
         for row, code in changes:
@@ -487,10 +631,6 @@ def run() -> int:
     facts_due = facts_file.exists() and not facts_marker.exists()
     questions_file, questions_marker = ROOT / QUESTIONS_FILE, ROOT / QUESTIONS_MARKER
     questions_due = questions_file.exists() and not questions_marker.exists()
-    if (not pending and marker.exists() and not order_due and folders_marker.exists() and not facts_due
-            and not questions_due):
-        print("Queue is empty.")
-        return 0
     lib = Library(user, key)
     lib.check_write()
     to_read = lib.collection(os.getenv("ZOTERO_COLLECTION") or "To Read")
@@ -537,6 +677,12 @@ def run() -> int:
         else:
             order_marker.write_text(f"Set the read order on {written} papers.\n")
             print(f"Set the read order on {written} papers.")
+    moved, tagged, errors = lib.sweep_manual(project, to_read)
+    if errors:
+        failed_any = True
+        print("Could not file every paper you added:\n  " + "\n  ".join(errors))
+    if moved or tagged:
+        print(f"Moved {moved} paper(s) out of the Inbox and tagged {tagged} as manual entries.")
     dois, titles = lib.known()
     log = []
     room = MAX_NEW_PER_RUN
@@ -582,9 +728,26 @@ def run() -> int:
             print(f"Run limit reached: {len(papers) - taken} paper(s) stay in {path.name} for the next run.")
         else:
             path.rename(ROOT / "done" / path.name)
-    if log:
-        current = [{"code": r["code"], "doi": r["doi"], "title": r["title"]} for r in lib.ordered()]
-        (ROOT / ORDER_FILE).write_text(json.dumps(current, indent=1, ensure_ascii=False) + "\n")
+    for path in sorted((ROOT / "placements").glob("*.json")):
+        wanted = json.loads(path.read_text()).get("papers", [])
+        placed, errors = lib.place_existing(wanted)
+        if errors:
+            failed_any = True
+            print(f"{path.name} kept, as some papers could not be placed:\n  " + "\n  ".join(errors))
+            continue
+        path.rename(ROOT / "done" / f"placed-{path.name}")
+        print(f"Placed {placed} paper(s) from {path.name} in the read order.")
+    items = lib.papers()
+    changes, unranked = tidy(items, to_read)
+    by_key = {it["key"]: it for it in items}
+    errors = [e for k, extra in changes.items() if (e := lib.patch_extra(by_key[k], extra))]
+    if errors:
+        failed_any = True
+        print("Could not update every rank:\n  " + "\n  ".join(errors))
+    print(f"Updated the order or rank on {len(changes) - len(errors)} paper(s). {len(unranked)} paper(s) to read have no order.")
+    (ROOT / UNRANKED_FILE).write_text(json.dumps(unranked, indent=1, ensure_ascii=False) + "\n")
+    current = [{"code": r["code"], "doi": r["doi"], "title": r["title"]} for r in lib.ordered()]
+    (ROOT / ORDER_FILE).write_text(json.dumps(current, indent=1, ensure_ascii=False) + "\n")
     if log:
         with (ROOT / "imported.jsonl").open("a") as f:
             f.writelines(json.dumps(row) + "\n" for row in log)

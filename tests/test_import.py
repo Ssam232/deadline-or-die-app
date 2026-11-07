@@ -158,7 +158,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(d["DOI"], "10.1/good")
         self.assertEqual(d["date"], "2020-03")
         self.assertEqual(d["collections"], ["COLL0", "COLL1"])
-        self.assertEqual([c["data"]["name"] for c in fake.collections], ["To Read", "LCR HCR CVxR", "Read", "Dropped"])
+        self.assertEqual([c["data"]["name"] for c in fake.collections], ["To Read", "LCR HCR CVxR", "Read", "Dropped", "Inbox"])
         self.assertIn({"tag": "subject:q1"}, d["tags"])
         self.assertIn({"tag": "year:2020"}, d["tags"])
         self.assertFalse(list((self.root / "queue").glob("*.json")))
@@ -598,9 +598,42 @@ class Tests(unittest.TestCase):
         self.assertEqual(tags, {"question:Q3 How does diet change muscle?", "question:Q7 How are muscle strips tested?",
                                 "subject:Diet and muscle", "subject:Muscle strip testing", "species:mouse", "year:2016",
                                 "paper-scout", "read", "my-own"})
-        fake.items[0]["data"]["tags"] = [{"tag": "question:Q1 What are HCR/LCR rats?"}]  # a later hand edit stays
+        fake.items[0]["data"]["tags"] = [{"tag": "paper-scout"}, {"tag": "question:Q1 What are HCR/LCR rats?"}]  # a later hand edit stays
         self.assertEqual(self.m.run(), 0)
-        self.assertEqual(fake.items[0]["data"]["tags"], [{"tag": "question:Q1 What are HCR/LCR rats?"}])
+        self.assertEqual(fake.items[0]["data"]["tags"], [{"tag": "paper-scout"}, {"tag": "question:Q1 What are HCR/LCR rats?"}])
+
+    def test_inbox_papers_move_to_to_read_and_hand_added_papers_get_tagged_then_placed(self):
+        self.assertEqual(self.m.run(), 0)  # sets up the folders, Inbox included
+        names = {c["data"]["name"]: c["key"] for c in fake.collections}
+        tr, proj, inbox, read = names["To Read"], names["LCR HCR CVxR"], names["Inbox"], names["Read"]
+        fake.items += [
+            {"key": "MINE", "version": 1, "data": {"itemType": "journalArticle", "title": "Paper I found", "date": "2021",
+                                                   "extra": "", "tags": [{"tag": "keep"}], "collections": [inbox]}},
+            {"key": "OLDR", "version": 1, "data": {"itemType": "journalArticle", "title": "Read long ago", "date": "2015",
+                                                   "extra": "", "tags": [{"tag": "read"}], "collections": [read]}},
+            {"key": "ELSE", "version": 1, "data": {"itemType": "journalArticle", "title": "Other project", "date": "2015",
+                                                   "extra": "", "tags": [], "collections": []}}]
+        self.assertEqual(self.m.run(), 0)
+        by = {i["key"]: i["data"] for i in fake.items}
+        self.assertEqual(set(by["MINE"]["collections"]), {tr, proj})
+        self.assertEqual(by["MINE"]["tags"], [{"tag": "keep"}, {"tag": "manual entry"}])
+        self.assertIn({"tag": "manual entry"}, by["OLDR"]["tags"])
+        self.assertEqual(by["ELSE"]["tags"], [])
+        todo = json.loads((self.root / "unranked.json").read_text())
+        self.assertEqual([(u["key"], u["order"], u["questions"]) for u in todo], [("MINE", "", False)])
+        (self.root / "placements").mkdir(exist_ok=True)
+        (self.root / "placements" / "p.json").write_text(json.dumps({"papers": [
+            {"key": "MINE", "title": "Paper I found", "level": "core", "tags": ["diet-muscle"]}]}))
+        self.assertEqual(self.m.run(), 0)
+        d = next(i["data"] for i in fake.items if i["key"] == "MINE")
+        self.assertTrue(d["extra"].startswith("Read order: B01"))
+        self.assertIn({"tag": "question:Q3 How does diet change muscle?"}, d["tags"])
+        self.assertIn({"tag": "manual entry"}, d["tags"])
+        self.assertEqual(json.loads((self.root / "unranked.json").read_text()), [])
+        # a hand-ordered paper with no question still comes up, for tags only
+        d["tags"] = [{"tag": "manual entry"}]
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual([(u["key"], u["order"]) for u in json.loads((self.root / "unranked.json").read_text())], [("MINE", "B01")])
 
     def test_every_question_code_has_a_short_numbered_tag(self):
         self.assertEqual(set(self.m.QUESTIONS), set(self.m.SUBJECTS))
