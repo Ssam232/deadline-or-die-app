@@ -59,9 +59,11 @@ class H(BaseHTTPRequestHandler):
         if "/items/" in u.path and not u.path.endswith("/top"):
             row = next((i for i in fake.items if i["key"] == u.path.rsplit("/", 1)[1]), None)
             return self.send(200, row) if row else self.send(404, {})
-        if u.path.endswith("/items/top"):
+        if u.path.endswith("/items/top") or u.path.endswith("/items"):
             ck = u.path.split("/collections/")[1].split("/")[0] if "/collections/" in u.path else None
             rows = [i for i in fake.items if not ck or ck in i["data"]["collections"]]
+            if "itemType" in q:
+                rows = [i for i in rows if i["data"].get("itemType") == q["itemType"][0]]
             if "tag" in q:
                 rows = [i for i in rows if {"tag": q["tag"][0]} in i["data"]["tags"]]
             start = int(q.get("start", ["0"])[0])
@@ -685,6 +687,21 @@ class Tests(unittest.TestCase):
         self.assertEqual(set(fake.items[-1]["data"]["collections"]), {names["LCR HCR CVxR"], names["Inbox"]})
         self.assertFalse((self.root / "to-inbox.json").exists())
         self.assertEqual([u["key"] for u in json.loads((self.root / "unranked.json").read_text())], [])
+
+    def test_search_topics_come_from_the_note(self):
+        self.assertEqual(self.m.topics_from_note("<p>Deadline or Die search topics</p><p>Diaphragm anatomy &amp; remodelling</p><p> </p>"),
+                         ["Diaphragm anatomy & remodelling"])
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), [])
+        proj = next(c["key"] for c in fake.collections if c["data"]["name"] == "LCR HCR CVxR")
+        fake.items.append({"key": "NOTE", "version": 1, "data": {"itemType": "note", "collections": [proj], "tags": [],
+                           "note": "<p>Deadline or Die search topics</p><p>Diaphragm anatomy and remodelling</p>"}})
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), ["Diaphragm anatomy and remodelling"])
+        (self.root / "add-topics.json").write_text(json.dumps({"topics": ["diaphragm anatomy and remodelling", "New one"]}))
+        self.assertEqual(self.m.run(), 0)
+        self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), ["Diaphragm anatomy and remodelling", "New one"])
+        self.assertFalse((self.root / "add-topics.json").exists())
 
     def test_every_question_code_has_a_short_numbered_tag(self):
         self.assertEqual(set(self.m.QUESTIONS), set(self.m.SUBJECTS))
