@@ -390,6 +390,26 @@ class Tests(unittest.TestCase):
         self.assertTrue((self.root / "done" / "placed-2026-11-07.json").exists())
         self.assertEqual([u["key"] for u in json.loads((self.root / "unranked.json").read_text())], ["WRONG"])
 
+    def test_manual_papers_already_read_get_tags_but_no_order(self):
+        self.to_read_key()
+        self.paper("B1", "Read order: B01 (Core)")
+        self.paper("OLD", status="read", colls=("RD",))
+        self.paper("TAGGED", status="read", colls=("RD",))
+        for k, extra in (("OLD", []), ("TAGGED", [{"tag": "question:Q1 What are HCR/LCR rats?"}])):
+            next(i for i in fake.items if i["key"] == k)["data"]["tags"] += [{"tag": "manual entry"}, *extra]
+        self.assertEqual(self.m.run(), 0)
+        listed = json.loads((self.root / "unranked.json").read_text())
+        self.assertEqual([(u["key"], u["status"]) for u in listed], [("OLD", "read")])
+        (self.root / "placements").mkdir()
+        (self.root / "placements" / "t.json").write_text(json.dumps({"papers": [
+            {"key": "OLD", "title": "Paper OLD", "level": "core", "tags": ["diet-muscle"], "species": "rat", "type": "study"}]}))
+        self.assertEqual(self.m.run(), 0)
+        tags = {t["tag"] for t in next(i for i in fake.items if i["key"] == "OLD")["data"]["tags"]}
+        self.assertTrue({"question:Q3 How does diet change muscle?", "species:rat", "type:study", "read"} <= tags)
+        self.assertIsNone(self.extra("OLD"))  # read: never given an order
+        self.assertEqual(self.extra("B1"), "Read order: B01 (Core)\nReading rank: 1")
+        self.assertEqual(json.loads((self.root / "unranked.json").read_text()), [])
+
     def test_placement_with_a_title_that_does_not_match_is_kept(self):
         self.to_read_key()
         self.paper("NEW")
@@ -620,16 +640,19 @@ class Tests(unittest.TestCase):
         self.assertIn({"tag": "manual entry"}, by["OLDR"]["tags"])
         self.assertEqual(by["ELSE"]["tags"], [])
         todo = json.loads((self.root / "unranked.json").read_text())
-        self.assertEqual([(u["key"], u["order"], u["questions"]) for u in todo], [("MINE", "", False)])
+        self.assertEqual([(u["key"], u["order"], u["questions"]) for u in todo], [("MINE", "", False), ("OLDR", "", False)])
         (self.root / "placements").mkdir(exist_ok=True)
         (self.root / "placements" / "p.json").write_text(json.dumps({"papers": [
-            {"key": "MINE", "title": "Paper I found", "level": "core", "tags": ["diet-muscle"]}]}))
+            {"key": "MINE", "title": "Paper I found", "level": "core", "tags": ["diet-muscle"]},
+            {"key": "OLDR", "title": "Read long ago", "tags": ["hcr-lcr"]}]}))
         self.assertEqual(self.m.run(), 0)
         d = next(i["data"] for i in fake.items if i["key"] == "MINE")
         self.assertTrue(d["extra"].startswith("Read order: B01"))
         self.assertIn({"tag": "question:Q3 How does diet change muscle?"}, d["tags"])
         self.assertIn({"tag": "manual entry"}, d["tags"])
         self.assertEqual(json.loads((self.root / "unranked.json").read_text()), [])
+        self.assertEqual(by["OLDR"]["extra"], "")  # read: tagged, never ordered
+        self.assertIn({"tag": "question:Q1 What are HCR/LCR rats?"}, by["OLDR"]["tags"])
         # a hand-ordered paper with no question still comes up, for tags only
         d["tags"] = [{"tag": "manual entry"}]
         self.assertEqual(self.m.run(), 0)

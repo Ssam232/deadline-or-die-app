@@ -34,7 +34,8 @@ Rules:
     without gaps or repeats, and every paper still to read in "To Read" gets an absolute
     "Reading rank: N" line. Papers marked reading come first, then the rest in read order, then any
     without an order, oldest first. Read and dropped papers lose their rank. unranked.json lists the
-    papers to read that still have no read order or no question tag, for the Sunday search to place by title.
+    papers to read that still have no read order, and every manual entry with no question tag (read ones too, which
+    get tags but never an order), for the Sunday search to place and tag by title.
 """
 from __future__ import annotations
 
@@ -285,9 +286,12 @@ def tidy(items: list[dict], to_read: str) -> tuple[dict[str, str], list[dict]]:
     def no_question(it):  # only papers you added by hand: the search always tags its own
         tags = {t.get("tag", "") for t in it["data"].get("tags", [])}
         return MANUAL_TAG in tags and not any(t.startswith("question:") for t in tags)
+    ahead_keys = {it["key"] for it in ahead}
+    todo = [it for it in ahead if it["key"] not in codes or no_question(it)]
+    todo += [it for it in items if it["key"] not in ahead_keys and no_question(it)]  # read or dropped: tags only
     unranked = [{"key": it["key"], "title": it["data"].get("title", ""), "added": (it["data"].get("dateAdded") or "")[:10],
-                 "order": codes.get(it["key"], ""), "questions": not no_question(it)}
-                for it in ahead if it["key"] not in codes or no_question(it)]
+                 "status": status_of(it["data"].get("tags")) if it["key"] in ahead_keys or status_of(it["data"].get("tags")) != "unread" else "not in To Read",
+                 "order": codes.get(it["key"], ""), "questions": not no_question(it)} for it in todo]
     return changes, unranked
 
 def place(rows: list[dict], new: list[tuple[dict, dict]]) -> list[tuple[dict, str]]:
@@ -533,7 +537,8 @@ class Library:
                 errors.append(f'no item {p.get("key")} titled "{(p.get("title") or "")[:60]}"')
                 continue
             entry = {"extra": it["data"].get("extra")}
-            if p.get("level") and not ORDER_LINE.search(it["data"].get("extra") or ""):
+            if p.get("level") and not ORDER_LINE.search(it["data"].get("extra") or "") \
+                    and status_of(it["data"].get("tags")) in ("unread", "reading"):  # read or dropped: tags only
                 pairs.append((p, entry))
             targets.append((it, entry, p))
         changes = place(self.ordered(), pairs)
