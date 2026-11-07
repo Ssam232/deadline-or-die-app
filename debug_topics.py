@@ -11,6 +11,6 @@ if not r.json():
     body = [{"itemType": "note", "note": "<p>Deadline or Die search topics</p><p>Diaphragm anatomy and remodelling</p>",
              "collections": [cols.get("LCR HCR CVxR")], "tags": [], "relations": {}}]
     p = requests.post(f"{b}/items", headers={**h, "Content-Type": "application/json"}, data=json.dumps(body))
-    print("create:", p.status_code, p.text[:400])
+    print("create:", p.status_code, json.dumps(p.json())[:600])
     r = requests.get(f"{b}/collections/{cols.get('LCR HCR CVxR')}/items", headers=h, params={"itemType": "note", "limit": 100})
     print("project notes after:", r.status_code, [(i["key"], i["data"]["note"][:80]) for i in r.json()])
