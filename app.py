@@ -5980,11 +5980,24 @@ def render_goal_task_form(state: dict, g: dict) -> None:
     what = st.text_input("What", placeholder="A deliverable, e.g. Submit ethics amendment · Send draft to Walter",
                          key=f"gt_what_{gid}")
     under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"gt_under_{gid}")
+    rel = bool(target) and st.segmented_control(
+        "Deadline", ["Before the goal's due date", "Pick a date"], default="Before the goal's due date",
+        key=f"gt_mode_{gid}") != "Pick a date"
     c1, c2, c3 = st.columns(3)
-    due_d = c1.date_input("Deadline (required)", value=None, min_value=now().date(), key=f"gt_due_{gid}",
-                          help="Like every block, it needs a date it's due by.")
+    if rel:
+        span = max(0, (target - now().date()).days)
+        before = c1.number_input(f"Days before {target:%b} {target.day} (required)", 0, span, value=None, step=1,
+                                 key=f"gt_before_{gid}", placeholder="e.g. 7",
+                                 help="0 = on the goal's due date. Counts back from it, so the plan moves with the goal.")
+        due_d = target - timedelta(days=int(before)) if before is not None else None
+    else:
+        due_d = c1.date_input("Deadline (required)", value=None, min_value=now().date(), key=f"gt_due_{gid}",
+                              help="Like every block, it needs a date it's due by.")
     due_t = c2.time_input("Due at", value=dtime(23, 59), step=900, key=f"gt_due_t_{gid}")
     mins = c3.selectbox("Est. length", BLOCK_LENGTHS, index=3, format_func=min_label, key=f"gt_len_{gid}")
+    if rel and due_d:
+        st.caption(f"📅 Due **{due_d:%a %b} {due_d.day}**" + (" · the goal's due date" if due_d == target else
+                   f" · {(target - due_d).days} day{'s' * ((target - due_d).days != 1)} before the goal's"))
     cat = st.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"gt_cat_{gid}")
     book = st.toggle("🗓️ Also book time for it", key=f"gt_book_{gid}",
                      help="Puts it on a day and time like a block (calendar, phone heads-up, that day's mission). "
@@ -6007,6 +6020,8 @@ def render_goal_task_form(state: dict, g: dict) -> None:
             t = make_task(what.strip(), f"🗺️ {g['title']}", due, None, "", gid,
                           category=None if cat == "auto" else cat, minutes=int(mins))
             t["node"] = under or None
+            if rel:
+                t["due_before_goal"] = (target - due_d).days  # remembered: the plan is relative to the goal's date
             if book:
                 t.update(R.block_fields(bday, bstart.strftime("%H:%M"), int(mins), TZ))
                 t["deadline"], t["own_deadline"] = due.isoformat(), due.isoformat()
@@ -6014,7 +6029,7 @@ def render_goal_task_form(state: dict, g: dict) -> None:
             save_state(state)
             flash(f"📌 **{t['title']}** added · due {_when(due)}"
                   + (f" · booked {_when(R.block_at(t, TZ))}" if book else "") + ".")
-            for k_ in (f"gt_what_{gid}", f"gt_due_{gid}"):
+            for k_ in (f"gt_what_{gid}", f"gt_due_{gid}", f"gt_before_{gid}"):
                 st.session_state.pop(k_, None)
             st.rerun()
 
@@ -6284,6 +6299,22 @@ def render_goal_edit(state: dict, g: dict, k0: str = "ge") -> None:
         nd = c2.date_input("Target date", value=target, key=f"{k0}_d_{g['id']}")
         if st.form_submit_button("💾 Save", type="primary") and (nt or "").strip():
             g.update(title=nt.strip(), why=(nw or "").strip(), target=nd.isoformat())
+            moved_ = 0
+            for x in state["tasks"]:  # tasks set relative to the due date move with it
+                if x.get("goal_id") == g["id"] and x["status"] == "open" and x.get("due_before_goal") is not None:
+                    old_ = parse_dt(x.get("own_deadline") or x["deadline"])
+                    new_ = datetime.combine(nd - timedelta(days=int(x["due_before_goal"])), old_.timetz())
+                    if new_ != old_:
+                        if x.get("block"):
+                            x["own_deadline"] = new_.isoformat()
+                            day_end = datetime.combine(date.fromisoformat(x["block"]["date"]), dtime(23, 59), TZ)
+                            x["deadline"] = max(new_, day_end).isoformat()
+                        else:
+                            x["deadline"] = new_.isoformat()
+                        moved_ += 1
+            if moved_:
+                st.session_state.setdefault("flash", []).append(
+                    ("info", f"📅 {moved_} task{'s' * (moved_ != 1)} set relative to the due date moved with it."))
             save_state(state)
             flash(f"✏️ **{g['title']}** updated" + (" (and its Assignments card)." if B.is_long_term(g)
                                                       and board_cfg(state) else "."))
