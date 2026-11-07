@@ -18,8 +18,9 @@ READING_TAG = "reading"
 DROPPED_TAG = "dropped"
 STATUS_TAGS = (READ_TAG, READING_TAG, DROPPED_TAG)
 SKIP_TYPES = {"attachment", "note", "annotation"}
+MANUAL_TAG = "manual entry"  # papers you added yourself through the Inbox
 LEVELS = {"A": "Foundational", "B": "Core", "C": "Specialized", "D": "Niche"}
-FACETS = ("question", "subject", "species", "sex", "type")  # Zotero tags written as "subject:Diet and muscle"
+FACETS = ("question", "subject", "species", "sex", "type", "source")  # Zotero tags written as "subject:Diet and muscle"
 _ORDER = re.compile(r"^Read order:\s*([A-D])(\d+)", re.M | re.I)
 _LEFTOVER = re.compile(r"^\s*\((Foundational|Core|Specialized|Niche)\)\s*$", re.I)
 
@@ -81,6 +82,8 @@ def _facets(tags: list[dict]) -> dict:
         name, _, value = (t.get("tag") or "").partition(":")
         if name in out and value.strip():
             out[name].append(value.strip())
+        elif t.get("tag") == MANUAL_TAG:
+            out["source"].append("Manual entry")
     return out
 
 
@@ -226,3 +229,91 @@ def health(user: str, key: str, collection: str = "To Read") -> str:
     except ZoteroError as e:
         parts.append(str(e))
     return " · ".join(parts)
+
+
+# ---- inbox: papers you find yourself -----------------------------------------------------------
+
+INBOX = "Inbox"
+QUESTIONS = ("Q1 What are HCR/LCR rats?", "Q2 What causes remodeling?", "Q3 How does diet change muscle?",
+             "Q4 How does exercise change obese muscle?", "Q5 How do genes and exercise interact?",
+             "Q6 Why does heart + diaphragm failure matter?", "Q7 How are muscle strips tested?")
+
+
+def inbox_folder(user: str, key: str, collection: str = "To Read", create: bool = False) -> str | None:
+    """The "Inbox" folder beside To Read (under the same parent). Made on request if it isn't there yet."""
+    cols = _collections(user, key)
+    me = next((c for c in cols if c["data"]["name"].strip().lower() == collection.strip().lower()), None)
+    parent = me and me["data"].get("parentCollection")
+    if not parent:
+        return None
+    found = next((c["key"] for c in cols if c["data"].get("parentCollection") == parent
+                  and c["data"]["name"].strip().lower() == INBOX.lower()), None)
+    if found or not create:
+        return found
+    r = requests.post(f"{API}/users/{user}/collections", headers=_h(key), timeout=20,
+                      json=[{"name": INBOX, "parentCollection": parent}])
+    if r.status_code != 200 or not r.json().get("successful"):
+        raise ZoteroError(f"Couldn't make the Inbox folder ({r.status_code}): the key needs write access")
+    return next(iter(r.json()["successful"].values()))["key"]
+
+
+def inbox_items(user: str, key: str, folder: str) -> list[dict]:
+    out = []
+    for it in _folder_items(user, key, folder):
+        d = it.get("data", {})
+        if d.get("itemType") in SKIP_TYPES:
+            continue
+        out.append({"key": it["key"], "title": d.get("title") or "(untitled)", "who": who_of(d.get("creators", [])),
+                    "year": (d.get("date") or "")[:4], "journal": d.get("publicationTitle") or d.get("websiteTitle") or "",
+                    "url": d.get("url") or f"https://www.zotero.org/users/{user}/items/{it['key']}"})
+    return out
+
+
+def renumber(papers: list[dict], item_key: str, level: str, num: int) -> dict[str, str]:
+    """Puts one paper at level+num (e.g. B, 2) and bumps the rest of that level down; the level it left closes up.
+    Every level is numbered 1, 2, 3... Returns {item key: new code} for every paper whose code changes."""
+    groups: dict[str, list[dict]] = {}
+    for p in sorted((p for p in papers if p.get("order") and p["key"] != item_key), key=lambda p: p["order"]):
+        groups.setdefault(p["order"][0], []).append(p)
+    lvl = groups.setdefault(level.upper(), [])
+    lvl.insert(max(0, min(int(num) - 1, len(lvl))), {"key": item_key, "order": ""})
+    old = {p["key"]: p.get("order", "") for p in papers}
+    return {p["key"]: f"{letter}{n:02d}" for letter, g in groups.items() for n, p in enumerate(g, 1)
+            if old.get(p["key"], "") != f"{letter}{n:02d}"}
+
+
+def place(user: str, key: str, papers: list[dict], item_key: str, level: str, num: int) -> str:
+    """Writes the new read order to Zotero: the paper itself first, then the ones it bumped. Returns its code."""
+    changes = renumber(papers, item_key, level, num)
+    mine = changes.pop(item_key, None) or next(p["order"] for p in papers if p["key"] == item_key)
+    set_order(user, key, item_key, mine[0], int(mine[1:]))
+    for k, code in changes.items():
+        set_order(user, key, k, code[0], int(code[1:]))
+    return mine
+
+
+def file_from_inbox(user: str, key: str, item_key: str, status: str, questions: list[str],
+                    collection: str = "To Read") -> None:
+    """Moves a paper out of the Inbox into To Read (unread) or Read, tagged "manual entry" and with any question tags."""
+    folders = status_folders(user, key, collection)
+    if not folders:
+        raise ZoteroError("To Read needs Read and Dropped folders beside it")
+    box = inbox_folder(user, key, collection)
+    for attempt in (1, 2):
+        r = requests.get(f"{API}/users/{user}/items/{item_key}", headers=_h(key), timeout=20)
+        if r.status_code != 200:
+            raise ZoteroError(f"Zotero {r.status_code}")
+        it = r.json()
+        keep = [t for t in it["data"].get("tags", []) if t.get("tag") not in (*STATUS_TAGS, MANUAL_TAG)]
+        have = {t.get("tag") for t in keep}
+        tags = keep + [{"tag": MANUAL_TAG}] + [{"tag": f"question:{q}"} for q in questions if f"question:{q}" not in have] \
+            + ([{"tag": status}] if status != "unread" else [])
+        colls = [c for c in it["data"].get("collections", []) if c != box and c not in folders.values()] + [folders[status]]
+        r = requests.patch(f"{API}/users/{user}/items/{item_key}",
+                           headers={**_h(key), "If-Unmodified-Since-Version": str(it["version"])},
+                           json={"tags": tags, "collections": colls}, timeout=20)
+        if r.status_code in (200, 204):
+            return
+        if r.status_code != 412 or attempt == 2:
+            raise ZoteroError(f"Zotero couldn't file that ({r.status_code}): "
+                              + ("the key needs write access" if r.status_code == 403 else r.text[:120]))

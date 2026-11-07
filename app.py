@@ -4451,14 +4451,14 @@ READING_SORTS = {"Rank": lambda p: p.get("rank") or 9999,
                  "Author": lambda p: p["who"].casefold() or "~",
                  "Question": lambda p: (sorted(p["facets"]["question"]) or ["~"])[0],
                  "Subject": lambda p: (p["facets"]["subject"] or ["~"])[0].casefold()}
-READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type"}
+READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type", "source": "Added by"}
 
 
 def _paper_tags(p: dict) -> list[str]:
     """A paper's clickable tags as "filter|value". Its subject mostly repeats its question, so it only shows without one."""
     f = p["facets"]
     tags = [("question", v) for v in sorted(f["question"])] + ([] if f["question"] else [("subject", v) for v in f["subject"]])
-    tags += ([("year", p["year"])] if p["year"] else []) + [(n, v) for n in ("species", "sex", "type") for v in f[n]]
+    tags += ([("year", p["year"])] if p["year"] else []) + [(n, v) for n in ("species", "sex", "type", "source") for v in f[n]]
     return [f"{n}|{v}" for n, v in tags]
 
 
@@ -4495,6 +4495,82 @@ def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
         flash(f"📄 Marked **{READING_LABELS[new].lower()}**. Its task is still open on your list.", "warning")
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _zotero_inbox(user: str, key: str, coll: str) -> tuple[str | None, list[dict]]:
+    box = Z.inbox_folder(user, key, coll, create=True)
+    return box, (Z.inbox_items(user, key, box) if box else [])
+
+
+INBOX_READ_COINS = 5     # a paper you'd already read before it reached the list: a small thank-you, not a task's pay
+INBOX_READ_MIN = 30      # logged as 30 focus minutes
+INBOX_READ_PER_DAY = 3   # rewards stop after 3 a day; filing still works
+
+
+def _inbox_rewards_today(state: dict) -> int:
+    return sum(1 for x in state.get("focus_log", []) if x.get("task") == "inbox-read" and x["date"] == now().date().isoformat())
+
+
+def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
+    """📥 Papers you saved to the Zotero "Inbox" folder yourself. A short questionnaire per paper files it:
+    already read → Read (a few coins + 30 focus min, no read order); not yet → To Read at the level and number
+    you pick, bumping that level down. Either way it's tagged "manual entry"."""
+    try:
+        box, items = _zotero_inbox(*zc)
+    except Exception as e:  # noqa: BLE001
+        st.caption(f"(Couldn't check the Zotero Inbox: {e})")
+        return
+    if not box or not items:
+        return
+    with st.container(border=True):
+        st.markdown(f"#### 📥 Inbox · {len(items)} paper{'s' * (len(items) != 1)} you added")
+        for it in items:
+            k = it["key"]
+            st.markdown(f"<a href='{html.escape(it['url'], quote=True)}' target='_blank'>{html.escape(it['title'])}</a>"
+                        f"<br><small style='color:#8b909c'>{html.escape(' · '.join(x for x in (it['who'], it['year'], it['journal']) if x))}</small>",
+                        unsafe_allow_html=True)
+            done_ = st.segmented_control(f"Already read {it['title'][:60]}?", ["Not yet", "Already read it"],
+                                         default="Not yet", key=f"inbox_read_{k}") or "Not yet"
+            qs = st.multiselect("Questions it answers", Z.QUESTIONS, key=f"inbox_q_{k}", placeholder="Optional")
+            lv = num = None
+            if done_ == "Not yet":
+                c1, c2 = st.columns(2)
+                lv = c1.selectbox("Level", [*Z.LEVELS, ""], key=f"inbox_lv_{k}", index=1,
+                                  format_func=lambda x: f"{x} · {Z.LEVELS[x]}" if x else "No order yet (set it later)")
+                if lv:
+                    size = sum(1 for p in papers if p["order"].startswith(lv))
+                    num = c2.number_input(f"Number (1–{size + 1}; later papers in {lv} move down)", 1, size + 1, size + 1,
+                                          key=f"inbox_n_{k}")
+            left = INBOX_READ_PER_DAY - _inbox_rewards_today(state)
+            label = ("📚 File as read" + (f" · +{INBOX_READ_COINS} 🪙 · {INBOX_READ_MIN} min" if left > 0 else "")
+                     if done_ != "Not yet" else f"➕ Add to reading list{f' as {lv}{int(num):02d}' if lv else ''}")
+            if st.button(label, key=f"inbox_go_{k}", type="primary", use_container_width=True):
+                try:
+                    Z.file_from_inbox(zc[0], zc[1], k, "read" if done_ != "Not yet" else "unread", qs, zc[2])
+                    code = Z.place(zc[0], zc[1], papers, k, lv, int(num)) if lv else ""
+                except Exception as e:  # noqa: BLE001
+                    flash(f"Couldn't file that paper: {e}", "error")
+                    st.rerun()
+                if done_ != "Not yet" and left > 0:
+                    bank(state, INBOX_READ_COINS, f"📥 Already read: {it['title'][:50]}")
+                    state.setdefault("focus_log", []).append({"date": now().date().isoformat(), "task": "inbox-read",
+                                                              "min": INBOX_READ_MIN, "full": False,
+                                                              "start": now().isoformat(), "cat": "deep"})
+                    state["xp"] += INBOX_READ_MIN // 5
+                    save_state(state)
+                    flash(f"📚 Filed as read · +{INBOX_READ_COINS} coins · {INBOX_READ_MIN} min logged.")
+                elif done_ != "Not yet":
+                    flash(f"📚 Filed as read. (Rewards cap at {INBOX_READ_PER_DAY} a day.)")
+                else:
+                    flash(f"➕ Added to your reading list{' as ' + code if code else ', not ordered yet'}.")
+                _zotero_inbox.clear()
+                _zotero_reading.clear()
+                _zotero_list.clear()
+                st.rerun()
+            st.divider()
+        st.caption("Save papers into the Inbox folder under LCR HCR CVxR with the Zotero browser button. "
+                   "They're all tagged “manual entry”.")
+
+
 def render_reading_list(state: dict) -> None:
     zc = zotero_cfg(state)
     if not zc:
@@ -4505,6 +4581,7 @@ def render_reading_list(state: dict) -> None:
     except Exception as e:
         st.caption(f"(Couldn't read Zotero: {e})")
         return
+    render_paper_inbox(state, zc, papers)
     if not papers:
         st.caption(f"Nothing in “{zc[2]}” yet.")
         return
@@ -4575,7 +4652,7 @@ def render_reading_list(state: dict) -> None:
             nm_ = st.number_input("Number", 1, 99, int(p["order"][1:]) if p["order"] else 1, key=f"ord_n_{p['key']}")
             if st.button("Save order", key=f"ord_go_{p['key']}", type="primary", use_container_width=True):
                 try:
-                    lab_ = Z.set_order(zc[0], zc[1], p["key"], lv_, nm_)
+                    lab_ = Z.place(zc[0], zc[1], papers, p["key"], lv_, nm_)  # bumps the rest of the level down
                     _zotero_reading.clear()
                     _zotero_list.clear()
                     flash(f"🔢 **{p['title'][:60]}** is now {lab_}.")
