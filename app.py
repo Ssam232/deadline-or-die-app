@@ -4477,16 +4477,16 @@ READING_SORTS = {"Rank": lambda p: p.get("rank") or 9999,
                  "Oldest first": lambda p: int(p["year"]) if p["year"].isdigit() else 9999,
                  "Title": lambda p: p["title"].casefold(),
                  "Author": lambda p: p["who"].casefold() or "~",
-                 "Question": lambda p: (sorted(p["facets"]["question"]) or ["~"])[0],
-                 "Subject": lambda p: (p["facets"]["subject"] or ["~"])[0].casefold()}
+                 "Question": lambda p: (sorted(p["facets"].get("question", [])) or ["~"])[0],
+                 "Subject": lambda p: (p["facets"].get("subject", []) or ["~"])[0].casefold()}
 READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type", "source": "Added by"}
 
 
 def _paper_tags(p: dict) -> list[str]:
     """A paper's clickable tags as "filter|value". Its subject mostly repeats its question, so it only shows without one."""
-    f = p["facets"]
+    f = {k: p["facets"].get(k, []) for k in ("question", "subject", "species", "sex", "type", "source")}
     tags = [("question", v) for v in sorted(f["question"])] + ([] if f["question"] else [("subject", v) for v in f["subject"]])
-    tags += ([("year", p["year"])] if p["year"] else []) + [(n, v) for n in ("species", "sex", "type", "source") for v in f[n]]
+    tags += ([("year", p["year"])] if p.get("year") else []) + [(n, v) for n in ("species", "sex", "type", "source") for v in f[n]]
     return [f"{n}|{v}" for n, v in tags]
 
 
@@ -4703,7 +4703,7 @@ def render_reading_list(state: dict) -> None:
         c1, c2 = st.columns(2)
         sort = c1.selectbox("Sort by", list(READING_SORTS), key="reading_sort")
         search = c2.text_input("Search", placeholder="Title, author or journal", key="reading_search").strip().casefold()
-        options = {f: sorted({v for p in papers for v in p["facets"][f]}) for f in READING_FILTERS}
+        options = {f: sorted({v for p in papers for v in p["facets"].get(f, [])}) for f in READING_FILTERS}
         years = sorted({p["year"] for p in papers if p["year"]}, reverse=True)
         cols = st.columns(2)
         picked = {f: cols[i % 2].multiselect(READING_FILTERS[f], options[f], key=f"reading_f_{f}")
@@ -4712,7 +4712,7 @@ def render_reading_list(state: dict) -> None:
     filtered = bool(search or picked_years or any(picked.values()))
     shown = [p for p in papers if p["status"] in views[view]
              and (not picked_years or p["year"] in picked_years)
-             and all(not vals or set(vals) & set(p["facets"][f]) for f, vals in picked.items())
+             and all(not vals or set(vals) & set(p["facets"].get(f, [])) for f, vals in picked.items())
              and (not search or search in f"{p['title']} {p['who']} {p['journal']}".casefold())]
     shown.sort(key=READING_SORTS[sort])  # stable, so ties stay in read order
     if filtered:
@@ -4730,8 +4730,8 @@ def render_reading_list(state: dict) -> None:
     def _row(p: dict) -> None:
         head = ("Reading now" if p["status"] == "reading" else "Up next" if p.get("rank") else READING_LABELS[p["status"]]) \
             if sort == "Rank" else (p["level"] or "Not ordered yet") if sort == "Read order" else \
-               ((sorted(p["facets"]["question"]) or ["No question"])[0] if sort == "Question" else
-                ((p["facets"]["subject"] or ["No subject"])[0] if sort == "Subject" else None))
+               ((sorted(p["facets"].get("question", [])) or ["No question"])[0] if sort == "Question" else
+                ((p["facets"].get("subject", []) or ["No subject"])[0] if sort == "Subject" else None))
         if head and head != seen_levels["last"]:
             seen_levels["last"] = head
             st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(head)}</div>", unsafe_allow_html=True)
