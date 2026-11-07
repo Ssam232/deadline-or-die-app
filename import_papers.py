@@ -597,7 +597,7 @@ class Library:
             inbox = made["0"]["key"]
         mine = {project, inbox} | {c["key"] for c in cols if c["data"].get("parentCollection") == project}
         moved = tagged = 0
-        errors = []
+        errors, waiting = [], []
         for it in self.papers():
             d = it["data"]
             colls = d.get("collections", [])
@@ -606,6 +606,7 @@ class Library:
             names = {t.get("tag") for t in d.get("tags", [])}
             body = {}
             if inbox in colls and not file_inbox:
+                waiting.append(d.get("title", "?")[:70])
                 continue  # left for the questionnaire in Deadline or Die until the Sunday pass
             if inbox in colls:
                 body["collections"] = list(dict.fromkeys([c for c in colls if c != inbox] + [to_read, project]))
@@ -620,6 +621,8 @@ class Library:
                 tagged += "tags" in body
             else:
                 errors.append(f'{d.get("title", "?")[:60]}: {r.status_code} {r.text[:100]}')
+        if waiting:
+            print(f"{len(waiting)} paper(s) waiting in the Inbox for Deadline or Die: " + "; ".join(waiting))
         return moved, tagged, errors
 
     def write_codes(self, changes: list[tuple[dict, str]]) -> list[str]:
