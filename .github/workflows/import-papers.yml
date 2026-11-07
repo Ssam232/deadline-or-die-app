@@ -2,7 +2,7 @@ name: Import papers to Zotero
 on:
   push:
     branches: [paper-queue]
-    paths: ["queue/**", "placements/**", "import_papers.py", "reading-order.json", "paper-facts.json", "paper-questions.json"]
+    paths: ["queue/**", "placements/**", "import_papers.py", "reading-order.json", "paper-facts.json", "paper-questions.json", "to-inbox.json"]
   schedule:
     - cron: "43 23 * * 0"  # Sundays 4:43 PM in Calgary, two hours before the weekly search: file the Inbox, tag manual entries, renumber, list papers to place
   workflow_dispatch:

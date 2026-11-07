@@ -671,6 +671,21 @@ class Tests(unittest.TestCase):
         self.assertEqual(fake.items[-1]["data"]["collections"], [names["Inbox"]])
         self.assertEqual(fake.items[-1]["data"]["tags"], [])
 
+    def test_papers_go_back_to_the_inbox_once(self):
+        self.assertEqual(self.m.run(), 0)
+        names = {c["data"]["name"]: c["key"] for c in fake.collections}
+        fake.items.append({"key": "MINE", "version": 1, "data": {"itemType": "journalArticle", "title": "Paper I found",
+                           "extra": "", "tags": [{"tag": "manual entry"}], "collections": [names["To Read"], names["LCR HCR CVxR"]]}})
+        (self.root / "to-inbox.json").write_text(json.dumps({"keys": ["MINE"]}))
+        os.environ["GITHUB_EVENT_NAME"] = "push"
+        try:
+            self.assertEqual(self.m.run(), 0)
+        finally:
+            del os.environ["GITHUB_EVENT_NAME"]
+        self.assertEqual(set(fake.items[-1]["data"]["collections"]), {names["LCR HCR CVxR"], names["Inbox"]})
+        self.assertFalse((self.root / "to-inbox.json").exists())
+        self.assertEqual([u["key"] for u in json.loads((self.root / "unranked.json").read_text())], [])
+
     def test_every_question_code_has_a_short_numbered_tag(self):
         self.assertEqual(set(self.m.QUESTIONS), set(self.m.SUBJECTS))
         self.assertEqual(sorted(v[:2] for v in self.m.QUESTIONS.values()), [f"Q{i}" for i in range(1, 8)])

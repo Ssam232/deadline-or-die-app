@@ -559,6 +559,28 @@ class Library:
             errors += self.write_codes(changes)
         return len(targets), errors
 
+    def back_to_inbox(self, project: str, to_read: str, keys: list[str]) -> list[str]:
+        """Puts papers back in the Inbox (out of To Read), so Deadline or Die's questionnaire can file them."""
+        cols = list(self._pages("/collections"))
+        inbox = next((c["key"] for c in cols if c["data"].get("parentCollection") == project
+                      and c["data"]["name"].strip().lower() == INBOX.lower()), None)
+        if not inbox:
+            return ["no Inbox folder"]
+        by_key = {it["key"]: it for it in self.papers()}
+        errors = []
+        for k in keys:
+            it = by_key.get(k)
+            if not it:
+                errors.append(f"no item {k}")
+                continue
+            colls = [c for c in it["data"].get("collections", []) if c != to_read] + [inbox]
+            tags = [t for t in it["data"].get("tags", []) if t.get("tag") != MANUAL_TAG]  # the questionnaire adds it back
+            r = requests.patch(f"{self.base}/items/{k}", json={"collections": list(dict.fromkeys(colls)), "tags": tags},
+                               headers={**self.h, "If-Unmodified-Since-Version": str(it["version"])}, timeout=30)
+            if r.status_code not in (200, 204):
+                errors.append(f"{k}: {r.status_code} {r.text[:100]}")
+        return errors
+
     def sweep_manual(self, project: str, to_read: str, file_inbox: bool = True) -> tuple[int, int, list[str]]:
         """Papers you add yourself. Anything in the Inbox folder (under the project, made if missing) moves to To Read,
         and every paper in the project's folders that the search didn't add gets the tag "manual entry".
@@ -685,6 +707,16 @@ def run() -> int:
         else:
             order_marker.write_text(f"Set the read order on {written} papers.\n")
             print(f"Set the read order on {written} papers.")
+    back = ROOT / "to-inbox.json"
+    if back.exists():
+        errors = lib.back_to_inbox(project, to_read, json.loads(back.read_text()).get("keys", []))
+        if errors:
+            failed_any = True
+            print("Could not put every paper back in the Inbox:\n  " + "\n  ".join(errors))
+        else:
+            (ROOT / "done").mkdir(exist_ok=True)
+            back.rename(ROOT / "done" / f"to-inbox-{datetime.now(timezone.utc):%Y-%m-%d}.json")
+            print("Put papers back in the Inbox.")
     # The Inbox is filed only by the Sunday pass (or a manual run), so a push never beats the app's questionnaire.
     file_inbox = os.getenv("GITHUB_EVENT_NAME", "schedule") in ("schedule", "workflow_dispatch")
     moved, tagged, errors = lib.sweep_manual(project, to_read, file_inbox)
