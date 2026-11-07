@@ -25,7 +25,8 @@ Rules:
     "year:2016", "species:rat", "sex:male" and "type:study". A paper's "tags" set its questions and subjects. The year comes from the paper's metadata; a detail not stated in the queue is left off.
   - At most MAX_NEW_PER_RUN papers are added per run. Any extras stay in the queue for the next run.
   - A queue file moves to done/ only once every paper in it has been handled.
-  - Papers you add yourself: anything in the "Inbox" folder under LCR HCR CVxR moves to To Read, and every paper
+  - Papers you add yourself: anything left in the "Inbox" folder under LCR HCR CVxR moves to To Read (Sunday pass only,
+    so Deadline or Die's questionnaire gets them first), and every paper
     in the project's folders that the search didn't add (no "paper-scout" tag) is tagged "manual entry".
   - placements/*.json place papers that are already in Zotero, such as ones added by hand. Each entry names the
     item's Zotero key, its title, an optional level and "before" title (placed like a new import, only if it has
@@ -558,7 +559,7 @@ class Library:
             errors += self.write_codes(changes)
         return len(targets), errors
 
-    def sweep_manual(self, project: str, to_read: str) -> tuple[int, int, list[str]]:
+    def sweep_manual(self, project: str, to_read: str, file_inbox: bool = True) -> tuple[int, int, list[str]]:
         """Papers you add yourself. Anything in the Inbox folder (under the project, made if missing) moves to To Read,
         and every paper in the project's folders that the search didn't add gets the tag "manual entry".
         Returns (moved out of the Inbox, newly tagged, errors)."""
@@ -582,6 +583,8 @@ class Library:
                 continue
             names = {t.get("tag") for t in d.get("tags", [])}
             body = {}
+            if inbox in colls and not file_inbox:
+                continue  # left for the questionnaire in Deadline or Die until the Sunday pass
             if inbox in colls:
                 body["collections"] = list(dict.fromkeys([c for c in colls if c != inbox] + [to_read, project]))
             if "paper-scout" not in names and MANUAL_TAG not in names:
@@ -682,7 +685,9 @@ def run() -> int:
         else:
             order_marker.write_text(f"Set the read order on {written} papers.\n")
             print(f"Set the read order on {written} papers.")
-    moved, tagged, errors = lib.sweep_manual(project, to_read)
+    # The Inbox is filed only by the Sunday pass (or a manual run), so a push never beats the app's questionnaire.
+    file_inbox = os.getenv("GITHUB_EVENT_NAME", "schedule") in ("schedule", "workflow_dispatch")
+    moved, tagged, errors = lib.sweep_manual(project, to_read, file_inbox)
     if errors:
         failed_any = True
         print("Could not file every paper you added:\n  " + "\n  ".join(errors))

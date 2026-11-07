@@ -658,6 +658,19 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.m.run(), 0)
         self.assertEqual([(u["key"], u["order"]) for u in json.loads((self.root / "unranked.json").read_text())], [("MINE", "B01")])
 
+    def test_a_push_leaves_the_inbox_for_the_app(self):
+        self.assertEqual(self.m.run(), 0)
+        names = {c["data"]["name"]: c["key"] for c in fake.collections}
+        fake.items.append({"key": "MINE", "version": 1, "data": {"itemType": "journalArticle", "title": "Paper I found",
+                                                                 "extra": "", "tags": [], "collections": [names["Inbox"]]}})
+        os.environ["GITHUB_EVENT_NAME"] = "push"
+        try:
+            self.assertEqual(self.m.run(), 0)
+        finally:
+            del os.environ["GITHUB_EVENT_NAME"]
+        self.assertEqual(fake.items[-1]["data"]["collections"], [names["Inbox"]])
+        self.assertEqual(fake.items[-1]["data"]["tags"], [])
+
     def test_every_question_code_has_a_short_numbered_tag(self):
         self.assertEqual(set(self.m.QUESTIONS), set(self.m.SUBJECTS))
         self.assertEqual(sorted(v[:2] for v in self.m.QUESTIONS.values()), [f"Q{i}" for i in range(1, 8)])
