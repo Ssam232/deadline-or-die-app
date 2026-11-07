@@ -188,6 +188,14 @@ def _fmt_block(t: dict, tz) -> str:
     return f"due {dl:%a %b} {dl.day}"
 
 
+def _to_go(t: dict, now: datetime) -> str:
+    """'4 days to go' under the date: counts to the booked day if there is one, else to the deadline."""
+    when = block_at(t, now.tzinfo) or datetime.fromisoformat(t.get("own_deadline") or t["deadline"])
+    n = (when.astimezone(now.tzinfo).date() - now.date()).days
+    return ("today" if n == 0 else "tomorrow" if n == 1 else f"{n} days to go" if n > 1 else
+            "yesterday" if n == -1 else f"{-n} days overdue")
+
+
 def dot(g: dict, tasks: list[dict], now: datetime, accent: str = "#f5c518") -> str:
     """Left → right: blocks flow into stages, stages into bigger stages, everything into the goal (🏁)."""
     tz = now.tzinfo
@@ -216,7 +224,7 @@ def dot(g: dict, tasks: list[dict], now: datetime, accent: str = "#f5c518") -> s
         fill = {"done": "#12312f", "redeemed": "#12312f", "failed": "#3a1214"}.get(st_, "#1b1f27")
         col = C["done"] if st_ in DONE else C["failed"] if st_ == "failed" else C["today"] if today else C["open"]
         icon = "✅ " if st_ in DONE else "💀 " if st_ == "failed" else "▶ " if today else ""
-        label = icon + t["title"] + "\n" + _fmt_block(t, tz)
+        label = icon + t["title"] + "\n" + _fmt_block(t, tz) + (("\n" + _to_go(t, now)) if st_ == "open" else "")
         lines.append(f't_{t["id"]} [label={_q(label)} fillcolor="{fill}" color="{col}" fontsize=10 '
                      f'fontcolor="{C["text"] if st_ == "open" else C["muted"]}"];')
         parent = f's_{t["node"]}' if t.get("node") and any(n["id"] == t["node"] for n in stages(g)) else "goal"
