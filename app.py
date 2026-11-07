@@ -6035,52 +6035,76 @@ def render_goal_task_form(state: dict, g: dict) -> None:
 
 
 def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str = "be") -> None:
-    """Move, resize, rename or drop a booked block. The Notion calendar card follows.
-    only=<task id>: edit that block straight away (tapped on the flow chart)."""
+    """Edit any open piece of the roadmap: booked blocks and blocks with just a deadline. Rename, re-stage, move the
+    deadline, book (or un-book) time for it, resize, or drop it. The Notion calendar card follows.
+    only=<task id>: edit that one straight away (tapped on the flow chart)."""
     gid = g["id"]
-    blocks = sorted((t for t in R.goal_tasks(g, state["tasks"]) if t.get("block") and t["status"] == "open"),
-                    key=lambda t: t["scheduled"])
+    items = sorted((t for t in R.goal_tasks(g, state["tasks"]) if t["status"] == "open"),
+                   key=lambda t: t.get("scheduled") or t["deadline"])
     if only:
-        blocks = [t for t in blocks if t["id"] == only]
-    if not blocks:
-        st.caption("No open blocks to edit yet." if not only else "That one's finished (or gone), so there's nothing to edit.")
+        items = [t for t in items if t["id"] == only]
+    if not items:
+        st.caption("Nothing open to edit yet." if not only else "That one's finished (or gone), so there's nothing to edit.")
         return
-    lbl = {t["id"]: f"{t['title']} · {R._fmt_block(t, TZ)}" for t in blocks}
+    lbl = {t["id"]: f"{t['title']} · {R._fmt_block(t, TZ)}" for t in items}
     tid = only or st.selectbox("Block", list(lbl), format_func=lbl.get, key=f"{kp}_pick_{gid}")
-    t = next(x for x in blocks if x["id"] == tid)
-    b = t["block"]
+    t = next(x for x in items if x["id"] == tid)
+    b = t.get("block") or {}
     opts = _stage_opts(g)
     k = f"{kp}_{tid}"
-    with st.form(f"{k}_form", border=False):
-        title = st.text_input("What", value=t["title"], key=f"{k}_t")
-        under = st.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
-                             if (t.get("node") or "") in opts else 0, format_func=opts.get, key=f"{k}_u")
-        c1, c2, c3 = st.columns(3)
-        day = c1.date_input("Day", value=max(now().date(), date.fromisoformat(b["date"])), min_value=now().date(),
-                            key=f"{k}_d")
-        hh, mm = (int(x) for x in b["start"].split(":"))
-        start = c2.time_input("Start", value=dtime(hh, mm), step=900, key=f"{k}_s")
-        lens = sorted(set(BLOCK_LENGTHS + [int(b["minutes"])]))
-        mins = c3.selectbox("Length", lens, index=lens.index(int(b["minutes"])), format_func=min_label, key=f"{k}_m")
-        save = st.form_submit_button("💾 Save changes", type="primary")
-    if save and (title or "").strip():
-        t["title"] = title.strip()
-        t["node"] = under or None
-        t.update(R.block_fields(day, start.strftime("%H:%M"), int(mins), TZ))
-        if t.get("own_deadline") and parse_dt(t["own_deadline"]) > parse_dt(t["deadline"]):
-            t["deadline"] = t["own_deadline"]  # a task with its own deadline stays due then, not at the booked day's end
+    due0 = parse_dt(t.get("own_deadline") or t["deadline"])
+    title = st.text_input("What", value=t["title"], key=f"{k}_t")
+    under = st.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
+                         if (t.get("node") or "") in opts else 0, format_func=opts.get, key=f"{k}_u")
+    c1, c2, c3 = st.columns(3)
+    due_d = c1.date_input("Deadline", value=max(now().date(), due0.date()), min_value=now().date(), key=f"{k}_dd")
+    due_t = c2.time_input("Due at", value=due0.timetz().replace(tzinfo=None), step=900, key=f"{k}_dt")
+    cur_m = int(b.get("minutes") or t.get("minutes") or 45)
+    lens = sorted(set(BLOCK_LENGTHS + [cur_m]))
+    mins = c3.selectbox("Length", lens, index=lens.index(cur_m), format_func=min_label, key=f"{k}_m")
+    book = st.toggle("🗓️ Booked time", value=bool(b), key=f"{k}_bk",
+                     help="On: it sits on a day and time (calendar, heads-up, that day's mission). Off: just the deadline.")
+    if book:
+        b1, b2 = st.columns(2)
+        bday0 = date.fromisoformat(b["date"]) if b else min(due_d, max(now().date(), due_d))
+        day = b1.date_input("Work on it", value=max(now().date(), bday0), min_value=now().date(), key=f"{k}_d")
+        hh, mm = (int(x) for x in (b.get("start") or "09:00").split(":"))
+        start = b2.time_input("Start", value=dtime(hh, mm), step=900, key=f"{k}_s")
+    if g.get("target") and t.get("due_before_goal") is not None:
+        st.caption(f"📅 Set relative to the goal's due date: saving keeps it relative "
+                   f"({(date.fromisoformat(g['target']) - due_d).days} days before).")
+    if st.button("💾 Save changes", type="primary", key=f"{k}_save") and (title or "").strip():
+        if book and day > due_d:
+            st.error("The booked day is after the deadline: move one of them.")
+            return
+        due = datetime.combine(due_d, due_t, TZ)
+        t["title"], t["node"] = title.strip(), under or None
+        if book:
+            t.update(R.block_fields(day, start.strftime("%H:%M"), int(mins), TZ))
+            t["own_deadline"] = due.isoformat()
+            t["deadline"] = max(due, parse_dt(t["deadline"])).isoformat()
+        else:
+            for k_ in ("block", "scheduled", "scheduled_time", "own_deadline"):
+                t.pop(k_, None)
+            t["deadline"] = due.isoformat()
+            if t.get("mission_day") and t["mission_day"] != now().date().isoformat():
+                t.pop("mission_day", None)
+        if t.get("due_before_goal") is not None and g.get("target"):
+            t["due_before_goal"] = (date.fromisoformat(g["target"]) - due_d).days
         if int(mins) != int(t.get("minutes") or 0):
             v = V.value(t["category"], int(mins))
             t.update(minutes=int(mins), reward=v["reward"], penalty=v["penalty"], xp=v["xp"],
                      difficulty=V.size_label(int(mins)))
         save_state(state)
-        flash(f"✏️ **{t['title']}** → {_when(R.block_at(t, TZ))} · {min_label(int(mins))}. Calendar updated.")
+        flash(f"✏️ **{t['title']}** · due {_when(due)}" + (f" · booked {_when(R.block_at(t, TZ))}" if book else "")
+              + ". Calendar updated.")
         st.rerun()
     if t.get("focus_min"):
         st.caption("Has focus time logged, so it can't be dropped: finish it instead.")
     elif st.button("🗑️ Drop this block (no penalty)", key=f"{k}_x",
-                   help="Planned time you no longer need. It leaves the roadmap and the calendar."):
+                   help="Planned work you no longer need. It leaves the roadmap and the calendar."):
         t.update(status="cancelled", cancelled_at=now().isoformat())
+        t.pop("mission_day", None)
         save_state(state)
         flash(f"🗑️ Dropped **{t['title']}** from the plan.")
         st.rerun()
@@ -6284,7 +6308,7 @@ def render_flow(state: dict, g: dict) -> None:
         elif sel.startswith("t_"):
             t = next((x for x in state["tasks"] if x["id"] == sel[2:]), None)
             c1.markdown(f"**✏️ {html.escape(t['title']) if t else 'Block'}**")
-            if t and t.get("block"):
+            if t and t["status"] == "open":  # booked or deadline-only: the same block editor
                 render_block_editor(state, g, only=t["id"], kp="fbe")
             else:
                 render_task_quick_edit(state, g, sel[2:])
@@ -6339,7 +6363,7 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
     """Stages (nestable) + scheduled work blocks for one goal."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t0, t1, t5, t4, t2, t3 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "📌 Add a task", "✏️ Edit blocks",
+    t0, t1, t5, t4, t2, t3 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "📌 Add with a deadline", "✏️ Edit blocks",
                                       "🧩 Add a stage", "🧩 Edit stages"])
     with t0:
         render_roadmap_draft(state, g)
