@@ -31,7 +31,7 @@ Rules:
   - placements/*.json place papers that are already in Zotero, such as ones added by hand. Each entry names the
     item's Zotero key, its title, an optional level and "before" title (placed like a new import, only if it has
     no order yet), and optional question "tags" (added; existing tags stay). The file then moves to done/.
-  - search-topics.json lists the extra topics you add in Deadline or Die (kept as subfolders of "Search topics" in Zotero), for the Sunday search.
+  - search-topics.json lists the extra search topics you add in Deadline or Die (kept as subfolders of "Search topics" in Zotero), for the Sunday search.
   - Every run (Sunday afternoon before the weekly search, and after every push) also keeps the order tidy: each level is renumbered 1, 2, 3...
     without gaps or repeats, and every paper still to read in "To Read" gets an absolute
     "Reading rank: N" line. Papers marked reading come first, then the rest in read order, then any
