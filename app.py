@@ -5264,6 +5264,10 @@ CSS = """<style>
 .dod-flow-chk{background:rgba(41,227,255,.08);border:1px solid rgba(41,227,255,.35);border-radius:10px;padding:8px 12px;
   margin:4px 0 8px;animation:dodPulse 2s ease-in-out infinite}.dod-flow-chk span{display:block;color:var(--muted);font-size:.85rem}
 @keyframes dodPulse{0%,100%{box-shadow:0 0 0 0 rgba(41,227,255,.0)}50%{box-shadow:0 0 0 4px rgba(41,227,255,.12)}}
+.dod-togo{display:flex;flex-wrap:wrap;gap:6px;margin:-.2rem 0 .6rem}
+.dod-togo span{font-size:.8rem;color:var(--muted);background:rgba(255,255,255,.04);border:1px solid var(--line);
+  border-radius:999px;padding:2px 10px}.dod-togo span b{color:#d8d4cb;font-weight:600}
+.dod-togo span.g{color:var(--y);border-color:var(--y)}
 /* ── showroom ── */
 .dod-sr{border-radius:14px;overflow:hidden;margin:-.2rem 0 .2rem}
 .dod-sr svg{display:block;transition:transform .35s ease}.dod-sr:hover svg{transform:scale(1.015)}
@@ -6067,7 +6071,8 @@ def render_goal_task_form(state: dict, g: dict) -> None:
     c1, c2, c3 = st.columns(3)
     if rel:
         span = max(0, (target - now().date()).days)
-        before = c1.number_input(f"Days before {target:%b} {target.day} (required)", 0, span, value=None, step=1,
+        before = c1.number_input(f"Days before {target:%b} {target.day} · {R.days_to_go(target, now().date())} (required)",
+                                 0, span, value=None, step=1,
                                  key=f"gt_before_{gid}", placeholder="e.g. 7",
                                  help="0 = on the goal's due date. Counts back from it, so the plan moves with the goal.")
         due_d = target - timedelta(days=int(before)) if before is not None else None
@@ -6077,8 +6082,9 @@ def render_goal_task_form(state: dict, g: dict) -> None:
     due_t = c2.time_input("Due at", value=dtime(23, 59), step=900, key=f"gt_due_t_{gid}")
     mins = c3.selectbox("Est. length", BLOCK_LENGTHS, index=3, format_func=min_label, key=f"gt_len_{gid}")
     if rel and due_d:
-        st.caption(f"📅 Due **{due_d:%a %b} {due_d.day}**" + (" · the goal's due date" if due_d == target else
-                   f" · {(target - due_d).days} day{'s' * ((target - due_d).days != 1)} before the goal's"))
+        st.caption(f"📅 Due **{due_d:%a %b} {due_d.day}** · **{R.days_to_go(due_d, now().date())}**"
+                   + (" · the goal's due date" if due_d == target else
+                      f" · {(target - due_d).days} day{'s' * ((target - due_d).days != 1)} before the goal's"))
     cat = st.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"gt_cat_{gid}")
     book = st.toggle("🗓️ Also book time for it", key=f"gt_book_{gid}",
                      help="Puts it on a day and time like a block (calendar, phone heads-up, that day's mission). "
@@ -6153,7 +6159,7 @@ def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str =
         start = b2.time_input("Start", value=dtime(hh, mm), step=900, key=f"{k}_s")
     if g.get("target") and t.get("due_before_goal") is not None:
         st.caption(f"📅 Set relative to the goal's due date: saving keeps it relative "
-                   f"({(date.fromisoformat(g['target']) - due_d).days} days before).")
+                   f"({(date.fromisoformat(g['target']) - due_d).days} days before) · due **{R.days_to_go(due_d, now().date())}**.")
     if st.button("💾 Save changes", type="primary", key=f"{k}_save") and (title or "").strip():
         if book and day > due_d:
             st.error("The booked day is after the deadline: move one of them.")
@@ -6240,6 +6246,11 @@ def render_roadmap_draft(state: dict, g: dict) -> None:
         "stage": st.column_config.SelectboxColumn("Stage", options=stage_names),
     })
     rows = [r for r in ed.to_dict("records") if r["add"] and str(r["step"]).strip() and to_date(r["day"])]
+    if rows:
+        st.markdown("<div class='dod-togo'>" + "".join(
+            f"<span><b>{html.escape(str(r['step'])[:28])}</b> · {R.days_to_go(to_date(r['day']), today)}</span>"
+            for r in sorted(rows, key=lambda r: to_date(r["day"]))) + f"<span class='g'>🏁 goal · "
+            f"{R.days_to_go(target, today)}</span></div>", unsafe_allow_html=True)
     if st.button(f"🗓️ Book {len(rows)} block{'s' * (len(rows) != 1)}", type="primary", key=f"rd_go_{gid}",
                  disabled=not rows):
         by_name = {n["title"]: n["id"] for n in R.stages(g)}

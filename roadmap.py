@@ -188,12 +188,16 @@ def _fmt_block(t: dict, tz) -> str:
     return f"due {dl:%a %b} {dl.day}"
 
 
+def days_to_go(d: date, today: date) -> str:
+    n = (d - today).days
+    return ("today" if n == 0 else "tomorrow" if n == 1 else f"{n} days to go" if n > 1 else
+            "yesterday" if n == -1 else f"{-n} days overdue")
+
+
 def _to_go(t: dict, now: datetime) -> str:
     """'4 days to go' under the date: counts to the booked day if there is one, else to the deadline."""
     when = block_at(t, now.tzinfo) or datetime.fromisoformat(t.get("own_deadline") or t["deadline"])
-    n = (when.astimezone(now.tzinfo).date() - now.date()).days
-    return ("today" if n == 0 else "tomorrow" if n == 1 else f"{n} days to go" if n > 1 else
-            "yesterday" if n == -1 else f"{-n} days overdue")
+    return days_to_go(when.astimezone(now.tzinfo).date(), now.date())
 
 
 def dot(g: dict, tasks: list[dict], now: datetime, accent: str = "#f5c518") -> str:
@@ -206,7 +210,10 @@ def dot(g: dict, tasks: list[dict], now: datetime, accent: str = "#f5c518") -> s
              f'penwidth=1.4 margin="0.14,0.07"];',
              f'edge [color="{C["edge"]}" arrowsize=0.6 penwidth=1.2];']
     pct = int(100 * d_all / n_all) if n_all else 0
-    lines.append(f'goal [label={_q("🏁 " + g["title"] + chr(10) + f"{d_all}/{n_all} · {pct}%")} '
+    gl = "🏁 " + g["title"] + chr(10) + f"{d_all}/{n_all} · {pct}%"
+    if g.get("target") and not (n_all and d_all == n_all):
+        gl += chr(10) + days_to_go(date.fromisoformat(g["target"]), now.date())
+    lines.append(f'goal [label={_q(gl)} '
                  f'fillcolor="{C["goal"]}" color="{C["done"] if n_all and d_all == n_all else accent}" '
                  f'penwidth=2.4 fontsize=13];')
     for n in stages(g):
