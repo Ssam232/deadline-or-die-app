@@ -3302,6 +3302,47 @@ def _set_start(state: dict, tid: str, key: str) -> None:
 ARR_TIMES = [f"{h:02d}:{m:02d}" for h in range(6, 24) for m in (0, 15, 30, 45)]
 
 
+def _due_choices(t: dict) -> tuple[list, str]:
+    """End-time options for a mission item: its current due time, then today's times still ahead.
+    Tasks made today can move anywhere today; older ones only earlier (no free extensions)."""
+    cur = parse_dt(t["deadline"]).astimezone(TZ)
+    cur_v = cur.strftime("%Y-%m-%dT%H:%M")
+    floor_ = now() + timedelta(minutes=10)
+    made_today = parse_dt(t.get("created") or t["deadline"]).astimezone(TZ).date() == now().date()
+    out = []
+    for hm in ARR_TIMES + ["23:59"]:
+        d_ = datetime.combine(now().date(), datetime.strptime(hm, "%H:%M").time(), TZ)
+        if d_ > floor_ and (made_today or d_ < cur):
+            out.append(d_.strftime("%Y-%m-%dT%H:%M"))
+    return sorted(set(out + [cur_v])), cur_v
+
+
+def _due_label(v: str) -> str:
+    d_ = datetime.strptime(v, "%Y-%m-%dT%H:%M")
+    hm = "midnight" if d_.strftime("%H:%M") == "23:59" else d_.strftime("%I:%M %p").lstrip("0")
+    return f"due: {hm}" if d_.date() == now().date() else f"due: {d_:%a} {hm}"
+
+
+def _set_due(state: dict, tid: str, key: str) -> None:
+    t = next((x for x in state["tasks"] if x["id"] == tid), None)
+    v = st.session_state.get(key)
+    if not t or not v:
+        return
+    new = datetime.strptime(v, "%Y-%m-%dT%H:%M").replace(tzinfo=TZ)
+    if new.strftime("%Y-%m-%dT%H:%M") == parse_dt(t["deadline"]).astimezone(TZ).strftime("%Y-%m-%dT%H:%M"):
+        return
+    t["deadline"] = new.isoformat()
+    t.pop("_sig", None)  # pushes the new due time to its Notion row (so sync doesn't read it as a moved date)
+    save_state(state)
+
+
+def _due_box(state: dict, t: dict, where) -> None:
+    opts_, cur_v = _due_choices(t)
+    k = f"arr_d_{t['id']}"
+    where.selectbox("Due", opts_, index=opts_.index(cur_v), key=k, format_func=_due_label,
+                    label_visibility="collapsed", on_change=_set_due, args=(state, t["id"], k))
+
+
 def render_arrange(state: dict, stt: dict) -> None:
     """↕ Arrange: put today's mission in the order you'll do it (the top one is Up next) and, optionally, a start
     time on any of them (the phone gives you a heads-up and a ▶ Start)."""
@@ -3320,10 +3361,13 @@ def render_arrange(state: dict, stt: dict) -> None:
         save_state(state)
         st.rerun()
     with fold("start_times", "⏰ Start times (optional)", any(t.get("start_set") for t in m)):
-        st.caption("Leave one on “any” and the day's plan decides. A set time gets a phone heads-up and a ▶ Start.")
+        st.caption("Leave a start on “any” and the day's plan decides. A set time gets a phone heads-up and a ▶ Start. "
+                   "The second box is when it's due: set today, it can move to any time today; otherwise only earlier.")
         for t in m:
-            c2, c3 = st.columns([3, 2], vertical_alignment="center")
-            c2.markdown(f"<div class='dod-arr'>{html.escape(t['title'])}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='dod-arr'>{html.escape(t['title'])}</div>", unsafe_allow_html=True)
+            with st.container(key=f"arrrow_{t['id']}"):
+                c3, c4 = st.columns(2, vertical_alignment="center")
+            _due_box(state, t, c4)
             cur = t.get("start_set") or ((t.get("block") or {}).get("start"))
             k = f"arr_t_{t['id']}"
             opts_ = ARR_TIMES if not cur or cur in ARR_TIMES else sorted(ARR_TIMES + [cur])
@@ -5417,6 +5461,11 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 [class*="st-key-mrow_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
 [class*="st-key-qrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
 [class*="st-key-bplays_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
+[class*="st-key-arrrow_"] [data-testid="stHorizontalBlock"],
+.st-key-today_grid [class*="st-key-arrrow_"] [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;flex-direction:row!important;gap:.4rem!important}
+[class*="st-key-arrrow_"] [data-testid="stColumn"]{min-width:0!important;width:50%!important;flex:1 1 50%!important}
+[class*="st-key-arrrow_"]{margin:-.2rem 0 .5rem}
+.st-key-fold_start_times .dod-arr{line-height:1.5;padding-top:.15rem}
 [class*="st-key-bplays_"] [data-testid="stColumn"]{min-width:0!important}
 [class*="st-key-bplays_"] [data-testid="stColumn"]:first-child p{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 [class*="st-key-bplays_"] [data-testid="stColumn"]:last-child{flex:0 0 3rem!important;width:3rem!important}
