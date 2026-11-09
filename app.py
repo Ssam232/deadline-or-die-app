@@ -5748,6 +5748,25 @@ CSS = """<style>
 .dod-car .chips span{font-size:.75rem;color:var(--muted);background:var(--card,#141821);border:1px solid var(--line);border-radius:999px;
   padding:2px 9px}
 .dod-car .why{color:#ff6a5c;font-size:.8rem;margin-top:6px}
+.dod-today{padding:2px 2px 4px}.dod-today .top{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.dod-today .when{color:var(--muted);font-size:.8rem;letter-spacing:.04em;text-transform:uppercase}
+.dod-today .ttl{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:800;font-size:1.7rem;line-height:1.15;color:#ece8df}
+.dod-today .sub{color:var(--muted);font-size:.85rem;margin-top:3px}
+.dod-today .rings{display:flex;align-items:center;gap:12px}.dod-today .lg{display:flex;flex-direction:column;gap:3px;font-size:.8rem;font-weight:600}
+.dod-today .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:12px;overflow:hidden;margin:12px 0}
+.dod-today .tiles div{background:var(--card,#141821);padding:9px 12px;display:flex;flex-direction:column;gap:1px}
+.dod-today .tiles span{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
+.dod-today .tiles b{font-size:1.35rem;color:#ece8df;font-variant-numeric:tabular-nums}
+.dod-today .tiles i{font-style:normal;color:var(--muted);font-size:.74rem;min-height:1em}
+.dod-today .tl .lab{color:var(--muted);font-size:.75rem;margin-bottom:4px}
+.dod-today .splits{width:100%;border-collapse:collapse;margin-top:10px;font-size:.84rem}
+.dod-today .splits th{color:var(--muted);font-weight:600;text-align:left;font-size:.72rem;text-transform:uppercase;padding:4px 6px;
+  border-bottom:1px solid var(--line)}
+.dod-today .splits td{padding:5px 6px;border-bottom:1px solid var(--line);color:#d6d2c8}
+.dod-today .splits td:nth-child(3){font-variant-numeric:tabular-nums;white-space:nowrap}
+.dod-today .none{color:var(--muted);font-size:.85rem;margin-top:10px}
+@media (max-width:640px){.dod-today .tiles{grid-template-columns:repeat(2,1fr)}.dod-today .ttl{font-size:1.4rem}}
 .dod-season{border:1px solid var(--line);border-radius:16px;padding:10px 14px 12px;margin:0 0 .5rem;
   background:radial-gradient(120% 90% at 50% 0%,#232033,#121620 70%)}
 .dod-season .hd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
@@ -7355,6 +7374,119 @@ def _period(kind: str, back: int, today: date) -> tuple[date, date, str]:
     return lo, hi, str(lo.year)
 
 
+def _day_name(peak_h: int | None, focus: float, goal: int) -> str:
+    """A Strava-style title for the day from when you worked and how much."""
+    if not focus:
+        return "Rest day so far"
+    when = ("Early" if peak_h < 8 else "Morning" if peak_h < 12 else "Afternoon" if peak_h < 17
+            else "Evening" if peak_h < 21 else "Late-night") if peak_h is not None else "Focus"
+    size = "Monster" if focus >= goal * 1.5 else "Big" if focus >= goal else "Solid" if focus >= goal * .5 else "Quick"
+    kind = "grind" if focus >= goal else "session" if focus < 90 else "block"
+    return f"{size} {when.lower() if size else when} {kind}".capitalize()
+
+
+def _rings_svg(vals: list[tuple[float, str]], size: int = 132) -> str:
+    """Activity rings: (fraction, colour) from the outside in; past 100% the ring laps itself."""
+    out = [f'<svg viewBox="0 0 {size} {size}" width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg">']
+    for i, (f, col) in enumerate(vals):
+        r = size / 2 - 9 - i * 15
+        circ = 2 * math.pi * r
+        out.append(f'<circle cx="{size / 2}" cy="{size / 2}" r="{r:.1f}" fill="none" stroke="{col}" stroke-opacity=".18" stroke-width="11"/>')
+        f1 = min(f, 1.0)
+        if f1 > 0:
+            out.append(f'<circle cx="{size / 2}" cy="{size / 2}" r="{r:.1f}" fill="none" stroke="{col}" stroke-width="11" '
+                       f'stroke-linecap="round" stroke-dasharray="{circ * f1:.1f} {circ:.1f}" '
+                       f'transform="rotate(-90 {size / 2} {size / 2})"/>')
+        if f > 1:
+            f2 = min(f - 1, 1.0)
+            out.append(f'<circle cx="{size / 2}" cy="{size / 2}" r="{r:.1f}" fill="none" stroke="{_mix(col, "#ffffff", .25)}" '
+                       f'stroke-width="11" stroke-linecap="round" stroke-dasharray="{circ * f2:.1f} {circ:.1f}" '
+                       f'transform="rotate(-90 {size / 2} {size / 2})"/>')
+    return "".join(out) + "</svg>"
+
+
+def render_today_recap(state: dict) -> None:
+    """🏁 Today, like a post-workout screen: a name for the day, activity rings, the big numbers, a timeline of your
+    sessions over a heat strip of the hours, and the splits."""
+    n_ = now()
+    today = n_.date()
+    acc = accent(state)[0]
+    goal = int(NU.cfg(state)["focus_goal"])
+    logs = sorted((x for x in state.get("focus_log", []) if (parse_dt(x["start"]).astimezone(TZ).date() if x.get("start")
+                                                               else date.fromisoformat(x["date"])) == today),
+                  key=lambda x: x.get("start") or "")
+    g = I.focus_grid(state, today, today, TZ)
+    focus = sum(g["day"].values())
+    week = I.focus_grid(state, today - timedelta(days=7), today - timedelta(days=1), TZ)
+    avg7 = sum(week["day"].values()) / 7
+    longest = max((float(x.get("min", 0)) for x in logs), default=0.0)
+    hours = {h: g["dh"].get((today, h), 0.0) for h in range(5, 24)}
+    peak = max(hours, key=hours.get) if focus else None
+    stt = daily.status(state, n_)
+    m_all = [t for t in stt["mission"] if t["status"] != "cancelled"]
+    m_done = len(stt["mission_done"])
+    done = [t for t in state["tasks"] if t.get("status") in ("done", "redeemed") and t.get("completed_at")
+            and parse_dt(t["completed_at"]).astimezone(TZ).date() == today]
+    led = [e for e in state.get("ledger", []) if parse_dt(e["ts"]).astimezone(TZ).date() == today]
+    earned = sum(e["delta"] for e in led if e["delta"] > 0)
+    net = sum(e["delta"] for e in led)
+    races = [r for r in state.get("races", []) if (r.get("ts") or "")[:10] == today.isoformat()]
+    title = _day_name(peak, focus, goal)
+    rings = _rings_svg([(focus / goal if goal else 0, "#ff375f"), (m_done / len(m_all) if m_all else 0, "#3ddc84"),
+                        (longest / 60, "#29e3ff")])
+    vs = focus - avg7
+    # timeline: 5 AM → midnight, every session as a block; the hour strip under it is today's row of the heatmap
+    H0, H1, W_ = 5, 24, 600.0
+    def xh(t_):  # noqa: E306
+        return (t_ - H0) / (H1 - H0) * W_
+    blocks = []
+    for x in logs:
+        st_ = parse_dt(x["start"]).astimezone(TZ)
+        a = st_.hour + st_.minute / 60
+        b = a + float(x.get("min", 0)) / 60
+        if b < H0 or a > H1:
+            continue
+        t_ = next((t["title"] for t in state["tasks"] if t["id"] == x.get("task")), "Focus")
+        blocks.append(f'<rect x="{xh(max(a, H0)):.1f}" y="6" width="{max(2.5, xh(min(b, H1)) - xh(max(a, H0))):.1f}" height="26" rx="5" '
+                      f'fill="{acc}"><title>{html.escape(t_[:60])} · {st_:%I:%M %p} · {hmin(float(x.get("min", 0)))}</title></rect>')
+    top_ = max(hours.values()) or 1
+    strip = "".join(f'<rect x="{xh(h) + 1:.1f}" y="40" width="{W_ / (H1 - H0) - 2:.1f}" height="14" rx="3" '
+                    f'fill="{acc if v else "#262b36"}" fill-opacity="{(.18 + .82 * v / top_) if v else 1:.2f}">'
+                    f'<title>{_hlabel(h)} · {hmin(v)}</title></rect>' for h, v in hours.items())
+    ticks = "".join(f'<text x="{xh(h):.1f}" y="70" font-size="10" fill="#8b909c" text-anchor="middle">{_hlabel(h)}</text>'
+                    for h in (6, 9, 12, 15, 18, 21))
+    nowx = xh(n_.hour + n_.minute / 60)
+    now_mk = (f'<line x1="{nowx:.1f}" y1="0" x2="{nowx:.1f}" y2="56" stroke="#ece8df" stroke-opacity=".5" stroke-dasharray="2 3"/>'
+              if H0 <= n_.hour < H1 else "")
+    timeline = (f'<svg viewBox="0 0 {W_:.0f} 74" width="100%" xmlns="http://www.w3.org/2000/svg">'
+                f'<rect x="0" y="6" width="{W_:.0f}" height="26" rx="6" fill="#1b1f27"/>{"".join(blocks)}{strip}{now_mk}{ticks}</svg>')
+    tiles = [("Focus", hmin(focus), (f"{'+' if vs >= 0 else '−'}{hmin(abs(vs))} vs your 7-day avg" if avg7 or focus else "")),
+             ("Sessions", str(len(logs)), f"avg {hmin(focus / len(logs))}" if logs else ""),
+             ("Longest stint", hmin(longest) if longest else "—", "an hour block ✓" if longest >= 60 else
+              (f"{hmin(60 - longest)} short of an hour" if longest else "")),
+             ("Finished", str(len(done)), f"mission {m_done}/{len(m_all)}" if m_all else ""),
+             ("Coins", f"{'+' if net >= 0 else '−'}{abs(net)}", f"earned {earned}" if earned else ""),
+             ("Best hour", _hlabel(peak) if peak is not None else "—", hmin(hours[peak]) if peak is not None else "")]
+    splits = "".join(
+        f"<tr><td>{parse_dt(x['start']).astimezone(TZ).strftime('%I:%M %p').lstrip('0')}</td><td>"
+        f"{html.escape(next((t['title'] for t in state['tasks'] if t['id'] == x.get('task')), 'Focus')[:46])}</td>"
+        f"<td>{hmin(float(x.get('min', 0)))}</td><td>{'🏁' if x.get('full') else ''}{'📦' * len(x.get('drops', []) or [])}</td></tr>"
+        for x in logs)
+    st.markdown(
+        f"<div class='dod-today'><div class='top'><div><div class='when'>{n_:%A, %B} {n_.day} · Today</div>"
+        f"<div class='ttl'>{html.escape(title)}</div>"
+        f"<div class='sub'>🔥 {stt['day_streak']}-day streak · {'✅ qualified' if stt['qualified'] else '⏳ not qualified yet'}"
+        + (f" · 🏎️ {len(races)} race{'s' * (len(races) != 1)}" if races else "") + "</div></div>"
+        f"<div class='rings'>{rings}<div class='lg'><span style='color:#ff375f'>● Focus {int(min(999, 100 * focus / goal)) if goal else 0}%</span>"
+        f"<span style='color:#3ddc84'>● Mission {m_done}/{len(m_all)}</span>"
+        f"<span style='color:#29e3ff'>● Hour block {int(min(100, 100 * longest / 60))}%</span></div></div></div>"
+        "<div class='tiles'>" + "".join(f"<div><span>{a}</span><b>{b}</b><i>{c}</i></div>" for a, b, c in tiles) + "</div>"
+        f"<div class='tl'><div class='lab'>Today's sessions · the strip is today's row of the heatmap</div>{timeline}</div>"
+        + (f"<table class='splits'><tr><th>Start</th><th>Task</th><th>Time</th><th></th></tr>{splits}</table>" if logs
+           else "<div class='none'>No timer sessions yet today. Start one from Today and this fills in live.</div>")
+        + "</div>", unsafe_allow_html=True)
+
+
 def render_focus_periods(state: dict) -> None:
     """⏱️ When you actually work: timer sessions only, by week / month / year, with the previous period to compare."""
     import altair as alt
@@ -7491,6 +7623,8 @@ with tab_stats:
     import altair as alt
     _acc = accent(state)[0]
     VIZ = {**VIZ, "normal": _acc, "light": _mix(_acc, "#ffffff", .55)}
+    with fold("stats_today", f"🏁 Today · {now():%a %b} {now().day}", card=True):
+        render_today_recap(state)
     full = I.history(state, now().date() + timedelta(days=1), TZ)  # last 28 days, today included
     k = st.container(key="stat_kpis").columns(4)
     k[0].metric("Finished · 28 days", full["done"],
@@ -7498,7 +7632,7 @@ with tab_stats:
     rate = full["on_time"] / full["done"] if full["done"] else None
     k[1].metric("On time", f"{rate:.0%}" if rate is not None else "—",
                 delta=f"{full['failed']} missed" if full["failed"] else None, delta_color="inverse")
-    k[2].metric("Focus", hmin(full['focus_min']), help="Timer-logged work minutes (breaks excluded).")
+    k[2].metric("Focus", (lambda m_: f"{m_ // 60}h {m_ % 60:02d}m" if m_ >= 60 else f"{m_}m")(int(round(full['focus_min']))), help="Timer-logged work minutes (breaks excluded).")
     k[3].metric("Active days", f"{full['active_days']}/28")
     zc_ = zotero_cfg(state)
     if zc_:
