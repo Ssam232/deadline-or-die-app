@@ -7413,8 +7413,9 @@ def render_today_recap(state: dict) -> None:
     acc = accent(state)[0]
     goal = int(NU.cfg(state)["focus_goal"])
     logs = sorted((x for x in state.get("focus_log", []) if (parse_dt(x["start"]).astimezone(TZ).date() if x.get("start")
-                                                               else date.fromisoformat(x["date"])) == today),
+                                                               else date.fromisoformat(x["date"]) if x.get("date") else None) == today),
                   key=lambda x: x.get("start") or "")
+    timed = [x for x in logs if x.get("start")]  # (very old entries have no start time: counted, not drawn)
     g = I.focus_grid(state, today, today, TZ)
     focus = sum(g["day"].values())
     week = I.focus_grid(state, today - timedelta(days=7), today - timedelta(days=1), TZ)
@@ -7440,7 +7441,7 @@ def render_today_recap(state: dict) -> None:
     def xh(t_):  # noqa: E306
         return (t_ - H0) / (H1 - H0) * W_
     blocks = []
-    for x in logs:
+    for x in timed:
         st_ = parse_dt(x["start"]).astimezone(TZ)
         a = st_.hour + st_.minute / 60
         b = a + float(x.get("min", 0)) / 60
@@ -7470,8 +7471,8 @@ def render_today_recap(state: dict) -> None:
     splits = "".join(
         f"<tr><td>{parse_dt(x['start']).astimezone(TZ).strftime('%I:%M %p').lstrip('0')}</td><td>"
         f"{html.escape(next((t['title'] for t in state['tasks'] if t['id'] == x.get('task')), 'Focus')[:46])}</td>"
-        f"<td>{hmin(float(x.get('min', 0)))}</td><td>{'🏁' if x.get('full') else ''}{'📦' * len(x.get('drops', []) or [])}</td></tr>"
-        for x in logs)
+        f"<td>{hmin(float(x.get('min', 0)))}</td><td>{'🏁' if x.get('full') else ''}{'📦' * min(5, (lambda d_: len(d_) if isinstance(d_, list) else int(d_ or 0))(x.get('drops')))}</td></tr>"
+        for x in timed)
     st.markdown(
         f"<div class='dod-today'><div class='top'><div><div class='when'>{n_:%A, %B} {n_.day} · Today</div>"
         f"<div class='ttl'>{html.escape(title)}</div>"
@@ -7482,7 +7483,7 @@ def render_today_recap(state: dict) -> None:
         f"<span style='color:#29e3ff'>● Hour block {int(min(100, 100 * longest / 60))}%</span></div></div></div>"
         "<div class='tiles'>" + "".join(f"<div><span>{a}</span><b>{b}</b><i>{c}</i></div>" for a, b, c in tiles) + "</div>"
         f"<div class='tl'><div class='lab'>Today's sessions · the strip is today's row of the heatmap</div>{timeline}</div>"
-        + (f"<table class='splits'><tr><th>Start</th><th>Task</th><th>Time</th><th></th></tr>{splits}</table>" if logs
+        + (f"<table class='splits'><tr><th>Start</th><th>Task</th><th>Time</th><th></th></tr>{splits}</table>" if timed
            else "<div class='none'>No timer sessions yet today. Start one from Today and this fills in live.</div>")
         + "</div>", unsafe_allow_html=True)
 
