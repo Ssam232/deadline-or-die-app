@@ -3403,7 +3403,7 @@ def render_up_next(state: dict) -> None:
         t = next((x for x in state["tasks"] if x["id"] == tm.get("task_id")), None)
         st.markdown(f"<div class='dod-next run'><div class='k'>⏱️ In the zone</div>"
                     f"<div class='t'>{html.escape(t['title'] if t else 'Focus session')}</div>"
-                    "<div class='m'>The timer's running on the right. Phone face-down.</div></div>",
+                    "<div class='m'>The clock's running. Phone face-down.</div></div>",
                     unsafe_allow_html=True)
         return
     t = _next_up(state, stt)
@@ -4117,7 +4117,7 @@ def _timer_task(state: dict, name: str, planned: int, wall: int) -> dict:
     return t
 
 
-def render_timer(state: dict) -> None:
+def render_timer(state: dict, big: bool = False) -> None:
     tm = state.get("timer")
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
                     key=lambda t: (t.get("mission_day") != now().date().isoformat(), t["deadline"]))
@@ -4207,7 +4207,7 @@ def render_timer(state: dict) -> None:
             st.rerun()
         title = (t["title"] if t else "—")
         st.markdown(f"#### ⏱️ {html.escape(title[:42] + ('…' if len(title) > 42 else ''))}")
-        _timer_ring(state, tm)
+        _timer_ring(state, tm, big=big)
         _timer_controls(state)
 
 
@@ -4334,7 +4334,125 @@ def track_for(tm: dict) -> dict:
     return TR.TRACKS[int(hashlib.md5(tm["start"].encode()).hexdigest(), 16) % len(TR.TRACKS)]
 
 
-def _timer_ring(state: dict, tm: dict) -> None:
+# ── one clock everywhere: the big ring, the floating mini, the pop-out window and the browser tab title ──
+# Plain JS (no f-string): dodTick(state, now) → what to show. The pop-out manager is injected into the page
+# itself once, so it outlives Streamlit's reruns and keeps the pop-out window and tab title ticking.
+TIMER_CORE_JS = r"""
+function dodMMSS(ms){var a=Math.floor(Math.abs(ms)/1000);return String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');}
+function dodTick(s,now){
+ now=now+(s.OFF||0);
+ var e=Math.max(0,(now-s.S-s.PT-(s.PA?now-s.PA:0)+s.SK)/60000),W=s.W,B=s.B,T=s.T;
+ var wd=(!W||!B)?e:Math.floor(e/(W+B))*W+Math.min(e%(W+B),W);wd=Math.min(wd,T);
+ var ph='work',left=(T-e)*60000;
+ if(wd>=T)ph='done';else if(W&&B){var c=W+B,r=e%c;if(r<W)left=Math.min(W-r,T-wd)*60000;else{ph='break';left=(c-r)*60000;}}
+ var o={frac:s.FL?(e%25)/25:wd/T,color:s.ACC};
+ if(s.PA){o.time=s.FL?dodMMSS(e*60000):dodMMSS(left);o.line='Paused '+dodMMSS(now-s.PA);o.color='#8b909c';}
+ else if(s.FL){o.time=dodMMSS(e*60000);o.line=e>=s.CHK?'🌊 Check-in: still flowing?':'🌊 Flow · check-in at '+s.CHK+' min';
+   if(e>=s.CHK)o.color='#29e3ff';}
+ else if(ph==='done'){o.time='+'+dodMMSS((e-s.WALL)*60000);o.line='🏁 Done. Stop & log it.';o.color='#ff6a5c';}
+ else if(ph==='break'){o.time=dodMMSS(left);o.line='🔧 Break';o.color='#2ec4b6';}
+ else{o.time=dodMMSS(left);o.line=Math.round(wd)+' of '+T+' min';}
+ return o;}
+"""
+
+POP_MANAGER_JS = TIMER_CORE_JS + r"""
+(function(){
+ if(window.__dodPopInit)return;window.__dodPopInit=1;
+ var W=null,base=null;
+ function css(){return '*{box-sizing:border-box}html,body{margin:0;height:100%;background:#0e1117;color:#ece8df;'+
+  'font-family:system-ui,-apple-system,sans-serif}body{display:flex;flex-direction:column;justify-content:center;'+
+  'align-items:center;gap:6px;padding:12px;text-align:center}#n{font-size:13px;color:#8b909c;max-width:100%;'+
+  'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#t{font:700 min(22vw,30vh)/1 system-ui,sans-serif;'+
+  'font-variant-numeric:tabular-nums;letter-spacing:-.02em}#p{font-size:13px;color:#8b909c}'+
+  '#b{width:86%;height:5px;border-radius:9px;background:#262b36;overflow:hidden}#b i{display:block;height:100%;width:0}';}
+ function build(d){d.title='⏱️ Focus timer';var st=d.createElement('style');st.textContent=css();d.head.appendChild(st);
+  d.body.innerHTML='<div id="n"></div><div id="t">--:--</div><div id="b"><i></i></div><div id="p"></div>';}
+ window.__dodPopOpen=function(){
+  if(W&&!W.closed){try{W.focus();}catch(e){}return true;}
+  var done=function(w){if(!w)return false;W=w;try{build(w.document);}catch(e){}return true;};
+  if(window.documentPictureInPicture){  // Chrome desktop: a window that floats over every app
+   return documentPictureInPicture.requestWindow({width:300,height:190}).then(done).catch(function(){
+    return done(window.open('','dodtimer','popup,width=320,height=220'));});}
+  return done(window.open('','dodtimer','popup,width=320,height=220'));};
+ setInterval(function(){
+  var s=window.__dodTimer,d=document;
+  if(base===null)base=d.title;
+  if(s){var o=dodTick(s,Date.now());
+   if(d.title.indexOf('SESSION DONE')<0)d.title='⏱️ '+o.time+' · '+s.title;
+   if(W&&!W.closed){try{var w=W.document;w.getElementById('t').textContent=o.time;w.getElementById('t').style.color=o.color;
+    w.getElementById('p').textContent=o.line;w.getElementById('n').textContent=s.title;
+    var i=w.querySelector('#b i');i.style.width=(Math.min(1,o.frac)*100)+'%';i.style.background=o.color;}catch(e){}}}
+  else{if(d.title.indexOf('⏱️')===0)d.title=base||'Deadline or Die';d.body.classList.remove('dod-focus');
+   if(W&&!W.closed){try{W.document.getElementById('t').textContent='✓';W.document.getElementById('p').textContent='Session over';
+    W.document.querySelector('#b i').style.width='0';}catch(e){}}}
+ },500);
+})();
+"""
+
+
+def _timer_js_state(state: dict, tm: dict | None) -> str:
+    """The running timer as JSON for the client clocks (our own numbers and the task's name, JSON-escaped)."""
+    if not tm:
+        return "null"
+    t = next((x for x in state["tasks"] if x["id"] == tm.get("task_id")), None)
+    return json.dumps({
+        "S": int(parse_dt(tm["start"]).timestamp() * 1000), "PT": int(tm.get("paused_total", 0.0) * 1000),
+        "SK": int(tm.get("skipped", 0.0) * 1000),
+        "PA": int(parse_dt(tm["paused_at"]).timestamp() * 1000) if tm.get("paused_at") else 0,
+        "W": tm.get("work") or 0, "B": tm.get("brk") or 0, "T": tm["planned"],
+        "WALL": PM.wall_minutes(tm["planned"], tm.get("work") or None, tm.get("brk") or None),
+        "FL": bool(tm.get("flow")), "CHK": int(tm.get("check", 0)), "ACC": accent(state)[0],
+        "title": (t["title"] if t else "Focus session")[:60]}).replace("</", "<\\/")
+
+
+def _timer_hook_js(state_json: str) -> str:
+    """Runs in each clock frame: hands the page the latest timer and installs the pop-out manager once."""
+    mgr = json.dumps(POP_MANAGER_JS).replace("</", "<\\/")
+    return (f"(function(){{var P;try{{P=parent;P.document;}}catch(e){{return;}}"
+            f"var s={state_json};if(s)s.OFF=(function(d){{return Math.abs(d)>120000?Math.round(d/900000)*900000:0}})"
+            f"({int(time.time() // 60 * 60000)}-Date.now());P.__dodTimer=s;"
+            f"if(!P.__dodPopInit){{var sc=P.document.createElement('script');sc.textContent={mgr};"
+            f"P.document.body.appendChild(sc);sc.remove();}}}})();")
+
+
+def _popout_click_js() -> str:
+    return "try{parent.__dodPopOpen&&parent.__dodPopOpen();}catch(e){}"
+
+
+def render_timer_float(state: dict) -> None:
+    """Off the Today page: a small clock floating in the corner (tap Open to jump back, ⧉ to pop it out).
+    When no timer runs it still tells the page (and any pop-out) the session is over."""
+    tm = state.get("timer")
+    _embed = st.iframe if hasattr(st, "iframe") else __import__("streamlit.components.v1", fromlist=["html"]).html
+    if not tm:
+        if st.session_state.pop("_had_timer", False):
+            with st.container(key="timer_gone"):
+                _embed(f"<script>{_timer_hook_js('null')}</script>", height=1)
+        return
+    st.session_state["_had_timer"] = True
+    if st.session_state.get("nav", "🏁 Today") == "🏁 Today":
+        return
+    sj = _timer_js_state(state, tm)
+    with st.container(key="float_timer"):
+        c1, c2 = st.columns([3, 1.1], vertical_alignment="center")
+        with c1:
+            _embed(f"""<style>body{{margin:0;font-family:system-ui,-apple-system,sans-serif;color:#ece8df;overflow:hidden}}
+.r{{display:flex;align-items:center;gap:8px;height:52px}}#t{{font:700 22px/1 system-ui,sans-serif;font-variant-numeric:tabular-nums}}
+.m{{min-width:0;flex:1}}#n{{font-size:12px;color:#ece8df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+#p{{font-size:11px;color:#8b909c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+button{{background:#262b36;border:1px solid #3a4050;color:#ece8df;border-radius:8px;font-size:15px;width:34px;height:34px;cursor:pointer;flex:none}}</style>
+<div class="r"><div id="t">--:--</div><div class="m"><div id="n"></div><div id="p"></div></div>
+<button title="Pop out into its own window" onclick="{_popout_click_js()}">⧉</button></div>
+<script>{TIMER_CORE_JS}
+var S={sj};document.getElementById('n').textContent=S.title;{_timer_hook_js(sj)}
+S.OFF=parent.__dodTimer?parent.__dodTimer.OFF:0;
+function f(){{var o=dodTick(S,Date.now());var t=document.getElementById('t');t.textContent=o.time;t.style.color=o.color;
+document.getElementById('p').textContent=o.line;}}f();setInterval(f,500);</script>""", height=52)
+        c2.button("Open", key="float_open", use_container_width=True, on_click=_go_tab, args=("🏁 Today",),
+                  help="Back to the timer on Today")
+
+
+def _timer_ring(state: dict, tm: dict, big: bool = False) -> None:
     """Your car lapping a real circuit, clock underneath. Pure client-side clock; only our own data goes in."""
     work, brk, T = tm.get("work") or 0, tm.get("brk") or 0, tm["planned"]
     start_ms = int(parse_dt(tm["start"]).timestamp() * 1000)
@@ -4354,12 +4472,14 @@ def _timer_ring(state: dict, tm: dict) -> None:
                                 G.effective(car["parts"], mid))
     ext = int(tm.get("ext", 0))
     label = html.escape(f"{trk['name'].upper()} · {trk['km']:.3f} KM · {trk['series']}")
+    pop, hook = _popout_click_js(), _timer_hook_js(_timer_js_state(state, tm))
     _embed(f"""
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@700&display=swap" rel="stylesheet">
 <style>
 body{{margin:0;font-family:system-ui,sans-serif;color:#ece8df;overflow:hidden}}
 .w{{display:flex;flex-direction:column;align-items:center}}
-svg{{width:100%;max-width:340px;height:auto;display:block}}
+svg{{width:100%;max-width:{660 if big else 340}px;height:auto;display:block}}
+.bt{{display:flex;gap:8px;justify-content:center;margin:8px 0 2px}}.bt button{{background:#1f232c;border:1px solid #343a47;color:#ece8df;border-radius:999px;padding:6px 14px;font:600 13px system-ui,sans-serif;cursor:pointer}}.bt button:hover{{border-color:{acc}}}#s{{font-size:{15 if big else 12.5}px!important}}
 #t{{font:700 27px 'Saira Semi Condensed',system-ui,sans-serif;font-variant-numeric:tabular-nums}}
 .w{{position:relative;overflow:hidden}}
 #flag{{position:absolute;top:14%;left:-110px;width:96px;height:118px;pointer-events:none;opacity:0;z-index:5}}
@@ -4395,7 +4515,7 @@ svg{{width:100%;max-width:340px;height:auto;display:block}}
  <text id="t" x="146" y="164" text-anchor="end"></text>
  <text id="p" x="154" y="160" text-anchor="start"></text>
  <g id="car"><circle id="halo" r="10" fill="#f5c518"/>{sprite}</g>
-</svg><div id="flag"><i></i><b></b></div><div id="s"></div></div>
+</svg><div id="flag"><i></i><b></b></div><div id="s"></div><div class="bt"><button onclick="{pop}" title="Open the clock in its own small window">⧉ Pop out</button><button id="fs" onclick="dodFocus()" title="Just the timer, filling the screen">⛶ Full screen</button></div></div>
 <script>
 // sounds mix with your music instead of pausing it (iOS 17+ audio session; harmless elsewhere)
 try{{if(navigator.audioSession)navigator.audioSession.type='ambient';
@@ -4499,7 +4619,20 @@ function frame(){{
   if(ph==='done'&&!PA)finish();}}
  requestAnimationFrame(frame);}}
 frame();
-</script>""", height=232)  # our own static markup only — no user content goes in here
+{hook}
+function dodFocus(){{var P;try{{P=parent.document;}}catch(e){{return;}}
+ var on=!P.body.classList.contains('dod-focus');P.body.classList.toggle('dod-focus',on);
+ try{{var bg=getComputedStyle(P.querySelector('.stApp')).backgroundColor;P.body.style.setProperty('--dodbg',bg);}}catch(e){{}}
+ try{{if(on){{var el=P.documentElement;(el.requestFullscreen||el.webkitRequestFullscreen||function(){{}}).call(el);}}
+  else if(P.fullscreenElement||P.webkitFullscreenElement){{(P.exitFullscreen||P.webkitExitFullscreen).call(P);}}}}catch(e){{}}
+ fsLbl();}}
+function fsLbl(){{try{{document.getElementById('fs').textContent=parent.document.body.classList.contains('dod-focus')?'✕ Exit full screen':'⛶ Full screen';}}catch(e){{}}}}
+fsLbl();
+try{{parent.document.addEventListener('fullscreenchange',function(){{if(!parent.document.fullscreenElement){{parent.document.body.classList.remove('dod-focus');fsLbl();}}}});}}catch(e){{}}
+function fit(){{try{{var h=Math.ceil(document.getElementById('w').getBoundingClientRect().height+6),el=window.frameElement;
+ for(var i=0;i<4&&el;i++){{var tid=el.getAttribute('data-testid');if(i===0||el.style.height||tid==='stElementContainer'){{el.style.setProperty('height',h+'px','important');el.style.setProperty('min-height','0','important');el.style.setProperty('flex','none','important');}}if(tid==='stElementContainer')break;el=el.parentElement;}}}}catch(e){{}}}}
+fit();new ResizeObserver(fit).observe(document.body);
+</script>""", height=(380 if big else 262))  # our own static markup only — no user content goes in here
 
 
 FLOW_STEP = 15          # minutes per "keep going"
@@ -5467,6 +5600,24 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 [class*="st-key-mrow_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
 [class*="st-key-qrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
 [class*="st-key-bplays_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
+.st-key-tg_live{max-width:860px;margin:0 auto .6rem;width:100%}
+.st-key-tg_live h4{font-size:1.35rem!important;text-align:center}
+body.dod-focus .st-key-tg_live{position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:0!important;
+  width:100vw!important;height:100vh!important;height:100dvh!important;max-width:none!important;margin:0!important;z-index:1000001;
+  background:var(--dodbg,#0e1117);overflow-y:auto!important;padding:max(2vh,10px) max(4vw,10px)!important;
+  display:flex!important;flex-direction:column!important;justify-content:flex-start!important;box-sizing:border-box}
+body.dod-focus .st-key-tg_live > div{max-width:900px;width:100%;margin:auto!important}
+body.dod-focus{overflow:hidden}
+body.dod-focus [data-testid="stTabPanel"],body.dod-focus [data-testid="stMain"],body.dod-focus .stMain{transform:none!important;contain:none!important;animation:none!important}
+.st-key-float_timer{position:fixed!important;right:16px;bottom:16px;z-index:999990;width:340px!important;
+  background:var(--panel,#1b1f27);border:1px solid var(--line,#2c313c);border-radius:14px;padding:6px 10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.st-key-float_timer [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;flex-direction:row!important;gap:.5rem}
+.st-key-float_timer [data-testid="stColumn"]{min-width:0!important}
+.st-key-float_timer [data-testid="stColumn"]:last-child{flex:0 0 74px!important;width:74px!important}
+.st-key-float_timer iframe{display:block}
+.st-key-timer_gone{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0}
+@media (max-width:640px){.st-key-float_timer{left:10px;right:10px;bottom:10px;width:auto!important}}
 [class*="st-key-arrrow_"] [data-testid="stHorizontalBlock"],
 .st-key-today_grid [class*="st-key-arrrow_"] [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;flex-direction:row!important;gap:.4rem!important}
 [class*="st-key-arrrow_"] [data-testid="stColumn"]{min-width:0!important;width:50%!important;flex:1 1 50%!important}
@@ -6037,6 +6188,9 @@ with tab_today:
   if tab_today.open is not False:
     # one row of two columns (no gaps on a wide screen); on a phone the CSS interleaves the sections so the
     # timer and dailies come right after the mission (see .st-key-today_grid)
+    if state.get("timer"):  # a session running: the clock takes the stage, full width at the top
+        with st.container(key="tg_live"):
+            render_timer(state, big=True)
     with st.container(key="today_grid"):
         c_main, c_rail = st.columns([1.55, 1], gap="large")
         with c_main:
@@ -6055,8 +6209,9 @@ with tab_today:
         with c_rail:
             with st.container(key="tg_car"):
                 render_car_card(state)
-            with st.container(key="tg_timer"):
-                render_timer(state)
+            if not state.get("timer"):
+                with st.container(key="tg_timer"):
+                    render_timer(state)
             with st.container(key="tg_dailies"):
                 render_dailies(state)
             with st.container(key="tg_status"):
@@ -7581,6 +7736,10 @@ def goals_to_notion(state: dict) -> None:
 
 
 # ── after the page is drawn ──
+try:
+    render_timer_float(state)
+except Exception:  # noqa: BLE001 — a clock never breaks the page
+    pass
 try:
     goals_to_notion(state)
 except Exception:  # noqa: BLE001
