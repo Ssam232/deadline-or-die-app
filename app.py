@@ -1891,6 +1891,13 @@ def min_label(m: int) -> str:
     return f"{m} min" if m < 60 else f"{m / 60:g} h"
 
 
+def hm(minutes: float) -> str:
+    """A time for people, not a decimal: 45 min · 1 h · 1 h 30 min."""
+    m = int(round(minutes or 0))
+    h, r = divmod(m, 60)
+    return f"{r} min" if not h else f"{h} h" + (f" {r} min" if r else "")
+
+
 def points_guide() -> None:
     with fold("points", "💰 What's it worth? (points guide)", False):
         st.markdown(V.guide_markdown())
@@ -3825,14 +3832,14 @@ def render_journal(state: dict) -> None:
                 + "</div>", unsafe_allow_html=True)
     import altair as alt
     acc = accent(state)[0]
-    df = pd.DataFrame([{"Day": f"{x['date']:%a}", "i": k, "Focus h": round(x["focus"] / 60, 2),
+    df = pd.DataFrame([{"Day": f"{x['date']:%a}", "i": k, "Focus h": round(x["focus"] / 60, 2), "Focus": hm(x["focus"]),
                         "Mood": x["mood"], "Face": J.mood_face(x["mood"]) if x["mood"] is not None else ""}
                        for k, x in enumerate(r["rows"])])
     if not df.empty:
         base = alt.Chart(df).encode(x=alt.X("Day:N", sort=alt.SortField("i"), title=None,
                                              axis=alt.Axis(labelAngle=0)))
         bars = base.mark_bar(cornerRadiusEnd=4, color=acc, size=26).encode(
-            y=alt.Y("Focus h:Q", title="Focus hours"), tooltip=["Day", "Focus h", "Mood"])
+            y=alt.Y("Focus h:Q", title="Focus hours"), tooltip=["Day", "Focus", "Mood"])
         faces = base.mark_text(dy=-12, fontSize=18).encode(y=alt.Y("Focus h:Q"), text="Face:N")
         _chart((bars + faces).properties(height=200))
     if r["focus_good_mood"] is not None and r["focus_low_mood"] is not None:
@@ -7146,12 +7153,13 @@ def render_focus_periods(state: dict) -> None:
     if kind == "Year":
         label_of = lambda d: f"{d:%b}"  # noqa: E731
         rows = [{"When": date(lo.year, m, 1).strftime("%b"), "i": m,
-                 "Hours": round(sum(v for d, v in g["day"].items() if d.month == m) / 60, 1)} for m in range(1, 13)]
+                 "Hours": round(sum(v for d, v in g["day"].items() if d.month == m) / 60, 1),
+                 "Time": hm(sum(v for d, v in g["day"].items() if d.month == m))} for m in range(1, 13)]
     else:
         label_of = ((lambda d: f"{d:%a}") if kind == "Week" else (lambda d: f"{d.month}/{d.day}") if kind == "30 days"
                     else (lambda d: str(d.day)))  # noqa: E731
         rows = [{"When": label_of(d), "i": i,
-                 "Hours": round(g["day"].get(d, 0) / 60, 2), "now": d == today}
+                 "Hours": round(g["day"].get(d, 0) / 60, 2), "Time": hm(g["day"].get(d, 0)), "now": d == today}
                 for i, d in enumerate(lo + timedelta(days=k) for k in range((hi - lo).days + 1))]
     df = pd.DataFrame(rows)
     unit = "month" if kind == "Year" else "day"
@@ -7163,7 +7171,7 @@ def render_focus_periods(state: dict) -> None:
                                        **({} if kind in ("Month", "30 days") else {"size": 26})).encode(
         x=alt.X("When:N", sort=alt.SortField("i"), title=None,
                 axis=alt.Axis(labelAngle=-50 if kind == "30 days" else 0, labelFontSize=9 if kind == "30 days" else 11)),
-        y=alt.Y("Hours:Q", title="Hours"), tooltip=["When", "Hours"],
+        y=alt.Y("Hours:Q", title="Hours"), tooltip=["When", alt.Tooltip("Time:N", title="Focus")],
         opacity=alt.condition(pick, alt.value(1), alt.value(.3))).add_params(pick).properties(height=190)
     try:
         ev = st.altair_chart(top_chart, width="stretch", on_select="rerun", selection_mode="pick",
@@ -7191,13 +7199,14 @@ def render_focus_periods(state: dict) -> None:
     wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     if kind == "Week":
         cells = [{"Day": f"{lo + timedelta(days=i):%a}", "d": i, "Hour": _hlabel(h), "h": h,
-                  "Minutes": round(g["dh"].get((lo + timedelta(days=i), h), 0))} for i in range(7) for h in range(5, 24)]
+                  "Minutes": round(g["dh"].get((lo + timedelta(days=i), h), 0)),
+                  "Focus": hm(g["dh"].get((lo + timedelta(days=i), h), 0))} for i in range(7) for h in range(5, 24)]
         ttl = "**Day × hour** · minutes"
     else:
         agg = defaultdict(float)
         for (d, h), v in g["dh"].items():
             agg[(d.weekday(), h)] += v
-        cells = [{"Day": wd[i], "d": i, "Hour": _hlabel(h), "h": h, "Minutes": round(agg.get((i, h), 0))}
+        cells = [{"Day": wd[i], "d": i, "Hour": _hlabel(h), "h": h, "Minutes": round(agg.get((i, h), 0)), "Focus": hm(agg.get((i, h), 0))}
                  for i in range(7) for h in range(5, 24)]
         ttl = "**Weekday × hour** · total minutes in the period"
     st.markdown(ttl)
@@ -7206,7 +7215,7 @@ def render_focus_periods(state: dict) -> None:
         y=alt.Y("Day:N", sort=alt.SortField("d"), title=None),
         color=alt.Color("Minutes:Q", scale=alt.Scale(range=[VIZ["low"], acc, light], interpolate="rgb"),
                         legend=alt.Legend(title="Min")),
-        tooltip=["Day", "Hour", "Minutes"]).properties(height=220))
+        tooltip=["Day", "Hour", "Focus"]).properties(height=220))
 
 
 def _mix(hex_: str, other: str, t: float) -> str:
@@ -7271,14 +7280,14 @@ with tab_stats:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Hours by category** · 28 days")
-            cat = pd.DataFrame([{"Category": V.CATEGORIES.get(c_, {}).get("label", c_), "Hours": round(m_ / 60, 1)}
+            cat = pd.DataFrame([{"Category": V.CATEGORIES.get(c_, {}).get("label", c_), "Hours": round(m_ / 60, 1), "Time": hm(m_)}
                                 for c_, m_ in full["cat_min"].items()]).sort_values("Hours", ascending=False) \
                 if full["cat_min"] else pd.DataFrame({"Category": [], "Hours": []})
             _chart(alt.Chart(cat).mark_bar(cornerRadiusEnd=4, color=VIZ["normal"]).encode(
                 x=alt.X("Hours:Q", title="Hours"),
                 y=alt.Y("Category:N", sort="-x", title=None, scale=alt.Scale(paddingInner=0.35),
                         axis=alt.Axis(labelLimit=160)),
-                tooltip=["Category", "Hours"]).properties(height=max(150, 46 * len(cat))))
+                tooltip=["Category", alt.Tooltip("Time:N", title="Focus")]).properties(height=max(150, 46 * len(cat))))
         with c2:
             st.markdown("**Finishes per week**")
             wk = pd.DataFrame([{"Week of": f"{w:%b %d}", "Finished": n_} for w, n_ in full["weeks"]])
