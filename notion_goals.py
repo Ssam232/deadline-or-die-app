@@ -56,7 +56,15 @@ def _when(t: dict, tz) -> datetime:
     return R.block_at(t, tz) or datetime.fromisoformat(t.get("own_deadline") or t["deadline"])
 
 
-def _block_lines(t: dict, tz, today: date) -> list[dict]:
+NOTE_EMOJI = {"yellow": "📝", "blue": "💙", "green": "💚", "pink": "🩷", "grey": "🗒️"}
+
+
+def _notes_on(g: dict, target: str) -> list[dict]:
+    return [_b("callout", _txt(n["text"].strip()), icon={"type": "emoji", "emoji": NOTE_EMOJI.get(n.get("color"), "📝")})
+            for n in R.notes(g) if (n.get("on") or "goal") == target]
+
+
+def _block_lines(t: dict, tz, today: date, g: dict | None = None) -> list[dict]:
     st_ = t["status"]
     done = st_ in R.DONE
     icon = "✅ " if done else "💀 " if st_ == "failed" else ""
@@ -69,6 +77,8 @@ def _block_lines(t: dict, tz, today: date) -> list[dict]:
     out.append(_b("paragraph", _txt(line, "gray")))
     if (t.get("details") or "").strip():
         out.append(_b("paragraph", _txt(t["details"].strip())))
+    if g:
+        out += _notes_on(g, "t_" + t["id"])
     return out
 
 
@@ -84,6 +94,9 @@ def goal_blocks(g: dict, tasks: list[dict], tz, today: date) -> list[dict]:
     out = [_b("callout", _txt(head, bold=True), icon={"type": "emoji", "emoji": "🏆" if g.get("claimed") else "🏁"})]
     if (g.get("why") or "").strip():
         out.append(_b("quote", _txt("Why: " + g["why"].strip())))
+    placed = {"goal"} | {"s_" + n["id"] for n in R.stages(g)} | {"t_" + t["id"] for t in gts}
+    out += _notes_on(g, "goal") + [x for n in R.notes(g) if (n.get("on") or "goal") not in placed
+                                   for x in _notes_on({"notes": [dict(n, on="goal")]}, "goal")]
     key = lambda t: _when(t, tz)  # noqa: E731
     known = {n["id"] for n in R.stages(g)}
     loose = sorted((t for t in gts if t.get("node") not in known), key=key)
@@ -93,13 +106,14 @@ def goal_blocks(g: dict, tasks: list[dict], tz, today: date) -> list[dict]:
         full = tot and d == tot
         out.append(_b("heading_2", _txt(("✅ " if full else "") + label)))
         out.append(_b("paragraph", _txt(f"{d}/{tot} done" if tot else "No blocks yet", "gray")))
+        out += _notes_on(g, "s_" + n["id"])
         for t in mine:
-            out += _block_lines(t, tz, today)
+            out += _block_lines(t, tz, today, g)
     if loose:
         out.append(_b("heading_2", _txt("Straight to the goal" if R.stages(g) else "Blocks")))
         for t in loose:
-            out += _block_lines(t, tz, today)
-    if not gts and not R.stages(g):
+            out += _block_lines(t, tz, today, g)
+    if not gts and not R.stages(g) and not R.notes(g):
         out.append(_b("paragraph", _txt("No stages or blocks yet.", "gray")))
     return out
 

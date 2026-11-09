@@ -236,5 +236,40 @@ def dot(g: dict, tasks: list[dict], now: datetime, accent: str = "#f5c518") -> s
                      f'fontcolor="{C["text"] if st_ == "open" else C["muted"]}"];')
         parent = f's_{t["node"]}' if t.get("node") and any(n["id"] == t["node"] for n in stages(g)) else "goal"
         lines.append(f't_{t["id"]} -> {parent} [color="{C["done"] if st_ in DONE else C["edge"]}"];')
+    for n in notes(g):  # 📝 sticky notes: the goal's aspects, pinned to the goal, a stage or a block
+        tgt = n.get("on") or "goal"
+        if tgt != "goal" and not ((tgt.startswith("s_") and any("s_" + x["id"] == tgt for x in stages(g)))
+                                  or (tgt.startswith("t_") and any("t_" + t["id"] == tgt for t in gts))):
+            tgt = "goal"
+        bg, fg = NOTE_COLORS.get(n.get("color"), NOTE_COLORS["yellow"])
+        lines.append(f'n_{n["id"]} [label={_q(_wrap(n["text"], 26))} shape=note style="filled" fillcolor="{bg}" '
+                     f'color="{bg}" fontcolor="{fg}" fontsize=10 margin="0.12,0.06"];')
+        lines.append(f'n_{n["id"]} -> {tgt} [style=dashed arrowhead=none color="{bg}" penwidth=1];')
     lines.append("}")
     return "\n".join(lines)
+
+
+NOTE_COLORS = {"yellow": ("#f5d76e", "#2a2410"), "blue": ("#7cc4f5", "#0e2130"), "green": ("#8fd9a8", "#0f2a19"),
+               "pink": ("#f5a3c7", "#30101f"), "grey": ("#c9ccd2", "#1b1f27")}
+
+
+def notes(g: dict) -> list[dict]:
+    return [n for n in g.get("notes", []) if (n.get("text") or "").strip()]
+
+
+def _wrap(text: str, width: int) -> str:
+    """Soft-wrap a note for the chart, keeping your own line breaks; long notes are trimmed."""
+    out = []
+    for para in text.strip().splitlines()[:8]:
+        line = ""
+        for w in para.split():
+            if line and len(line) + 1 + len(w) > width:
+                out.append(line)
+                line = w
+            else:
+                line = (line + " " + w).strip()
+        out.append(line)
+    if len(out) > 8:
+        out = out[:8]
+        out[-1] = out[-1][:width - 1] + "…"
+    return "\n".join(out)

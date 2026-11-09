@@ -4515,7 +4515,7 @@ svg{{width:100%;max-width:{660 if big else 340}px;height:auto;display:block}}
  <text id="t" x="146" y="164" text-anchor="end"></text>
  <text id="p" x="154" y="160" text-anchor="start"></text>
  <g id="car"><circle id="halo" r="10" fill="#f5c518"/>{sprite}</g>
-</svg><div id="flag"><i></i><b></b></div><div id="s"></div><div class="bt"><button onclick="{pop}" title="Open the clock in its own small window">⧉ Pop out</button><button id="fs" onclick="dodFocus()" title="Just the timer, filling the screen">⛶ Full screen</button></div></div>
+</svg><div id="flag"><i></i><b></b></div><div id="s"></div><div class="bt"><button onclick="{pop}" title="Open the clock in its own small window">⧉ Pop out</button><button id="fw" onclick="dodFocus(false)" title="Just the timer, filling this browser tab">▣ Fill tab</button><button id="fs" onclick="dodFocus(true)" title="Just the timer, filling the whole screen">⛶ Full screen</button></div></div>
 <script>
 // sounds mix with your music instead of pausing it (iOS 17+ audio session; harmless elsewhere)
 try{{if(navigator.audioSession)navigator.audioSession.type='ambient';
@@ -4620,14 +4620,19 @@ function frame(){{
  requestAnimationFrame(frame);}}
 frame();
 {hook}
-function dodFocus(){{var P;try{{P=parent.document;}}catch(e){{return;}}
+function dodFocus(full){{var P;try{{P=parent.document;}}catch(e){{return;}}
  var on=!P.body.classList.contains('dod-focus');P.body.classList.toggle('dod-focus',on);
  try{{var bg=getComputedStyle(P.querySelector('.stApp')).backgroundColor;P.body.style.setProperty('--dodbg',bg);}}catch(e){{}}
- try{{if(on){{var el=P.documentElement;(el.requestFullscreen||el.webkitRequestFullscreen||function(){{}}).call(el);}}
-  else if(P.fullscreenElement||P.webkitFullscreenElement){{(P.exitFullscreen||P.webkitExitFullscreen).call(P);}}}}catch(e){{}}
+ try{{if(on&&full){{var el=P.documentElement;(el.requestFullscreen||el.webkitRequestFullscreen||function(){{}}).call(el);}}
+  else if(!on&&(P.fullscreenElement||P.webkitFullscreenElement)){{(P.exitFullscreen||P.webkitExitFullscreen).call(P);}}}}catch(e){{}}
  fsLbl();}}
-function fsLbl(){{try{{document.getElementById('fs').textContent=parent.document.body.classList.contains('dod-focus')?'✕ Exit full screen':'⛶ Full screen';}}catch(e){{}}}}
+function fsLbl(){{try{{var on=parent.document.body.classList.contains('dod-focus');
+ var sv=document.querySelector('svg');if(sv)sv.style.maxWidth=on?Math.max(340,Math.round((parent.innerHeight-330)*300/172))+'px':'';
+ setTimeout(fit,50);
+ document.getElementById('fs').style.display=on?'none':'';
+ document.getElementById('fw').textContent=on?'✕ Exit':'▣ Fill tab';}}catch(e){{}}}}
 fsLbl();
+try{{parent.addEventListener('resize',fsLbl);}}catch(e){{}}
 try{{parent.document.addEventListener('fullscreenchange',function(){{if(!parent.document.fullscreenElement){{parent.document.body.classList.remove('dod-focus');fsLbl();}}}});}}catch(e){{}}
 function fit(){{try{{var h=Math.ceil(document.getElementById('w').getBoundingClientRect().height+6),el=window.frameElement;
  for(var i=0;i<4&&el;i++){{var tid=el.getAttribute('data-testid');if(i===0||el.style.height||tid==='stElementContainer'){{el.style.setProperty('height',h+'px','important');el.style.setProperty('min-height','0','important');el.style.setProperty('flex','none','important');}}if(tid==='stElementContainer')break;el=el.parentElement;}}}}catch(e){{}}}}
@@ -5606,7 +5611,7 @@ body.dod-focus .st-key-tg_live{position:fixed!important;top:0!important;left:0!i
   width:100vw!important;height:100vh!important;height:100dvh!important;max-width:none!important;margin:0!important;z-index:1000001;
   background:var(--dodbg,#0e1117);overflow-y:auto!important;padding:max(2vh,10px) max(4vw,10px)!important;
   display:flex!important;flex-direction:column!important;justify-content:flex-start!important;box-sizing:border-box}
-body.dod-focus .st-key-tg_live > div{max-width:900px;width:100%;margin:auto!important}
+body.dod-focus .st-key-tg_live > div{max-width:min(1400px,100%);width:100%;margin:auto!important}
 body.dod-focus{overflow:hidden}
 body.dod-focus [data-testid="stTabPanel"],body.dod-focus [data-testid="stMain"],body.dod-focus .stMain{transform:none!important;contain:none!important;animation:none!important}
 .st-key-float_timer{position:fixed!important;right:16px;bottom:16px;z-index:999990;width:340px!important;
@@ -6658,6 +6663,62 @@ def render_roadmap_arrange(state: dict, g: dict) -> None:
         st.rerun()
 
 
+NOTE_COLOR_LABELS = {"yellow": "🟨 Yellow", "blue": "🟦 Blue", "green": "🟩 Green", "pink": "🩷 Pink", "grey": "⬜ Grey"}
+
+
+def _note_targets(state: dict, g: dict) -> dict:
+    """Where a note can sit on the roadmap: the goal itself, any stage, or any block."""
+    opts = {"goal": f"🏁 The goal: {g['title'][:40]}"}
+    for n, label in NG._stage_order(g):
+        opts["s_" + n["id"]] = f"🧩 {label[:50]}"
+    for t in sorted(R.goal_tasks(g, state["tasks"]), key=lambda t: t["deadline"]):
+        opts["t_" + t["id"]] = f"▪️ {t['title'][:46]}"
+    return opts
+
+
+def render_goal_notes(state: dict, g: dict, only: str | None = None) -> None:
+    """📝 Notes on the roadmap: sticky notes for the goal's aspects (why it matters, risks, who's involved…),
+    pinned to the goal, a stage or a block, so they show up right on the flow chart."""
+    gid = g["id"]
+    targets = _note_targets(state, g)
+    notes_ = g.setdefault("notes", [])
+    if only is None:
+        st.caption("Sticky notes that sit on the flow chart: the goal's aspects, risks, people, ideas. "
+                   "Pin each to the goal, a stage or a block. Tap one on the chart to edit it.")
+        with st.form(f"gn_add_{gid}", clear_on_submit=True, border=False):
+            txt = st.text_area("Note", placeholder="e.g. Walter needs 2 weeks to review · Ethics is the bottleneck",
+                               height=80, key=f"gn_txt_{gid}")
+            c1, c2 = st.columns([2, 1])
+            on = c1.selectbox("Pin it to", list(targets), format_func=targets.get, key=f"gn_on_{gid}")
+            col = c2.selectbox("Colour", list(NOTE_COLOR_LABELS), format_func=NOTE_COLOR_LABELS.get, key=f"gn_col_{gid}")
+            if st.form_submit_button("📝 Add note", type="primary") and (txt or "").strip():
+                notes_.append({"id": uuid.uuid4().hex[:8], "text": txt.strip()[:400], "on": on, "color": col,
+                               "created": now().isoformat()})
+                save_state(state)
+                st.rerun()
+    for n in [x for x in notes_ if only is None or x["id"] == only]:
+        k = f"{'gnf' if only else 'gn'}_{gid}_{n['id']}"
+        with st.container(border=only is None, key=f"{k}_box"):
+            txt = st.text_area("Note", value=n["text"], height=80, key=f"{k}_t",
+                               label_visibility="collapsed" if only is None else "visible")
+            c1, c2, c3, c4 = st.columns([2, 1.2, 1, 0.6], vertical_alignment="bottom")
+            cur = n.get("on") if n.get("on") in targets else "goal"
+            on = c1.selectbox("Pinned to", list(targets), index=list(targets).index(cur), format_func=targets.get,
+                              key=f"{k}_on")
+            col = c2.selectbox("Colour", list(NOTE_COLOR_LABELS), format_func=NOTE_COLOR_LABELS.get, key=f"{k}_c",
+                               index=list(NOTE_COLOR_LABELS).index(n.get("color", "yellow"))
+                               if n.get("color", "yellow") in NOTE_COLOR_LABELS else 0)
+            if c3.button("💾 Save", key=f"{k}_s", use_container_width=True) and (txt or "").strip():
+                n.update(text=txt.strip()[:400], on=on, color=col)
+                save_state(state)
+                st.rerun()
+            if c4.button("🗑️", key=f"{k}_x", use_container_width=True, help="Delete this note"):
+                g["notes"] = [x for x in notes_ if x["id"] != n["id"]]
+                st.session_state.pop(f"flow_sel_{gid}", None)
+                save_state(state)
+                st.rerun()
+
+
 def render_flow(state: dict, g: dict) -> None:
     """The roadmap as a flow chart you can tap: the box you tap opens for editing right underneath."""
     gid = g["id"]
@@ -6684,6 +6745,9 @@ def render_flow(state: dict, g: dict) -> None:
         elif sel.startswith("s_"):
             c1.markdown("**✏️ Stage**")
             render_stage_editor(state, g, only=sel[2:], kp="fse")
+        elif sel.startswith("n_"):
+            c1.markdown("**📝 Note**")
+            render_goal_notes(state, g, only=sel[2:])
         elif sel.startswith("t_"):
             t = next((x for x in state["tasks"] if x["id"] == sel[2:]), None)
             c1.markdown(f"**✏️ {html.escape(t['title']) if t else 'Block'}**")
@@ -6800,8 +6864,10 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
     """Stages (nestable) + scheduled work blocks for one goal."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t0, t1, t5, t4, t2, t3 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "📌 Add with a deadline", "✏️ Edit blocks",
-                                      "🧩 Add a stage", "🧩 Edit stages"])
+    t0, t1, t5, t4, t2, t3, t6 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "📌 Add with a deadline",
+                                          "✏️ Edit blocks", "🧩 Add a stage", "🧩 Edit stages", "📝 Notes"])
+    with t6:
+        render_goal_notes(state, g)
     with t0:
         render_roadmap_draft(state, g)
     with t5:
@@ -6886,7 +6952,7 @@ with tab_goals:
                              f"{target:%b %d, %Y} "
                              f"({(target - now().date()).days} days)")
             big = R.goal_bonus(g, state["tasks"])
-            if R.stages(g) or any(t.get("block") for t in gtasks):
+            if R.stages(g) or any(t.get("block") for t in gtasks) or R.notes(g):
                 n_open = sum(1 for t in gtasks if t["status"] == "open")
                 with fold(f"flow_{g['id']}", f"🗺️ Flowchart · {len(R.stages(g))} stages · {n_open} open blocks"):
                     render_flow(state, g)
