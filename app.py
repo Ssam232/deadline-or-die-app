@@ -1693,6 +1693,13 @@ def togo_label(label: str, key: str, default) -> str:
     return f"{label} · {R.days_to_go(d_, now().date())}" if isinstance(d_, date) else label
 
 
+def _toggle_fold(state: dict, k: str, default: bool = True) -> None:
+    """A fold button that isn't an expander (for cards that hold expanders themselves). Remembered like fold()."""
+    folds = state.setdefault("folds", {})
+    folds[k] = not folds.get(k, default)
+    save_state(state)
+
+
 def _when(d: datetime) -> str:
     """A due time that doesn't tick: 'today 6:30 PM', 'Sat 11:59 PM'."""
     day = "today" if d.date() == now().date() else "tomorrow" if d.date() == now().date() + timedelta(days=1) \
@@ -5664,6 +5671,9 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 [class*="st-key-mrow_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
 [class*="st-key-qrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
 [class*="st-key-bplays_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
+[class*="st-key-goalcard_"] [data-testid="stHorizontalBlock"]:has([class*="st-key-gfold_"]){flex-wrap:nowrap!important;flex-direction:row!important}
+[class*="st-key-goalcard_"] [data-testid="stColumn"]:has([class*="st-key-gfold_"]){flex:0 0 2.6rem!important;width:2.6rem!important;min-width:0!important}
+[class*="st-key-goalcard_"] [data-testid="stColumn"]:has(h3){min-width:0!important;flex:1 1 auto!important}
 .st-key-tg_live{max-width:860px;margin:0 auto .6rem;width:100%}
 .st-key-tg_live h4{font-size:1.35rem!important;text-align:center}
 body.dod-focus .st-key-tg_live{position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:0!important;
@@ -6999,9 +7009,19 @@ with tab_goals:
         gtasks = R.goal_tasks(g, state["tasks"])  # dropped (cancelled) blocks don't count
         n_done = sum(t["status"] in R.DONE for t in gtasks)
         target = date.fromisoformat(g["target"])
-        with st.container(border=True):
-            st.markdown(f"### {P.KINDS[g['event_kind']][0].split()[0] if g.get('event_kind') in P.KINDS else '🎯'} "
+        with st.container(border=True, key=f"goalcard_{g['id']}"):
+            fk_ = f"goal_{g['id']}"
+            g_open = state.setdefault("folds", {}).get(fk_, True)
+            h1, h2 = st.columns([12, 1], vertical_alignment="center")
+            h1.markdown(f"### {P.KINDS[g['event_kind']][0].split()[0] if g.get('event_kind') in P.KINDS else '🎯'} "
                         f"{g['title']}")
+            h2.button("▲" if g_open else "▼", key=f"gfold_{g['id']}", on_click=_toggle_fold, args=(state, fk_, True),
+                      help="Fold this goal up" if g_open else "Open this goal")
+            if not g_open:
+                n_open_ = sum(1 for t in gtasks if t["status"] == "open")
+                st.caption(f"{n_done}/{len(gtasks)} done · {n_open_} open · target {target:%b} {target.day} · "
+                           f"{R.days_to_go(target, now().date())}")
+                continue
             if g.get("why"):
                 st.caption(f"Why: {g['why']}")
             for ev in g.get("events", []):
@@ -7011,7 +7031,7 @@ with tab_goals:
                              f"{target:%b %d, %Y} "
                              f"({(target - now().date()).days} days)")
             big = R.goal_bonus(g, state["tasks"])
-            if R.stages(g) or any(t.get("block") for t in gtasks) or R.notes(g):
+            if gtasks or R.stages(g) or R.notes(g):  # any goal with something in it gets its chart
                 n_open = sum(1 for t in gtasks if t["status"] == "open")
                 with fold(f"flow_{g['id']}", f"🗺️ Flowchart · {len(R.stages(g))} stages · {n_open} open blocks"):
                     render_flow(state, g)
