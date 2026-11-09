@@ -4380,6 +4380,60 @@ function dodTick(s,now){
  return o;}
 """
 
+
+# ── splashes + sounds for the session's moments: pit stop (break starts), green flag (break over), flow check-in,
+# chequered flag (done). Plain JS shared by the app page and the pop-out, so each can show them in its own window.
+SPLASH_JS = r"""
+var DOD_SP={pit:{e:'🔧',h:'PIT STOP',s:'Break time. Stand up, water, stretch. No phone in the pit lane.',c:'#2ec4b6'},
+ go:{e:'🟢',h:'GREEN FLAG',s:'Break\u2019s over. Back to it.',c:'#3ddc84'},
+ chk:{e:'🌊',h:'STILL FLOWING?',s:'Check-in: tap Keep going, or stop & log it.',c:'#29e3ff'},
+ fin:{e:'🏁',h:'CHEQUERED FLAG',s:'Session complete. Stop & log it.',c:'#ff6a5c'}};
+function dodSplash(doc,kind,sub){
+ var k=DOD_SP[kind];if(!k||!doc||!doc.body)return;
+ var old=doc.getElementById('dod-sp');if(old)old.remove();
+ if(!doc.getElementById('dod-sp-css')){var st=doc.createElement('style');st.id='dod-sp-css';st.textContent=
+ '#dod-sp{position:fixed;inset:0;z-index:2147483000;pointer-events:none;display:flex;align-items:center;justify-content:center;'+
+ 'font-family:system-ui,-apple-system,sans-serif;animation:dspo .6s ease 4.6s forwards}'+
+ '#dod-sp .bg{position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 35%,var(--c) 140%);'+
+ 'animation:dspp .5s ease-in-out 0s 6 alternate}'+
+ '#dod-sp.fin .bg{background:radial-gradient(ellipse at center,transparent 45%,var(--c) 130%)}'+
+ '#dod-sp.fin .fr{position:absolute;inset:0;padding:12px;box-sizing:border-box;'+
+ 'background:repeating-conic-gradient(#f2efe8 0 25%,#111318 0 50%) 0 0/14px 14px;'+
+ '-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;'+
+ 'mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);animation:dspp .55s ease-in-out 0s 8 alternate}'+
+ '#dod-sp .cd{position:relative;text-align:center;padding:18px 26px;border-radius:18px;background:rgba(14,17,23,.86);'+
+ 'border:2px solid var(--c);box-shadow:0 0 0 6px rgba(0,0,0,.25),0 18px 60px rgba(0,0,0,.55);max-width:86vw;'+
+ 'animation:dspi .45s cubic-bezier(.2,1.4,.4,1) both}'+
+ '#dod-sp .em{font-size:min(16vw,64px);line-height:1}#dod-sp .hd{font:800 min(9vw,40px)/1.1 system-ui,sans-serif;'+
+ 'letter-spacing:.08em;color:var(--c);margin:6px 0 4px}#dod-sp .sb{font-size:min(4.2vw,16px);color:#ece8df;opacity:.9}'+
+ '#dod-sp .lt{display:flex;gap:8px;justify-content:center;margin-top:10px}#dod-sp .lt i{width:14px;height:14px;border-radius:50%;'+
+ 'background:#262b36}#dod-sp.go .lt i{animation:dspl .3s steps(1) both}#dod-sp.go .lt i:nth-child(2){animation-delay:.35s}'+
+ '#dod-sp.go .lt i:nth-child(3){animation-delay:.7s}@keyframes dspl{to{background:#3ddc84;box-shadow:0 0 12px #3ddc84}}'+
+ '@keyframes dspi{from{transform:scale(.6);opacity:0}to{transform:none;opacity:1}}'+
+ '@keyframes dspp{from{opacity:.2}to{opacity:1}}@keyframes dspo{to{opacity:0;visibility:hidden}}'+
+ '@media (prefers-reduced-motion:reduce){#dod-sp .bg,#dod-sp .fr,#dod-sp .cd{animation:none}}';doc.head.appendChild(st);}
+ var o=doc.createElement('div');o.id='dod-sp';o.className=kind;o.style.setProperty('--c',k.c);
+ o.innerHTML=(kind==='fin'?'<div class="fr"></div>':'')+'<div class="bg"></div><div class="cd"><div class="em"></div><div class="hd"></div>'+
+  '<div class="sb"></div>'+(kind==='go'?'<div class="lt"><i></i><i></i><i></i></div>':'')+'</div>';
+ o.querySelector('.em').textContent=k.e;o.querySelector('.hd').textContent=k.h;o.querySelector('.sb').textContent=sub||k.s;
+ doc.body.appendChild(o);var w=doc.defaultView;w.setTimeout(function(){if(o.parentNode)o.remove();},5400);
+ try{if(w.navigator.vibrate)w.navigator.vibrate(kind==='fin'?[400,150,400,150,800]:kind==='pit'?[300,120,300]:[150,80,150,80,400]);}catch(e){}}
+function dodSound(win,kind){  // pit: two falling tones · go: start lights (3 low + 1 high) · chk: two pings · fin: rising fanfare
+ try{var A=win.__dodAC=win.__dodAC||new (win.AudioContext||win.webkitAudioContext)();if(A.state==='suspended')A.resume();
+  var seq={pit:[[784,0,.28],[523,.32,.45]],go:[[440,0,.16],[440,.35,.16],[440,.7,.16],[880,1.05,.5]],
+   chk:[[988,0,.14],[988,.22,.14]],fin:[[523,0,.16],[659,.18,.16],[784,.36,.16],[1047,.54,.6]]}[kind]||[];
+  seq.forEach(function(x){var o=A.createOscillator(),g=A.createGain(),t=A.currentTime+x[1];o.type='triangle';o.frequency.value=x[0];
+   g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.22,t+.02);g.gain.exponentialRampToValueAtTime(.0001,t+x[2]);
+   o.connect(g);g.connect(A.destination);o.start(t);o.stop(t+x[2]+.05);});}catch(e){}}
+// what changed since the last look: one moment per change (loading the page mid-break shows nothing)
+function dodMoment(memo,s,o){
+ var key=s.PA?'pause':o.ph,id=s.S+':'+(s.FL?'f':'p'),m=memo[id];memo[id]={k:key,due:o.due};
+ if(!m)return null;
+ if(o.due&&!m.due&&!s.PA)return 'chk';
+ if(m.k===key||s.PA||m.k==='pause')return null;
+ if(key==='break')return 'pit';if(key==='work'&&m.k==='break')return 'go';if(key==='done')return 'fin';return null;}
+"""
+
 POP_PAGE_CSS = """*{box-sizing:border-box}html,body{margin:0;height:100%;background:#0e1117;color:#ece8df;
 font-family:system-ui,-apple-system,sans-serif;overflow:hidden}
 body{display:flex;flex-direction:column;align-items:center;padding:10px 12px 12px;gap:4px;text-align:center}
@@ -4399,7 +4453,7 @@ POP_PAGE_BODY = ('<div id="n"></div><svg id="svg" viewBox="0 0 300 172" preserve
 
 # runs inside the pop-out window itself: its own clock (so a hidden app tab can't freeze it), the track and car,
 # and buttons that press the app's real Pause / Skip break / Keep going / Stop & log
-POP_PAGE_JS = TIMER_CORE_JS + r"""
+POP_PAGE_JS = TIMER_CORE_JS + SPLASH_JS + r"""
 var S=null,H=window.__host,NS='http://www.w3.org/2000/svg',tr=null,L=0,car=null,trail=null,curD=null,sig='',busy=0;
 function $(i){return document.getElementById(i);}
 function track(){var v=$('svg');curD=S.trkD;v.innerHTML='<text id="tl" x="4" y="9" font-size="7" fill="#5b6070" letter-spacing=".07em"></text>'+
@@ -4424,16 +4478,18 @@ window.__dodSet=function(s){S=s;busy=0;sig='';$('m').textContent='';
  if(!s){document.body.className='over';$('t').textContent='✓';$('t').style.color='#2ec4b6';$('p').textContent='Session over';
   $('bt').innerHTML='';return;}
  document.body.className='';$('n').textContent=s.title;document.title='⏱️ '+s.title;if(s.trkD!==curD)track();tick();};
-function tick(){if(!S)return;var o=dodTick(S,Date.now());$('t').textContent=o.time;$('t').style.color=o.color;$('p').textContent=o.line;
+var MEMO={};
+function tick(){if(!S)return;var o=dodTick(S,Date.now());
+ var mo=dodMoment(MEMO,S,o);if(mo){dodSplash(document,mo);dodSound(window,mo);}$('t').textContent=o.time;$('t').style.color=o.color;$('p').textContent=o.line;
  if(trail){trail.setAttribute('stroke',S.PA?'#5b6070':S.ACC);trail.setAttribute('stroke-dasharray',(L*Math.min(1,o.frac))+' 99999');}
  place(o.ph==='done'?0:o.frac);document.title=o.time+' · '+S.title;buttons(o);}
 setInterval(tick,250);
 if(H&&H.__dodTimer!==undefined)window.__dodSet(H.__dodTimer);
 """
 
-POP_MANAGER_JS = TIMER_CORE_JS + r"""
+POP_MANAGER_JS = TIMER_CORE_JS + SPLASH_JS + r"""
 (function(){
- if(window.__dodPopInit==='v2')return;window.__dodPopInit='v2';
+ if(window.__dodPopInit==='v3')return;window.__dodPopInit='v3';var MEMO={};
  var W=null,base=null;
  function build(w){var d=w.document;w.__host=window;d.title='⏱️ Focus timer';
   d.head.innerHTML='<meta name="viewport" content="width=device-width,initial-scale=1"><style>'+__CSS__+'</style>';
@@ -4454,9 +4510,16 @@ POP_MANAGER_JS = TIMER_CORE_JS + r"""
   if(tab)tab.click();var n=0,iv=setInterval(function(){var b=find();if(b){clearInterval(iv);b.click();}else if(++n>30)clearInterval(iv);},400);};
  setInterval(function(){
   var s=window.__dodTimer,d=document;
-  if(base===null)base=d.title.indexOf('⏱️')===0?'Deadline or Die':d.title;
-  if(s){var o=dodTick(s,Date.now());if(d.title.indexOf('SESSION DONE')<0)d.title='⏱️ '+o.time+' · '+s.title;}
-  else{if(d.title.indexOf('⏱️')===0)d.title=base||'Deadline or Die';d.body.classList.remove('dod-focus');}
+  if(base===null)base=/^(⏱️|🔧|🟡)/.test(d.title)?'Deadline or Die':d.title;
+  if(s){var o=dodTick(s,Date.now());
+   var mo=dodMoment(MEMO,s,o);
+   if(mo){var fk='dodfin:'+s.S,seen=false;
+    if(mo==='fin'){try{seen=!!sessionStorage.getItem(fk);sessionStorage.setItem(fk,'1');}catch(e){}}
+    if(!seen&&!d.getElementById('dod-fin'))dodSplash(d,mo);
+    var popUp=W&&!W.closed;try{popUp=popUp&&W.document.visibilityState==='visible';}catch(e){}
+    if(!popUp||d.visibilityState==='visible')dodSound(window,mo);}
+   if(d.title.indexOf('SESSION DONE')<0)d.title=(o.ph==='break'&&!s.PA?'🔧 ':o.ph==='done'?'🏁 ':s.PA?'🟡 ':'⏱️ ')+o.time+' · '+s.title;}
+  else{if(/^(⏱️|🔧|🏁 \d|🟡)/.test(d.title))d.title=base||'Deadline or Die';d.body.classList.remove('dod-focus');}
  },1000);
 })();
 """.replace("__CSS__", json.dumps(POP_PAGE_CSS)).replace("__BODY__", json.dumps(POP_PAGE_BODY)).replace(
@@ -4495,7 +4558,7 @@ def _timer_hook_js(state_json: str) -> str:
     return (f"(function(){{var P;try{{P=parent;P.document;}}catch(e){{return;}}"
             f"var s={state_json};if(s)s.OFF=(function(d){{return Math.abs(d)>120000?Math.round(d/900000)*900000:0}})"
             f"({int(time.time() // 60 * 60000)}-Date.now());P.__dodTimer=s;"
-            f"if(P.__dodPopInit!=='v2'){{var sc=P.document.createElement('script');sc.textContent={mgr};"
+            f"if(P.__dodPopInit!=='v3'){{var sc=P.document.createElement('script');sc.textContent={mgr};"
             f"P.document.body.appendChild(sc);sc.remove();}}if(P.__dodPush)P.__dodPush();}})();")
 
 
@@ -4695,11 +4758,11 @@ function frame(){{
   else if(FL){{t.textContent=mmss(e*60000);t.style.fill=e>=CHK?'#29e3ff':ACC;trail.style.stroke=ACC;
     p.textContent=e>=CHK?'🌊 Check-in':'🌊 Flow · lap '+(Math.floor(e/25)+1);
     s.textContent=e>=CHK?'Still flowing? Tap below to keep going.':'Counting up · check-in at '+CHK+' min · phone face-down';
-    if(e>=CHK&&last!=='chk'){{beep(2);last='chk';}}}}
+}}
   else{{t.textContent=mmss(left);t.style.fill=ACC;trail.style.stroke=ACC;
     p.textContent=EXT>0?('🌊 Flow · +'+EXT+' min'):stints>1?('Stint '+blk+' of '+stints):'Green flag';
     s.textContent=Math.round(wd)+' of '+T+' min · phone face-down';}}
-  const key=PA?'pause':ph;if(!FL){{if(last&&last!==key&&!PA)beep(ph==='work'?2:ph==='break'?1:3);last=key;}}
+  last=PA?'pause':ph;
   if(ph==='done'&&!PA)finish();}}
  requestAnimationFrame(frame);}}
 frame();
