@@ -7210,6 +7210,7 @@ def render_focus_periods(state: dict) -> None:
     hrs = pd.DataFrame([{"Hour": _hlabel(h), "h": h,
                          "Min/day": round(sum(v for (d, hh), v in g["dh"].items() if hh == h and in_sel(d)) / span, 1)}
                         for h in range(5, 24)])
+    hrs["Avg/day"] = hrs["Min/day"].map(hmin)
     top = hrs.sort_values("Min/day", ascending=False).iloc[0]
     scope = (f"{', '.join(sorted(chosen, key=lambda w: df.loc[df['When'] == w, 'i'].iloc[0]))} only"
              if chosen else label)
@@ -7217,7 +7218,7 @@ def render_focus_periods(state: dict) -> None:
                 + (f" · peak **{top['Hour']}**" if top["Min/day"] > 0 else " · nothing logged"))
     _chart(alt.Chart(hrs).mark_bar(cornerRadiusEnd=3, color=acc).encode(
         x=alt.X("Hour:N", sort=alt.SortField("h"), title=None),
-        y=alt.Y("Min/day:Q", title="Min / day"), tooltip=["Hour", "Min/day"]).properties(height=170))
+        y=alt.Y("Min/day:Q", title="Min / day"), tooltip=["Hour", alt.Tooltip("Avg/day:N", title="Avg/day")]).properties(height=170))
     # 3) weekday × hour
     wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     if kind == "Week":
