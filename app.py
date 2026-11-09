@@ -2559,6 +2559,28 @@ def due_picker(key: str, default: str = "9 PM") -> dtime:
     return DUE_CHIPS[pick]
 
 
+SUG_DUE_KINDS = ("d", "r", "b", "z")  # suggestions that become new tasks today (your own tasks keep their deadlines)
+SUG_DUE_OPTS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 59)}
+
+
+def _sug_due_picker(keys: list, opts: dict, fk) -> dict:
+    """🕛 Picked suggestions are due at midnight; this popover lets you give any one of them its own time."""
+    out = {}
+    changed = [k for k in keys if st.session_state.get(f"q_sd_{k}{fk}") not in (None, "Midnight")]
+    lbl = (f"🕛 Suggestions due midnight" if not changed else f"🕛 Suggestions due midnight · {len(changed)} changed")
+    with st.popover(lbl, use_container_width=False):
+        st.caption("Each picked suggestion is due at midnight today. Change any one here.")
+        for k in keys:
+            ttl = opts[k][0].split(" · ")[0]
+            v = st.pills(ttl, list(SUG_DUE_OPTS) + ["🎡"], default="Midnight", key=f"q_sd_{k}{fk}",
+                         selection_mode="single") or "Midnight"
+            if v == "🎡":
+                out[k] = time_wheel("", dtime(23, 59), key=f"q_sdw_{k}{fk}")
+            elif v != "Midnight":
+                out[k] = SUG_DUE_OPTS[v]
+    return out
+
+
 def _q_keep(state: dict | None) -> None:
     """Save the queued-but-not-locked tasks with the game, so a reload, a dropped connection or an app restart
     doesn't eat them."""
@@ -2699,7 +2721,7 @@ def render_qualify_form(state: dict) -> None:
             for p_ in [p_ for p_ in _zotero_list(*zc) if p_["key"] not in known_z][:6]:
                 k = f"z:{p_['key']}"
                 lab = Z.label(p_)
-                opts[k] = ((lab[:52] + "…" if len(lab) > 53 else lab) + " · 45m", p_)
+                opts[k] = ((lab[:52] + "…" if len(lab) > 53 else lab) + f" · {min_label(PAPER_MIN)}", p_)
                 groups["z"].append(k)
         except Exception as e:
             st.caption(f"(Couldn't read Zotero: {e})")
@@ -2750,13 +2772,15 @@ def render_qualify_form(state: dict) -> None:
     with st.popover(f"🕐 Start {s_lbl} · done by {d_chip}", use_container_width=False):
         start_dt = start_picker(f"q_start{fk}", default="30m")
         due_t = due_picker(f"q_due{fk}")
+    sug = [k for k in picked if k[0] in SUG_DUE_KINDS]
+    sug_t = _sug_due_picker(sug, opts, fk) if sug else {}
     st.markdown(f"<div class='dod-step'><b>{2 if any(groups.values()) else 1}</b> "
                 f"{'Or add something new' if any(groups.values()) else 'What will you do today?'}</div>",
                 unsafe_allow_html=True)
     # how much real work is picked: the 30-min floor shown live, instead of an error after you tap
     real = (sum((opts[k][1].get("minutes") or 60) for k in picked
                 if k[:2] in ("t:", "r:") and V.counts_for_qualifying(opts[k][1]))
-            + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
+            + sum(60 for k in picked if k.startswith("b:")) + sum(PAPER_MIN for k in picked if k.startswith("z:"))
             + sum(_qi(x)[1] for x in pending if _qi(x)[2] != "pit"))
     n_sel = len(picked) + len(pending)
     need = daily.min_mission_minutes(state)
@@ -2799,7 +2823,7 @@ def render_qualify_form(state: dict) -> None:
     minutes = (sum((opts[k][1].get("minutes") or 60) for k in picked
                    if k[:2] in ("t:", "r:", "g:") and V.counts_for_qualifying(opts[k][1]))
                + sum((opts[k][1].get("minutes") or 30) for k in picked if k.startswith("d:"))
-               + sum(60 for k in picked if k.startswith("b:")) + sum(45 for k in picked if k.startswith("z:"))
+               + sum(60 for k in picked if k.startswith("b:")) + sum(PAPER_MIN for k in picked if k.startswith("z:"))
                + sum(p_["minutes"] for p_ in parsed if V.counts_for_qualifying(p_)))  # 🔧 pit checks don't count
     if dl <= now() + timedelta(minutes=5):  # late at night (or a time that's gone by): same time tomorrow
         dl += timedelta(days=1)
@@ -2813,6 +2837,11 @@ def render_qualify_form(state: dict) -> None:
                  "Add something meatier, or put a time on it (e.g. “45m”).")
         return
     late_dl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
+
+    def sug_due(k: str) -> datetime:
+        """A picked suggestion is due at midnight (11:59 PM) unless you set its own time; a time already gone → midnight."""
+        d_ = datetime.combine(today, sug_t.get(k, dtime(23, 59)), TZ)
+        return d_ if d_ > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
     ids = []
     for k in picked:
         kind, obj = k[0], opts[k][1]
@@ -2825,10 +2854,10 @@ def render_qualify_form(state: dict) -> None:
                 obj["deadline"] = obj["own_deadline"]
             ids.append(obj["id"])
         elif kind == "d":  # a to-do becomes a real task today
-            t = todo_to_task(state, obj, late_dl)
+            t = todo_to_task(state, obj, sug_due(k))
             ids.append(t["id"])
         elif kind == "r":  # 🕘 a recent one, again: a fresh task with the same name, size and type
-            t = make_task(obj["title"], obj.get("details", ""), late_dl, None, obj.get("consequence", ""),
+            t = make_task(obj["title"], obj.get("details", ""), sug_due(k), None, obj.get("consequence", ""),
                           obj.get("goal_id"), category=obj.get("category"), minutes=obj.get("minutes"))
             state["tasks"].append(t)
             ids.append(t["id"])
@@ -2837,7 +2866,7 @@ def render_qualify_form(state: dict) -> None:
             if b["date"] and b["date"] > today.isoformat():  # future card → an hour of work on it today
                 g = next((g for g in state["goals"] if B.clean_id(g.get("event_page") or "") == B.clean_id(b["id"])), None)
                 t = make_task(f"Work on: {b['title']}", f"For {b['title']} on {date.fromisoformat(b['date']):%a %b %d} "
-                              "(DECK 12 board). Proof: show what you made in the hour.", late_dl, None, "",
+                              "(DECK 12 board). Proof: show what you made in the hour.", sug_due(k), None, "",
                               g["id"] if g else None, minutes=60)
             else:
                 bt = None
@@ -2845,7 +2874,9 @@ def render_qualify_form(state: dict) -> None:
                     bt = datetime.strptime(b["when"].upper().replace(".", ""), "%I:%M %p").time()
                     bdue = min(datetime.combine(today, bt, TZ) + timedelta(hours=2), datetime.combine(today, dtime(23, 59), TZ))
                 except ValueError:
-                    bdue = late_dl
+                    bdue = sug_due(k)
+                if k in sug_t:
+                    bdue = sug_due(k)
                 if bdue <= now() + timedelta(minutes=5):
                     bdue = datetime.combine(today, dtime(23, 59), TZ)
                 t = make_task(b["title"], "From your DECK 12 board", bdue, None, "", minutes=60)
@@ -2857,7 +2888,7 @@ def render_qualify_form(state: dict) -> None:
         else:
             p_ = obj
             t = make_task(f"📄 Read: {p_['title'][:80]}", f"Proof: photo/screenshot of your notes + a 2-line summary. "
-                          f"{p_['url']}", late_dl, None, "", category="deep", minutes=45)
+                          f"{p_['url']}", sug_due(k), None, "", category="deep", minutes=PAPER_MIN)
             t["zotero_key"] = p_["key"]
             state["tasks"].append(t)
             ids.append(t["id"])
