@@ -1891,6 +1891,17 @@ def min_label(m: int) -> str:
     return hmin(m)
 
 
+def msec(minutes: float) -> str:
+    """For averages, where seconds are real: 30 min 27 s · 1 h 5 min (past an hour, seconds stop mattering)."""
+    sec = int(round((minutes or 0) * 60))
+    if not sec:
+        return "0 min"
+    if sec >= 3600:
+        return hmin(sec / 60)
+    m, r = divmod(sec, 60)
+    return f"{r} s" if not m else f"{m} min" + (f" {r} s" if r else "")
+
+
 def hmin(minutes: float) -> str:
     """A time for people, not a decimal: 45 min · 1 h · 1 h 30 min."""
     m = int(round(minutes or 0))
@@ -4732,9 +4743,9 @@ def flow_bonus(tm: dict, mins: float) -> tuple[int, float]:
 def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -> None:
     """Credit a finished/stopped focus session: focus minutes, XP, loot drop, focus challenge."""
     full = mins >= 25 if tm.get("flow") else mins >= tm["planned"]
-    t["focus_min"] = round(t.get("focus_min", 0) + mins, 1)
+    t["focus_min"] = round(t.get("focus_min", 0) + mins, 2)
     state.setdefault("focus_log", []).append({"date": start.date().isoformat(), "task": t["id"],
-                                              "min": round(mins, 1), "full": full,
+                                              "min": round(mins, 2), "sec": int(round(mins * 60)), "full": full,
                                               "start": start.isoformat(), "cat": t.get("category")})
     del state["focus_log"][:-500]
     state["xp"] += int(mins // 5)
@@ -7210,7 +7221,7 @@ def render_focus_periods(state: dict) -> None:
     hrs = pd.DataFrame([{"Hour": _hlabel(h), "h": h,
                          "Min/day": round(sum(v for (d, hh), v in g["dh"].items() if hh == h and in_sel(d)) / span, 1)}
                         for h in range(5, 24)])
-    hrs["Avg/day"] = hrs["Min/day"].map(hmin)
+    hrs["Avg/day"] = [msec(sum(v for (d, hh), v in g["dh"].items() if hh == h and in_sel(d)) / span) for h in hrs["h"]]
     top = hrs.sort_values("Min/day", ascending=False).iloc[0]
     scope = (f"{', '.join(sorted(chosen, key=lambda w: df.loc[df['When'] == w, 'i'].iloc[0]))} only"
              if chosen else label)
