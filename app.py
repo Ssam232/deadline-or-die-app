@@ -634,7 +634,7 @@ def _start_timer(state: dict, t: dict, mins: int) -> None:
     cfg = state["settings"]
     preset = PM.PRESETS.get(cfg.get("pomo", "off"), ("", None))[1]
     work, brk = preset or ((cfg.get("pomo_work"), cfg.get("pomo_brk")) if cfg.get("pomo") == "custom" else (None, None))
-    state["timer"] = {"task_id": t["id"], "start": now().isoformat(), "planned": int(mins), "work": work, "brk": brk}
+    state["timer"] = {"pins": 0, "pouts": 0, "task_id": t["id"], "start": now().isoformat(), "planned": int(mins), "work": work, "brk": brk}
     _mark_started(t)
     save_state(state)
 
@@ -659,7 +659,7 @@ def start_from_link(state: dict) -> None:
     t = next((x for x in state["tasks"] if x["id"] == go and x["status"] == "open"), None)
     if not t:
         t = _timer_task(state, "", mins, PM.wall_minutes(mins, work, brk))
-    state["timer"] = {"task_id": t["id"], "start": now().isoformat(), "planned": mins, "work": work, "brk": brk}
+    state["timer"] = {"pins": 0, "pouts": 0, "task_id": t["id"], "start": now().isoformat(), "planned": mins, "work": work, "brk": brk}
     _mark_started(t)
     save_state(state)
     flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
@@ -4253,7 +4253,7 @@ def render_timer(state: dict, big: bool = False) -> None:
                 pick = Q.pick_next(state["tasks"], now(), deep_hour=I.in_peak(PROFILE, now().hour))
                 if pick:
                     plen = Q.session_length(pick)
-                    state["timer"] = {"task_id": pick["id"], "start": now().isoformat(), "planned": plen,
+                    state["timer"] = {"pins": 0, "pouts": 0, "task_id": pick["id"], "start": now().isoformat(), "planned": plen,
                                       "work": work, "brk": brk}
                     _mark_started(pick)
                     save_state(state)
@@ -4266,7 +4266,7 @@ def render_timer(state: dict, big: bool = False) -> None:
                          type="primary", use_container_width=True):
                 if tid == NEW_SESSION:
                     tid = _timer_task(state, new_name, 60 if flow else planned, 60 if flow else wall)["id"]
-                state["timer"] = {"task_id": tid, "start": now().isoformat(), "planned": planned,
+                state["timer"] = {"pins": 0, "pouts": 0, "task_id": tid, "start": now().isoformat(), "planned": planned,
                                   "work": work, "brk": brk}
                 if flow:
                     state["timer"].update(flow=True, check=every, every=every)
@@ -4292,7 +4292,7 @@ def render_timer(state: dict, big: bool = False) -> None:
         work, brk = tm.get("work"), tm.get("brk")
         now_ts = now().timestamp()
         if tm.get("paused_at") and PM.paused_for(tm, now_ts) > PM.PAUSE_LIMIT_MIN:
-            mins = min(PM.work_done(PM.effective_elapsed(tm, now_ts), work, brk), tm["planned"] + 15)
+            mins = min(PM.credited(tm, PM.effective_elapsed(tm, now_ts)), tm["planned"] + 15 + tm.get("over_total", 0.0))
             state.pop("timer", None)
             if mins >= 1 and t:
                 _log_session(state, t, start, mins, tm)
@@ -4314,14 +4314,21 @@ def _skip_break(state: dict) -> None:
         return
     eff = PM.effective_elapsed(tm, now().timestamp())
     ph, left = PM.phase(eff, tm.get("work"), tm.get("brk"), tm["planned"])
+    g, _ = PM.gate(tm, eff)
     if tm.get("paused_at"):
         flash("⏸️ Resume first, then skip the break.", "info")
+    elif g == "pit_out":
+        PM.confirm(tm, eff)
+        save_state(state)
+        flash("🟢 Pit out. Back on track.", "success")
     elif ph != "break":
         nxt = (tm.get("work") or 0) and ph == "work"
         flash("☕ No break right now" + (f" — the next one starts in {int(left) + 1} min." if nxt and tm.get("brk")
                                          and PM.work_done(eff, tm["work"], tm["brk"]) + left < tm["planned"] else "."), "info")
     else:
         tm["skipped"] = tm.get("skipped", 0.0) + left * 60
+        if "pins" in tm:  # skipping the break is your pit out
+            tm["pouts"] = int(tm.get("pins", 0))
         save_state(state)
         flash(f"☕ Break skipped ({int(left) + 1} min). Back on track.", "success")
     st.session_state["_tm_redraw"] = True
@@ -4361,6 +4368,23 @@ def _timer_controls(state: dict) -> None:
                 st.rerun(scope="app")
         elif eff >= FLOW_REST_AT:
             st.caption(f"🌊 {int(eff)} min deep. A real break soon would bank this well.")
+    gate_, over_ = PM.gate(tm, eff) if not paused else ("", 0.0)
+    if gate_ == "pit_in":
+        st.markdown(f"<div class='dod-flow-chk' style='border-color:#f5c518'>🔧 <b>Box, box. Stint done.</b> "
+                    f"<span>Finish your thought: " + (f"you're {int(over_)} min over, and " if over_ >= 1 else "") + f"up to {PM.PIT_OVER_MAX} extra min still count as work. The "
+                    f"{tm['brk']}-min break starts when you pit in.</span></div>", unsafe_allow_html=True)
+        if st.button("🔧 Pit in", type="primary", use_container_width=True, key="tm_pitin"):
+            PM.confirm(tm, eff)
+            save_state(state)
+            st.rerun(scope="app")
+    elif gate_ == "pit_out":
+        st.markdown(f"<div class='dod-flow-chk' style='border-color:#3ddc84'>🟢 <b>Break's up. Pit out?</b> "
+                    f"<span>" + (f"{int(over_)} min over the break (that part doesn't count as work). " if over_ >= 1 else "") + "The next stint starts when "
+                    f"you pit out.</span></div>", unsafe_allow_html=True)
+        if st.button("🟢 Pit out", type="primary", use_container_width=True, key="tm_pitout"):
+            PM.confirm(tm, eff)
+            save_state(state)
+            st.rerun(scope="app")
     c1, c2 = st.columns(2)
     if paused:
         if c1.button("▶️ Resume", use_container_width=True, key="tm_resume", type="primary"):
@@ -4392,7 +4416,7 @@ def _timer_controls(state: dict) -> None:
         st.rerun()
     if st.session_state.pop("_tm_redraw", False):
         st.rerun(scope="app")  # the clock lives outside these controls: redraw it with the new times
-    if not tm.get("flow"):
+    if not tm.get("flow") and not gate_:  # at a pit gate, the Pit in / Pit out button is the one to press
         c2.button("☕ Skip break", use_container_width=True, key="tm_skip", on_click=_skip_break, args=(state,),
                   help="Jump straight to the next work block (works whenever you're on a break).")
     wd_now = PM.work_done(eff, work, brk)
@@ -4410,8 +4434,8 @@ def _timer_controls(state: dict) -> None:
             st.toast(f"Flow mode: +{FLOW_STEP} min. Ride it.", icon="🌊")
             st.rerun(scope="app")
     c3, c4 = st.columns([3, 1])
-    if c3.button("⏹️ Stop & log", type="secondary" if paused else "primary", use_container_width=True, key="tm_stop"):
-        mins = min(PM.work_done(eff, work, brk), tm["planned"] + 15)
+    if c3.button("⏹️ Stop & log", type="secondary" if paused or gate_ else "primary", use_container_width=True, key="tm_stop"):
+        mins = min(PM.credited(tm, eff), tm["planned"] + 15 + tm.get("over_total", 0.0))
         state.pop("timer", None)
         if mins >= 1 and t:
             _log_session(state, t, start, mins, tm)
@@ -4440,10 +4464,16 @@ function dodTick(s,now){
  var wd=(!W||!B)?e:Math.floor(e/(W+B))*W+Math.min(e%(W+B),W);wd=Math.min(wd,T);
  var ph='work',left=(T-e)*60000;
  if(wd>=T)ph='done';else if(W&&B){var c=W+B,r=e%c;if(r<W)left=Math.min(W-r,T-wd)*60000;else{ph='break';left=(c-r)*60000;}}
- var o={frac:s.FL?(e%25)/25:wd/T,color:s.ACC,ph:ph,due:!!(s.FL&&e>=s.CHK)};
+ var gate='',over=0;  // pit in / pit out wait for your confirm
+ if(s.GT&&W&&B&&!s.FL){var c_=W+B,n_=s.PI,m_=s.PO;  // from the pit ins/outs you've confirmed
+  if(n_>m_){if(e>=n_*c_){gate='pitout';over=e-n_*c_;wd=n_*W;}}
+  else if(e>=n_*c_+W&&(n_+1)*W<T){gate='pitin';over=e-n_*c_-W;wd=(n_+1)*W;}}
+ var o={frac:s.FL?(e%25)/25:wd/T,color:s.ACC,ph:gate||ph,due:!!(s.FL&&e>=s.CHK)};
  if(s.PA){o.time=s.FL?dodMMSS(e*60000):dodMMSS(left);o.line='Paused '+dodMMSS(now-s.PA);o.color='#8b909c';}
  else if(s.FL){o.time=dodMMSS(e*60000);o.line=e>=s.CHK?'🌊 Check-in: still flowing?':'🌊 Flow · check-in at '+s.CHK+' min';
    if(e>=s.CHK)o.color='#29e3ff';}
+ else if(gate==='pitin'){o.time='+'+dodMMSS(over*60000);o.line='🔧 Box, box: tap Pit in';o.color='#f5c518';}
+ else if(gate==='pitout'){o.time='+'+dodMMSS(over*60000);o.line='🟢 Break\u2019s up: tap Pit out';o.color='#3ddc84';}
  else if(ph==='done'){o.time='+'+dodMMSS((e-s.WALL)*60000);o.line='🏁 Done. Stop & log it.';o.color='#ff6a5c';}
  else if(ph==='break'){o.time=dodMMSS(left);o.line='🔧 Break';o.color='#2ec4b6';}
  else{o.time=dodMMSS(left);o.line=Math.round(wd)+' of '+T+' min';}
@@ -4457,9 +4487,11 @@ SPLASH_JS = r"""
 var DOD_SP={pit:{e:'🔧',h:'PIT STOP',s:'Break time. Stand up, water, stretch. No phone in the pit lane.',c:'#2ec4b6'},
  go:{e:'🟢',h:'GREEN FLAG',s:'Break\u2019s over. Back to it.',c:'#3ddc84'},
  chk:{e:'🌊',h:'STILL FLOWING?',s:'Check-in: tap Keep going, or stop & log it.',c:'#29e3ff'},
+ pitin:{e:'🔧',h:'BOX, BOX',s:'Stint done. Tap Pit in when you\u2019re ready: the break starts then.',c:'#f5c518'},
+ pitout:{e:'🟢',h:'PIT OUT?',s:'Break\u2019s up. Tap Pit out to rejoin.',c:'#3ddc84'},
  fin:{e:'🏁',h:'CHEQUERED FLAG',s:'Session complete. Stop & log it.',c:'#ff6a5c'}};
 function dodSplash(doc,kind,sub){
- var k=DOD_SP[kind];if(!k||!doc||!doc.body)return;
+ var k=DOD_SP[kind];if(!k||!doc||!doc.body)return;var cls={pitin:'pit',pitout:'go'}[kind]||kind;
  var old=doc.getElementById('dod-sp');if(old)old.remove();
  if(!doc.getElementById('dod-sp-css')){var st=doc.createElement('style');st.id='dod-sp-css';st.textContent=
  '#dod-sp{position:fixed;inset:0;z-index:2147483000;pointer-events:none;display:flex;align-items:center;justify-content:center;'+
@@ -4482,14 +4514,15 @@ function dodSplash(doc,kind,sub){
  '@keyframes dspi{from{transform:scale(.6);opacity:0}to{transform:none;opacity:1}}'+
  '@keyframes dspp{from{opacity:.2}to{opacity:1}}@keyframes dspo{to{opacity:0;visibility:hidden}}'+
  '@media (prefers-reduced-motion:reduce){#dod-sp .bg,#dod-sp .fr,#dod-sp .cd{animation:none}}';doc.head.appendChild(st);}
- var o=doc.createElement('div');o.id='dod-sp';o.className=kind;o.style.setProperty('--c',k.c);
+ var o=doc.createElement('div');o.id='dod-sp';o.className=cls;o.style.setProperty('--c',k.c);
  o.innerHTML=(kind==='fin'?'<div class="fr"></div>':'')+'<div class="bg"></div><div class="cd"><div class="em"></div><div class="hd"></div>'+
-  '<div class="sb"></div>'+(kind==='go'?'<div class="lt"><i></i><i></i><i></i></div>':'')+'</div>';
+  '<div class="sb"></div>'+(cls==='go'?'<div class="lt"><i></i><i></i><i></i></div>':'')+'</div>';
  o.querySelector('.em').textContent=k.e;o.querySelector('.hd').textContent=k.h;o.querySelector('.sb').textContent=sub||k.s;
  doc.body.appendChild(o);var w=doc.defaultView;w.setTimeout(function(){if(o.parentNode)o.remove();},5400);
- try{if(w.navigator.vibrate)w.navigator.vibrate(kind==='fin'?[400,150,400,150,800]:kind==='pit'?[300,120,300]:[150,80,150,80,400]);}catch(e){}}
+ try{if(w.navigator.vibrate)w.navigator.vibrate(kind==='fin'?[400,150,400,150,800]:cls==='pit'?[300,120,300]:[150,80,150,80,400]);}catch(e){}}
 function dodSound(win,kind){  // pit: two falling tones · go: start lights (3 low + 1 high) · chk: two pings · fin: rising fanfare
  try{var A=win.__dodAC=win.__dodAC||new (win.AudioContext||win.webkitAudioContext)();if(A.state==='suspended')A.resume();
+  kind={pitin:'pit',pitout:'go'}[kind]||kind;
   var seq={pit:[[784,0,.28],[523,.32,.45]],go:[[440,0,.16],[440,.35,.16],[440,.7,.16],[880,1.05,.5]],
    chk:[[988,0,.14],[988,.22,.14]],fin:[[523,0,.16],[659,.18,.16],[784,.36,.16],[1047,.54,.6]]}[kind]||[];
   seq.forEach(function(x){var o=A.createOscillator(),g=A.createGain(),t=A.currentTime+x[1];o.type='triangle';o.frequency.value=x[0];
@@ -4501,7 +4534,8 @@ function dodMoment(memo,s,o){
  if(!m)return null;
  if(o.due&&!m.due&&!s.PA)return 'chk';
  if(m.k===key||s.PA||m.k==='pause')return null;
- if(key==='break')return 'pit';if(key==='work'&&m.k==='break')return 'go';if(key==='done')return 'fin';return null;}
+ if(key==='pitin')return 'pitin';if(key==='pitout')return 'pitout';
+ if(key==='break'&&m.k!=='pitin')return 'pit';if(key==='work'&&m.k==='break')return 'go';if(key==='done')return 'fin';return null;}
 """
 
 POP_PAGE_CSS = """*{box-sizing:border-box}html,body{margin:0;height:100%;background:#0e1117;color:#ece8df;
@@ -4538,9 +4572,11 @@ function act(k,b){if(!H||H.closed){$('m').textContent='The app tab is closed. Op
  try{H.__dodAct(k);}catch(e){$('m').textContent='Couldn’t reach the app tab.';}}
 function buttons(o){var L_=[];
  if(S.PA)L_.push(['tm_resume','▶️ Resume',0,1]);else L_.push(['tm_pause',S.pauseLabel,!S.canPause,0]);
+ if(o.ph==='pitin'&&!S.PA)L_.push(['tm_pitin','🔧 Pit in',0,1]);
+ if(o.ph==='pitout'&&!S.PA)L_.push(['tm_pitout','🟢 Pit out',0,1]);
  if(!S.FL&&o.ph==='break'&&!S.PA)L_.push(['tm_skip','☕ Skip break',0,0]);
  if(o.due&&!S.PA)L_.push(['tm_flow_ok','🌊 Keep going',0,1]);
- L_.push(['tm_stop','⏹️ Stop & log',0,!o.due&&!S.PA]);
+ L_.push(['tm_stop','⏹️ Stop & log',0,!o.due&&!S.PA&&o.ph!=='pitin'&&o.ph!=='pitout']);
  var sg=JSON.stringify(L_);if(sg===sig||Date.now()-busy<2500)return;sig=sg;var bt=$('bt');bt.innerHTML='';
  L_.forEach(function(x){var b=document.createElement('button');b.textContent=x[1];b.disabled=!!x[2];if(x[3])b.className='pri';
   b.onclick=function(){act(x[0],b);};bt.appendChild(b);});}
@@ -4624,7 +4660,8 @@ def _timer_js_state(state: dict, tm: dict | None) -> str:
         "FL": bool(tm.get("flow")), "CHK": int(tm.get("check", 0)), "ACC": accent(state)[0],
         "title": (t["title"] if t else "Focus session")[:60],
         "trkD": trk["d"], "trkL": f"{trk['name'].upper()} · {trk['km']:.3f} KM · {trk['series']}", "sprite": sprite,
-        "canPause": can_p, "pauseLabel": p_lbl}).replace("</", "<\\/")
+        "canPause": can_p, "pauseLabel": p_lbl,
+        "GT": "pins" in tm, "PI": int(tm.get("pins", 0)), "PO": int(tm.get("pouts", 0))}).replace("</", "<\\/")
 
 
 def _timer_hook_js(state_json: str) -> str:
@@ -4745,6 +4782,7 @@ try{{if(navigator.audioSession)navigator.audioSession.type='ambient';
 const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},LIM={limit},ACC='{acc}';
 const OFF=(d=>Math.abs(d)>120000?Math.round(d/900000)*900000:0)({int(time.time() // 60 * 60000)}-Date.now());  // a device clock set wrong by hours (e.g. the wrong time zone picked) can't skew the timer
 const TICKS=[{ticks}],EXT={ext},FL={'true' if tm.get('flow') else 'false'},CHK={int(tm.get('check', 0))};
+const GT={'true' if 'pins' in tm else 'false'},PI={int(tm.get('pins', 0))},PO={int(tm.get('pouts', 0))};
 function finish(){{  // whole-page "you're done" you can catch from across the room: once per session
  let P;try{{P=parent.document;}}catch(e){{return;}}
  const key='dodfin:'+S;try{{if(parent.sessionStorage.getItem(key))return;parent.sessionStorage.setItem(key,'1');}}catch(e){{}}
@@ -4815,7 +4853,11 @@ function frame(){{
  let ph='work',left=(T-e)*60000;
  if(wd>=T)ph='done';
  else if(W&&B){{const c=W+B,r=e%c;if(r<W)left=Math.min(W-r,T-wd)*60000;else{{ph='break';left=(c-r)*60000;}}}}
- const pit=ph==='break'&&!PA;
+ let gate='',over=0;  // pit in / pit out wait for your confirm
+ if(GT&&W&&B&&!FL){{const c=W+B;  // from the pit ins/outs you've confirmed
+  if(PI>PO){{if(e>=PI*c){{gate='pitout';over=e-PI*c;}}}}
+  else if(e>=PI*c+W&&(PI+1)*W<T){{gate='pitin';over=e-PI*c-W;}}}}
+ const pit=(ph==='break'&&gate!=='pitin'||gate==='pitout')&&!PA;
  place(ph==='done'?0:f,pit);
  trail.setAttribute('stroke-dasharray',(L*Math.min(1,f))+' 99999');
  w.className='w'+(PA?' blink':'')+(pit?' pit':'')+(ph==='done'&&!PA?' fin':'');
@@ -4826,6 +4868,10 @@ function frame(){{
   const blk=W&&B?Math.min(TICKS.length+1,Math.floor(e/(W+B))+1):1,stints=TICKS.length+1;
   if(PA){{t.textContent=mmss(left);t.style.fill='#8b909c';trail.style.stroke='#5b6070';
     p.textContent='🟡 Yellow flag';s.textContent='Paused '+mmss(now-PA)+' · retires the car at '+LIM+':00';}}
+  else if(gate==='pitin'){{t.textContent='+'+mmss(over*60000);t.style.fill='#f5c518';trail.style.stroke=ACC;
+    p.textContent='🔧 Box, box';s.textContent='Stint done. Pit in when you’re ready: the break starts then.';}}
+  else if(gate==='pitout'){{t.textContent='+'+mmss(over*60000);t.style.fill='#3ddc84';trail.style.stroke=ACC;
+    p.textContent='🟢 Pit out?';s.textContent='Break’s up. Pit out to start the next stint.';}}
   else if(ph==='done'){{t.textContent='+'+mmss((e-WALL)*60000);t.style.fill='#ff6a5c';trail.style.stroke=ACC;
     p.textContent='🏁 Chequered flag';s.textContent='Session complete. Stop & log it.';}}
   else if(pit){{t.textContent=mmss(left);t.style.fill='#2ec4b6';trail.style.stroke=ACC;

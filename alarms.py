@@ -251,12 +251,16 @@ def _timer(save: dict, now: datetime) -> list[dict]:
     if work and brk:
         c, i, k = work + brk, 0, 0
         while i < TIMER_SLOTS and k < 40:
-            for off, ttl, msg in ((k * c + work, "☕ Break time", f"{work} min in. Stand up, water, no phone."),
-                                  ((k + 1) * c, "🟢 Back to work", "Break's over. Phone face-down, back to it.")):
+            gated = "pins" in tm  # breaks wait for a Pit in / Pit out tap in the app
+            for off, ttl, msg in ((k * c + work, "🔧 Box, box" if gated else "☕ Break time",
+                                   f"{work} min in. Tap Pit in when you're ready." if gated
+                                   else f"{work} min in. Stand up, water, no phone."),
+                                  ((k + 1) * c, "🟢 Pit out?" if gated else "🟢 Back to work",
+                                   "Break's up. Tap Pit out to rejoin." if gated else "Break's over. Phone face-down, back to it.")):
                 at = now + timedelta(minutes=off - eff)
                 if now < at < end - timedelta(minutes=1) and i < TIMER_SLOTS:
                     slots[i].update(at=at, wanted=True, title=ttl, message=f"{title}: {msg}",
-                                    tags=["coffee" if "Break" in ttl else "green_circle"])
+                                    tags=["coffee" if ("Break" in ttl or "Box" in ttl) else "green_circle"])
                     i += 1
             k += 1
     return [end_a] + slots
