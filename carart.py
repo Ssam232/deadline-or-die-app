@@ -18,7 +18,8 @@ R_TIRE = 19
 #      f = metres back from the front bumper and z = metres above the ground. A third item "c" = a sharp corner.
 # DLO: the side glass (day-light opening) the same way. Everything else is placed from these numbers.
 PROFILES = {
-    "sedan": dict(  # Civic Si: long hood, sleek fastback-style sedan roof, short decklid
+    "sedan": dict(  # noqa
+        WHEEL=("twin", "#3a3d44", 5), LAMP="slim", EXH="twin",   # Civic Si: long hood, sleek fastback-style sedan roof, short decklid
         L=4.67, H=1.41, WB=2.735, FO=0.97, TD=0.65, SILL=0.21,
         OUT=[(0.04, 0.25, "c"), (0.0, 0.42), (0.03, 0.62), (0.16, 0.75), (0.6, 0.83), (1.15, 0.95, "c"),
              (1.55, 1.18), (1.92, 1.37), (2.45, 1.41), (3.0, 1.37), (3.55, 1.2), (3.98, 1.04, "c"), (4.42, 1.0),
@@ -26,7 +27,8 @@ PROFILES = {
         DLO=[(1.27, 0.98), (1.92, 1.31), (2.98, 1.31), (3.62, 1.07), (1.27, 0.96)],
         B=2.42, DOORS=[1.25, 2.42, 3.35], BELT=0.98, HEAD=(0.03, 0.34, 0.66, 0.73), TAIL=(4.45, 4.67, 0.84, 0.93),
         HOOD=(0.25, 1.05), ROOF=(2.0, 2.95), DECK=4.4, CAP=4.0),
-    "coupe": dict(  # Integra Type R (DC2): low three-door with a sloping hatch and a factory wing
+    "coupe": dict(  # noqa
+        WHEEL=("spoke", "#efeee8", 5), LAMP="tall", EXH="single",   # Integra Type R (DC2): low three-door with a sloping hatch and a factory wing
         L=4.38, H=1.32, WB=2.57, FO=0.92, TD=0.60, SILL=0.2,
         OUT=[(0.04, 0.23, "c"), (0.0, 0.40), (0.03, 0.57), (0.2, 0.68), (0.62, 0.76), (1.12, 0.88, "c"),
              (1.45, 1.08), (1.78, 1.29), (2.3, 1.32), (2.78, 1.29), (3.45, 1.07), (3.88, 0.99, "c"), (4.3, 0.96),
@@ -34,7 +36,8 @@ PROFILES = {
         DLO=[(1.17, 0.9), (1.78, 1.23), (2.7, 1.23), (3.3, 1.03), (1.17, 0.88)],
         B=2.6, DOORS=[1.15, 2.6], BELT=0.9, HEAD=(0.03, 0.36, 0.59, 0.65), TAIL=(4.18, 4.38, 0.82, 0.92),
         HOOD=(0.25, 1.0), ROOF=(1.95, 2.75), DECK=4.02, CAP=3.6, WING=3),
-    "roadster": dict(  # S2000: long hood, cockpit set far back, roll hoops, short tail
+    "roadster": dict(  # noqa
+        WHEEL=("spoke", "#c9ccd2", 6), LAMP="tall", EXH="twin",   # S2000: long hood, cockpit set far back, roll hoops, short tail
         L=4.12, H=1.27, WB=2.40, FO=0.83, TD=0.63, SILL=0.19, OPEN=True,
         OUT=[(0.04, 0.23, "c"), (0.0, 0.42), (0.04, 0.58), (0.26, 0.7), (0.8, 0.8), (1.55, 0.92, "c"),
              (2.02, 1.11, "c"), (2.08, 1.11, "c"), (2.2, 0.95, "c"), (3.2, 0.95), (3.5, 0.97), (3.98, 0.98, "c"),
@@ -42,7 +45,8 @@ PROFILES = {
         DLO=[(1.6, 0.93), (2.0, 1.1), (2.06, 1.1), (1.72, 0.93)],
         B=None, DOORS=[1.6, 2.75], BELT=0.94, HEAD=(0.04, 0.42, 0.6, 0.67), TAIL=(3.95, 4.12, 0.8, 0.9),
         HOOD=(0.35, 1.45), ROOF=None, DECK=3.9, CAP=None, HOOPS=(2.82, 3.02), HOOP_Z=1.12),
-    "hatch": dict(  # Civic Type R (FL5): fastback five-door, flared arches, wing on tall stands
+    "hatch": dict(  # noqa
+        WHEEL=("spoke", "#1e1f23", 10), LAMP="slim", EXH="center3",   # Civic Type R (FL5): fastback five-door, flared arches, wing on tall stands
         L=4.59, H=1.41, WB=2.735, FO=1.0, TD=0.68, SILL=0.18,
         OUT=[(0.04, 0.21, "c"), (0.0, 0.38), (0.03, 0.6), (0.18, 0.74), (0.62, 0.82), (1.15, 0.94, "c"),
              (1.55, 1.17), (1.92, 1.37), (2.45, 1.41), (3.05, 1.36), (3.85, 1.13), (4.3, 1.03, "c"), (4.53, 0.99),
@@ -50,7 +54,8 @@ PROFILES = {
         DLO=[(1.27, 0.97), (1.92, 1.31), (3.0, 1.3), (3.72, 1.09), (1.27, 0.95)],
         B=2.42, DOORS=[1.25, 2.42, 3.3], BELT=0.97, HEAD=(0.03, 0.36, 0.64, 0.71), TAIL=(4.4, 4.59, 0.86, 0.96),
         HOOD=(0.25, 1.05), ROOF=(2.0, 3.0), DECK=4.25, CAP=3.9, WING=4, FLARE=True),
-    "super": dict(  # NSX (NA1): very low, cab-forward canopy, long rear deck, full-width tail light
+    "super": dict(  # noqa
+        WHEEL=("spoke", "#c9ccd2", 7), LAMP="popup", EXH="twin",   # NSX (NA1): very low, cab-forward canopy, long rear deck, full-width tail light
         L=4.43, H=1.17, WB=2.53, FO=1.0, TD=0.63, SILL=0.16, MID=True,
         OUT=[(0.04, 0.19, "c"), (0.0, 0.33), (0.04, 0.5), (0.35, 0.62), (0.95, 0.74), (1.4, 0.84, "c"),
              (1.7, 1.02), (1.97, 1.15), (2.55, 1.17), (2.88, 1.13), (3.3, 0.99), (3.75, 0.93, "c"), (4.33, 0.9),
@@ -59,7 +64,8 @@ PROFILES = {
         B=None, DOORS=[1.5, 2.85], BELT=0.84, HEAD=(0.08, 0.42, 0.52, 0.56), TAIL=(4.4, 4.43, 0.66, 0.8),
         HOOD=(0.3, 1.3), ROOF=(2.05, 2.8), DECK=4.1, CAP=4.1,
         INTAKE=[(2.72, 0.66), (3.1, 0.72), (3.08, 0.44), (2.76, 0.42)]),
-    "super2": dict(  # NSX (NC1) Type S: low wedge nose, flying-buttress rear, huge side scoop
+    "super2": dict(  # noqa
+        WHEEL=("twin", "#2e3036", 5), LAMP="slim", EXH="quad",   # NSX (NC1) Type S: low wedge nose, flying-buttress rear, huge side scoop
         L=4.535, H=1.215, WB=2.63, FO=1.03, TD=0.68, SILL=0.14, MID=True,
         OUT=[(0.03, 0.18, "c"), (0.0, 0.32), (0.02, 0.48, "c"), (0.32, 0.62), (0.95, 0.77), (1.38, 0.87, "c"),
              (1.72, 1.06), (1.98, 1.19), (2.55, 1.215), (2.95, 1.18), (3.45, 1.02), (3.85, 0.97, "c"), (4.38, 0.98),
@@ -68,7 +74,8 @@ PROFILES = {
         B=None, DOORS=[1.48, 2.92], BELT=0.87, HEAD=(0.05, 0.42, 0.53, 0.58), TAIL=(4.47, 4.535, 0.83, 0.88),
         HOOD=(0.3, 1.25), ROOF=(2.05, 2.85), DECK=4.15, CAP=4.2,
         INTAKE=[(2.78, 0.82), (3.2, 0.88), (3.16, 0.4), (2.82, 0.4)]),
-    "rsx": dict(  # RSX Type-S: wedge three-door, beltline kicking up, long sloping hatch with a spoiler
+    "rsx": dict(  # noqa
+        WHEEL=("spoke", "#c9ccd2", 5), LAMP="tall", EXH="single",   # RSX Type-S: wedge three-door, beltline kicking up, long sloping hatch with a spoiler
         L=4.37, H=1.40, WB=2.57, FO=0.94, TD=0.62, SILL=0.2,
         OUT=[(0.04, 0.23, "c"), (0.0, 0.41), (0.03, 0.62), (0.18, 0.74), (0.55, 0.82), (1.05, 0.95, "c"),
              (1.42, 1.17), (1.75, 1.37), (2.3, 1.4), (2.75, 1.36), (3.6, 1.12), (3.96, 1.04, "c"), (4.3, 0.99),
@@ -76,7 +83,8 @@ PROFILES = {
         DLO=[(1.15, 0.97), (1.75, 1.31), (2.7, 1.3), (3.45, 1.1), (3.2, 1.08), (1.15, 0.95)],
         B=2.62, DOORS=[1.13, 2.62], BELT=0.97, HEAD=(0.03, 0.38, 0.64, 0.72), TAIL=(4.15, 4.37, 0.88, 0.98),
         HOOD=(0.22, 0.95), ROOF=(1.9, 2.7), DECK=3.98, CAP=3.75, WING=2),
-    "tsx": dict(  # TSX: a classic three-box sport sedan, upright glass, short high decklid
+    "tsx": dict(  # noqa
+        WHEEL=("spoke", "#c9ccd2", 7), LAMP="tall", EXH="single",   # TSX: a classic three-box sport sedan, upright glass, short high decklid
         L=4.66, H=1.455, WB=2.67, FO=0.95, TD=0.63, SILL=0.21,
         OUT=[(0.04, 0.25, "c"), (0.0, 0.43), (0.02, 0.64), (0.15, 0.78), (0.6, 0.86), (1.15, 0.98, "c"),
              (1.55, 1.22), (1.9, 1.42), (2.35, 1.455), (3.05, 1.44), (3.45, 1.3), (3.78, 1.1, "c"), (3.9, 1.06),
@@ -84,7 +92,8 @@ PROFILES = {
         DLO=[(1.27, 1.0), (1.9, 1.38), (3.04, 1.38), (3.38, 1.24), (3.62, 1.08), (1.27, 0.99)],
         B=2.45, DOORS=[1.25, 2.45, 3.4], BELT=1.0, HEAD=(0.02, 0.33, 0.68, 0.77), TAIL=(4.48, 4.66, 0.86, 0.98),
         HOOD=(0.25, 1.05), ROOF=(2.05, 3.0), DECK=4.4, CAP=3.3, C=3.3),
-    "integra_s": dict(  # Integra Type S: long fastback liftback roof, wide flares, small ducktail
+    "integra_s": dict(  # noqa
+        WHEEL=("spoke", "#3a3d44", 10), LAMP="slim", EXH="center3",   # Integra Type S: long fastback liftback roof, wide flares, small ducktail
         L=4.73, H=1.39, WB=2.735, FO=1.0, TD=0.67, SILL=0.18,
         OUT=[(0.04, 0.21, "c"), (0.0, 0.38), (0.03, 0.6), (0.18, 0.73), (0.6, 0.82), (1.18, 0.95, "c"),
              (1.58, 1.17), (1.95, 1.35), (2.45, 1.39), (3.0, 1.36), (3.95, 1.12), (4.45, 1.03, "c"), (4.66, 1.0, "c"),
@@ -92,7 +101,8 @@ PROFILES = {
         DLO=[(1.3, 0.97), (1.95, 1.3), (3.0, 1.3), (3.82, 1.1), (3.55, 1.05), (1.3, 0.96)],
         B=2.45, DOORS=[1.28, 2.45, 3.35], BELT=0.97, HEAD=(0.03, 0.36, 0.63, 0.7), TAIL=(4.5, 4.73, 0.88, 0.97),
         HOOD=(0.25, 1.08), ROOF=(2.05, 2.95), DECK=4.45, CAP=3.9, WING=2, FLARE=True),
-    "tlx": dict(  # TLX Type S: long hood with a long dash-to-axle, cabin pushed back, coupe-like roof, ducktail
+    "tlx": dict(  # noqa
+        WHEEL=("twin", "#4a4e57", 5), LAMP="slim", EXH="quad",   # TLX Type S: long hood with a long dash-to-axle, cabin pushed back, coupe-like roof, ducktail
         L=4.94, H=1.43, WB=2.87, FO=0.95, TD=0.68, SILL=0.18,
         OUT=[(0.04, 0.21, "c"), (0.0, 0.4), (0.03, 0.63), (0.2, 0.77), (0.75, 0.86), (1.42, 1.0, "c"),
              (1.85, 1.24), (2.22, 1.4), (2.72, 1.43), (3.28, 1.4), (4.05, 1.13), (4.38, 1.05, "c"), (4.82, 1.02, "c"),
@@ -100,13 +110,15 @@ PROFILES = {
         DLO=[(1.53, 1.02), (2.22, 1.35), (3.25, 1.34), (3.95, 1.1), (1.53, 1.0)],
         B=2.78, DOORS=[1.5, 2.78, 3.65], BELT=1.01, HEAD=(0.03, 0.4, 0.67, 0.72), TAIL=(4.78, 4.94, 0.88, 0.95),
         HOOD=(0.3, 1.32), ROOF=(2.3, 3.2), DECK=4.62, CAP=4.1),
-    "proto": dict(  # endurance prototype: splitter, tall wheel fenders, bubble canopy, fin, long tail
+    "proto": dict(  # noqa
+        LAMP="slim", EXH="none",   # endurance prototype: splitter, tall wheel fenders, bubble canopy, fin, long tail
         L=5.1, H=1.06, WB=3.15, FO=1.0, TD=0.71, SILL=0.14, MID=True, GT3=True, PROTO=True,
         OUT=[(0.0, 0.1, "c"), (0.03, 0.3), (0.3, 0.44), (0.72, 0.68), (1.0, 0.8), (1.3, 0.76), (1.7, 0.78, "c"),
              (2.05, 1.0), (2.5, 1.06), (2.92, 1.0), (3.35, 0.88), (3.85, 0.84), (4.15, 0.86), (4.55, 0.8),
              (5.02, 0.72, "c"), (5.1, 0.42), (5.08, 0.14, "c")],
         DLO=[(1.82, 0.84), (2.1, 1.0), (2.58, 1.01), (2.86, 0.92), (1.82, 0.84)],
         B=None, DOORS=[1.75, 2.85], BELT=0.84, HEAD=(0.12, 0.45, 0.42, 0.46), TAIL=(5.0, 5.1, 0.58, 0.64),
+        CUTS=[(1.4, 0.76), (3.72, 0.86)],
         HOOD=None, ROOF=None, DECK=4.85, CAP=None, WING=5,
         FIN=[(2.8, 1.02), (4.55, 1.0), (4.6, 0.84), (3.35, 0.88)],
         INTAKE=[(3.05, 0.62), (3.62, 0.66), (3.6, 0.38), (3.1, 0.36)]),
@@ -140,8 +152,10 @@ def _uid(*bits) -> str:
     return "c" + format(abs(hash(bits)) % 10 ** 8, "x")
 
 
-def _wheel(cx: float, cy: float, tires: int, brakes: int, gt3: bool, uid: str = "w") -> str:
+def _wheel(cx: float, cy: float, tires: int, brakes: int, gt3: bool, uid: str = "w", stock=None) -> str:
     style, rim, spokes = WHEEL_STYLES[min(tires, 5)]
+    if stock and tires < 3 and not gt3:  # the car's own factory wheel design until you fit aftermarket ones
+        style, rim, spokes = stock
     if gt3 and tires < 5:
         style, rim, spokes = WHEEL_STYLES[5]
     r_rim = 12.5 + min(tires, 5) * 0.35
@@ -183,9 +197,14 @@ def _wheel(cx: float, cy: float, tires: int, brakes: int, gt3: bool, uid: str = 
         out.append(f'<circle cx="{cx}" cy="{cy}" r="3" fill="#2a2c31"/>')
     else:
         w = 3.0 if spokes <= 6 else 1.6
+        twin = style == "twin"
+        if twin:
+            w = 1.6
         out.append(f'<circle cx="{cx}" cy="{cy}" r="{r_rim}" fill="none" stroke="url(#{uid}r)" stroke-width="2.4"/>')
-        for k in range(spokes):
-            a = math.radians(k * 360 / spokes + 18)
+        angs = ([k * 360 / spokes + 18 + d for k in range(spokes) for d in (-6, 6)] if twin
+                else [k * 360 / spokes + 18 for k in range(spokes)])
+        for deg in angs:
+            a = math.radians(deg)
             x_0, y_0 = cx + 3.2 * math.cos(a), cy + 3.2 * math.sin(a)
             x_1, y_1 = cx + (r_rim - 1) * math.cos(a), cy + (r_rim - 1) * math.sin(a)
             out.append(f'<line x1="{x_0:.1f}" y1="{y_0:.1f}" x2="{x_1:.1f}" y2="{y_1:.1f}" stroke="{deep}" '
@@ -369,7 +388,8 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
         a_, b_ = P(p["DOORS"][0] + .25, 0)[0], P(p["DOORS"][-1] - .1, 0)[0]
         g.append(f'<path d="M{a_:.1f},{belt_y:.1f} L{a_ - 10:.1f},{roof_y + 7:.1f} L{b_ + 8:.1f},{roof_y + 7:.1f} L{b_:.1f},{belt_y:.1f}" '
                  f'stroke="#e5e5e5" stroke-width="1.5" fill="none" opacity=".75"/>')
-    if p.get("OPEN"):  # roadster: seats, headrests, roll hoops behind them
+    if p.get("OPEN"):  # roadster: windscreen frame, seats, headrests, roll hoops behind them
+        g.append(f'<path d="{dlo}" fill="none" stroke="#111318" stroke-width="2.2" stroke-linejoin="round"/>')
         h0, h1 = p["HOOPS"]
         hz = p["HOOP_Z"]
         for f_ in (h0, h1):
@@ -383,6 +403,11 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
         x_ = P(f_, 0)[0]
         g.append(f'<path d="M{x_:.1f},{belt_y + 1:.1f} L{x_ + (1.5 if k_ == 0 else -1.5):.1f},{sill - 1:.1f}" stroke="#000" stroke-opacity=".45" stroke-width="1"/>'
                  f'<path d="M{x_ + 1:.1f},{belt_y + 1:.1f} L{x_ + 2.5:.1f},{sill - 1:.1f}" stroke="#fff" stroke-opacity=".1" stroke-width=".6"/>')
+    for f_, z_ in p.get("CUTS", []):  # prototype: wheel fenders are separate panels standing off the tub
+        x_, y_ = P(f_, z_)
+        g.append(f'<path d="M{x_:.1f},{y_:.1f} Q{x_ - 3:.1f},{(y_ + sill) / 2:.1f} {x_ + 1:.1f},{sill:.1f}" stroke="#000" '
+                 f'stroke-opacity=".55" stroke-width="1.4" fill="none"/><path d="M{x_ + 1.5:.1f},{y_ + 1:.1f} Q{x_ - 1.5:.1f},{(y_ + sill) / 2:.1f} '
+                 f'{x_ + 2.5:.1f},{sill:.1f}" stroke="#fff" stroke-opacity=".12" stroke-width=".8" fill="none"/>')
     hx = P(p["DOORS"][1] - .25 if len(p["DOORS"]) > 1 else p["DOORS"][0] + .5, 0)[0]
     g.append(f'<rect x="{hx:.1f}" y="{belt_y + 6:.1f}" width="10" height="2.4" rx="1.2" fill="#000" opacity=".45"/>'
              f'<rect x="{hx:.1f}" y="{belt_y + 6:.1f}" width="10" height=".9" rx=".45" fill="#fff" opacity=".22"/>')
@@ -426,6 +451,16 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
     a, b, c, d = p["HEAD"]
     (hx0, hy0), (hx1, hy1) = P(b, d), P(a, c)
     hw, hh = hx1 - hx0, hy1 - hy0
+    lamp = p.get("LAMP", "tall")
+    if lamp == "popup":  # closed pop-up covers: a seam on the nose, plus the small lamps in the bumper
+        (sx0, sy0), (sx1, sy1) = P(0.62, _z_at(p, 0.62)), P(0.12, _z_at(p, 0.12))
+        g.append(f'<path d="M{sx0:.1f},{sy0 + 1:.1f} L{sx1:.1f},{sy1 + 1:.1f} L{sx1 + 1:.1f},{sy1 + 4:.1f} L{sx0:.1f},{sy0 + 3.4:.1f}" '
+                 f'fill="none" stroke="#000" stroke-opacity=".5" stroke-width=".9"/>')
+        hy0, hy1 = P(0, 0.4)[1], P(0, 0.35)[1]
+        hx0, hx1 = P(0.32, 0)[0], P(0.02, 0)[0]
+        hw, hh = hx1 - hx0, hy1 - hy0
+    elif lamp == "slim":
+        g.append(f'<path d="M{hx0 - 3:.1f},{hy0 + hh * .2:.1f} L{hx1:.1f},{hy0 + hh * .55:.1f}" stroke="#fff6d8" stroke-width="1.1" opacity=".9"/>')
     g.append(f'<ellipse cx="{hx1 + 2:.1f}" cy="{(hy0 + hy1) / 2:.1f}" rx="{hw * .7 + 6:.1f}" ry="{hh + 5:.1f}" fill="url(#{u}h)" opacity=".75"/>'
              f'<path d="M{hx0:.1f},{hy0 + hh * .35:.1f} L{hx1 - 1:.1f},{hy0:.1f} Q{hx1 + 1:.1f},{hy0:.1f} {hx1:.1f},{hy1 - 1:.1f} '
              f'L{hx0 + 2:.1f},{hy1:.1f} Z" fill="#eef1f5" stroke="#0b0c0e" stroke-width=".6"/>'
@@ -478,10 +513,15 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
                      f'<path d="M{dx + 10:.1f},{ty_ + 1:.1f} Q{dx + 6:.1f},{dy - 6:.1f} {dx + 16:.1f},{dy:.1f}" stroke="{dark}" stroke-width="3" fill="none"/>')
     # exhaust → intercooler → anti-lag flames
     ey_ = rb[1] - 7
-    if turbo >= 1 or p.get("MID"):
-        tip = 3 + turbo
-        g.append(f'<rect x="{rear - tip:.1f}" y="{ey_:.1f}" width="{tip + 9:.1f}" height="4.6" rx="2.3" fill="#c4c7cd" stroke="#555" stroke-width=".6"/>'
-                 f'<ellipse cx="{rear - tip + 1:.1f}" cy="{ey_ + 2.3:.1f}" rx="1.2" ry="1.9" fill="#2a2b30"/>')
+    exh = p.get("EXH", "single")
+    if exh != "none" or turbo >= 1:
+        tip = 2 + turbo
+        n_ = {"single": 1, "twin": 1, "quad": 2, "center3": 3}.get(exh, 1)  # side view: tips you can see
+        for j in range(n_):
+            yy = ey_ - j * 4.2 if exh != "center3" else ey_ - 2 + (j - 1) * 3.6
+            g.append(f'<rect x="{rear - tip:.1f}" y="{yy:.1f}" width="{tip + 8:.1f}" height="{3.4 if n_ > 1 else 4.6}" rx="1.7" '
+                     f'fill="#c4c7cd" stroke="#555" stroke-width=".6"/>'
+                     f'<ellipse cx="{rear - tip + 1:.1f}" cy="{yy + (1.7 if n_ > 1 else 2.3):.1f}" rx="1" ry="1.4" fill="#2a2b30"/>')
     if turbo >= 3 and not p.get("MID"):
         ix_, iy_ = P(0.03, 0.34)
         g.append(f'<path d="M{ix_ - 14:.1f},{iy_:.1f} L{ix_:.1f},{iy_:.1f} L{ix_:.1f},{iy_ + 7:.1f} L{ix_ - 14:.1f},{iy_ + 7:.1f} Z" fill="#3b3f46"/>'
@@ -500,7 +540,7 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
                  f'<circle cx="{front - 26:.1f}" cy="{roof_y - 10:.1f}" r="12" fill="#777" opacity=".35"/>')
     s_ = rt / R_TIRE
     wheels = "".join(f'<g transform="translate({wx:.1f},{wy:.1f}) scale({s_:.3f}) translate({-wx:.1f},{-wy:.1f})">'
-                     f'{_wheel(wx, wy, tires, brakes, gt3, u + tag)}</g>' for wx, tag in ((rx, "a"), (fx, "f")))
+                     f'{_wheel(wx, wy, tires, brakes, gt3, u + tag, p.get("WHEEL"))}</g>' for wx, tag in ((rx, "a"), (fx, "f")))
     car_g = f'<g transform="translate(0,{drop})">{"".join(g)}</g>{wheels}'
     shadow = (f'<ellipse cx="{CX:.1f}" cy="{GROUND + 1}" rx="{(front - rear) / 2 + 6:.1f}" ry="5" fill="#000" opacity=".45"/>'
               f'<ellipse cx="{rx:.1f}" cy="{GROUND}" rx="{rt + 5:.1f}" ry="3" fill="#000" opacity=".5"/>'
