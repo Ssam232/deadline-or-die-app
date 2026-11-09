@@ -4057,7 +4057,8 @@ def render_timer(state: dict) -> None:
                 planned = FLOW_CAP
                 every = _flow_every_pick(state, "timer_every")
                 st.caption(f"🌊 **Flow:** counts up, no breaks. Every {every} min it checks you're still going (one tap); "
-                           f"no answer in {FLOW_GRACE} min and it logs up to the check-in. Loot rolls every 25 min.")
+                           f"no answer in {FLOW_GRACE} min and it logs up to the check-in. One free pause per stretch, "
+                           f"earned again at each check-in. Loot rolls every 25 min.")
             elif not planned:
                 planned = int(c2.number_input("Custom minutes", 5, 240, int(state["settings"].get("timer_custom", 40)),
                                               5, key="timer_custom", label_visibility="collapsed"))
@@ -4179,6 +4180,7 @@ def _timer_controls(state: dict) -> None:
                         unsafe_allow_html=True)
             if st.button("🌊 Yes, keep going", type="primary", use_container_width=True, key="tm_flow_ok"):
                 tm["check"] = int(eff) + int(tm.get("every") or FLOW_AGAIN)
+                tm["period"] = tm.get("period", 0) + 1  # a new check-in stretch: its own pause
                 save_state(state)
                 st.rerun(scope="app")
         elif eff >= FLOW_REST_AT:
@@ -4188,6 +4190,18 @@ def _timer_controls(state: dict) -> None:
         if c1.button("▶️ Resume", use_container_width=True, key="tm_resume", type="primary"):
             tm["paused_total"] = tm.get("paused_total", 0.0) + (now_ts - parse_dt(tm["paused_at"]).timestamp())
             tm["paused_at"] = None
+            save_state(state)
+            st.rerun()
+    elif tm.get("flow"):  # 🌊 flow: one free pause per check-in stretch, earned again at each check-in
+        have = tm.get("pause_period") != tm.get("period", 0)
+        nxt = int(tm.get("check", FLOW_CHECK))
+        if c1.button("⏸️ Pause · 1 left" if have else f"⏸️ Next pause at {nxt} min", use_container_width=True,
+                     key="tm_pause", disabled=not have,
+                     help=f"Flow gives you one free pause per check-in stretch (every {tm.get('every') or FLOW_CHECK} min). "
+                          f"Paused time doesn't count, and a pause over {PM.PAUSE_LIMIT_MIN} min ends the session."):
+            tm["pause_period"] = tm.get("period", 0)
+            tm["pauses"] = tm.get("pauses", 0) + 1
+            tm["paused_at"] = now().isoformat()
             save_state(state)
             st.rerun()
     elif c1.button(f"⏸️ Pause · −{PM.pause_cost(tm)} 🪙", use_container_width=True, key="tm_pause",
@@ -6456,7 +6470,8 @@ def render_block_play(state: dict, t: dict, kp: str = "bp") -> None:
         every = FLOW_CHECK
         if m == FLOW_MODE:
             every = _flow_every_pick(state, f"{kp}_every_{t['id']}")
-            st.caption(f"🌊 Flow counts up with no breaks and checks you're still going every {every} min.")
+            st.caption(f"🌊 Flow counts up with no breaks and checks you're still going every {every} min. "
+                       f"One free pause per stretch.")
         else:
             st.caption("A set timer with your usual break setting.")
         if st.button("▶️ Start", type="primary", use_container_width=True, key=f"{kp}_go_{t['id']}"):
