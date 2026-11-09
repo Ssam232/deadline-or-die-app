@@ -19,3 +19,6 @@
 {"date": "2026-11-05", "outcome": "added", "title": "An improved method for studying mouse diaphragm function", "doi": "10.1038/s41598-019-55704-8", "file": "2026-11-04-seed.json"}
 {"date": "2026-11-05", "outcome": "added", "title": "Measuring isometric force of isolated mouse muscles in vitro", "doi": "", "file": "2026-11-04-seed.json"}
 {"date": "2026-11-05", "outcome": "added", "title": "Alterations in skeletal muscle morphology and mechanics in juvenile male Sprague Dawley rats exposed to a high-fat high-sucrose diet", "doi": "10.1038/s41598-023-38487-x", "file": "2026-11-04-seed.json"}
+{"date": "2026-11-09", "outcome": "added", "title": "Diaphragm muscle adaptations in health and disease", "doi": "10.1016/j.ddmod.2019.10.002", "file": "2026-11-09.json", "order": "A04"}
+{"date": "2026-11-09", "outcome": "added", "title": "Diaphragm single-fiber weakness and loss of myosin in congestive heart failure rats", "doi": "10.1152/ajpheart.00085.2007", "file": "2026-11-09.json", "order": "C05"}
+{"date": "2026-11-09", "outcome": "added", "title": "Heart failure decreases passive tension generation of rat diaphragm fibers", "doi": "10.1016/j.ijcard.2008.12.042", "file": "2026-11-09.json", "order": "C06"}
