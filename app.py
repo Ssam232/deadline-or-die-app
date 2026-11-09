@@ -2929,7 +2929,7 @@ def render_remove(state: dict, t: dict, scope: str) -> None:
 READING_TASK = re.compile(r"\b(read|reading|paper|papers|article|articles|lit(erature)?\s*review)\b", re.I)
 
 
-PAPER_MIN = 45  # minutes per paper on a reading task (flow extensions cover the rest)
+PAPER_MIN = 60  # minutes per paper on a reading task (flow extensions cover the rest)
 
 
 def paper_keys(t: dict) -> list[str]:
@@ -2944,7 +2944,7 @@ def paper_label(p: dict, order: bool = True) -> str:
 
 
 def _pair_paper(state: dict, t: dict, widget: str, proof_key: str, papers: list[dict]) -> None:
-    """Runs when you change the papers on a reading task: it takes their names and links, gets 45 min per paper
+    """Runs when you change the papers on a reading task: it takes their names and links, gets PAPER_MIN (1 h) per paper
     (the timer starts from that; flow extensions cover the rest), and finishing it marks them all read."""
     _proof_touch(proof_key)  # keep this panel open
     by = {p["key"]: p for p in papers}
@@ -4057,8 +4057,8 @@ def render_timer(state: dict) -> None:
                 planned = FLOW_CAP
                 every = _flow_every_pick(state, "timer_every")
                 st.caption(f"🌊 **Flow:** counts up, no breaks. Every {every} min it checks you're still going (one tap); "
-                           f"no answer in {FLOW_GRACE} min and it logs up to the check-in. One free pause per stretch, "
-                           f"earned again at each check-in. Loot rolls every 25 min.")
+                           f"no answer in {FLOW_GRACE} min and it logs up to the check-in. You bank one free pause per stretch; "
+                           f"unused ones carry over. Loot rolls every 25 min.")
             elif not planned:
                 planned = int(c2.number_input("Custom minutes", 5, 240, int(state["settings"].get("timer_custom", 40)),
                                               5, key="timer_custom", label_visibility="collapsed"))
@@ -4193,13 +4193,14 @@ def _timer_controls(state: dict) -> None:
             save_state(state)
             st.rerun()
     elif tm.get("flow"):  # 🌊 flow: one free pause per check-in stretch, earned again at each check-in
-        have = tm.get("pause_period") != tm.get("period", 0)
+        have = 1 + tm.get("period", 0) - tm.get("free_used", 0)  # banked: unused pauses carry over
         nxt = int(tm.get("check", FLOW_CHECK))
-        if c1.button("⏸️ Pause · 1 left" if have else f"⏸️ Next pause at {nxt} min", use_container_width=True,
-                     key="tm_pause", disabled=not have,
-                     help=f"Flow gives you one free pause per check-in stretch (every {tm.get('every') or FLOW_CHECK} min). "
-                          f"Paused time doesn't count, and a pause over {PM.PAUSE_LIMIT_MIN} min ends the session."):
-            tm["pause_period"] = tm.get("period", 0)
+        if c1.button(f"⏸️ Pause · {have} banked" if have > 0 else f"⏸️ Next pause at {nxt} min", use_container_width=True,
+                     key="tm_pause", disabled=have <= 0,
+                     help=f"Flow banks one free pause per check-in stretch (every {tm.get('every') or FLOW_CHECK} min); "
+                          f"unused ones carry over. Paused time doesn't count, and a pause over "
+                          f"{PM.PAUSE_LIMIT_MIN} min ends the session."):
+            tm["free_used"] = tm.get("free_used", 0) + 1
             tm["pauses"] = tm.get("pauses", 0) + 1
             tm["paused_at"] = now().isoformat()
             save_state(state)
@@ -6471,7 +6472,7 @@ def render_block_play(state: dict, t: dict, kp: str = "bp") -> None:
         if m == FLOW_MODE:
             every = _flow_every_pick(state, f"{kp}_every_{t['id']}")
             st.caption(f"🌊 Flow counts up with no breaks and checks you're still going every {every} min. "
-                       f"One free pause per stretch.")
+                       f"One free pause banked per stretch.")
         else:
             st.caption("A set timer with your usual break setting.")
         if st.button("▶️ Start", type="primary", use_container_width=True, key=f"{kp}_go_{t['id']}"):
