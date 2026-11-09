@@ -115,18 +115,18 @@ CHASSIS = {
                  "pull itself out of corners."),
     "nsx_gt3": (5, "A customer race car. GT3 series use Balance of Performance — weight and power tweaks so very "
                    "different cars can race wheel-to-wheel."),
-    # ── the Acura ladder (levels 10–16): higher tune caps, one lesson per chassis ──
-    "rsx": (5, "Its K-series engine has i-VTEC: on top of VTEC's two cam profiles, VTC continuously shifts the intake "
+    # ── Acura: slotted into the ladder by real performance; the GT3 Evo22 and ARX-06 tune to L6–L7 ──
+    "rsx": (3, "Its K-series engine has i-VTEC: on top of VTEC's two cam profiles, VTC continuously shifts the intake "
                "cam's timing, so you get low-rpm torque and a high-rpm rush."),
-    "tsx": (5, "Double-wishbone front suspension keeps the tyre more upright as the car leans, so the contact patch "
+    "tsx": (3, "Double-wishbone front suspension keeps the tyre more upright as the car leans, so the contact patch "
                "stays flat on the road through a corner — rare in a family sedan."),
-    "integra_s": (6, "A liftback: a sedan's profile, but the whole rear glass lifts with the hatch. The Type S shares "
+    "integra_s": (4, "A liftback: a sedan's profile, but the whole rear glass lifts with the hatch. The Type S shares "
                      "its turbocharged 2.0 with the Civic Type R and only comes with a manual."),
-    "tlx_s": (6, "SH-AWD (Super Handling All-Wheel Drive) can send more torque to the outside rear wheel, which "
+    "tlx_s": (4, "SH-AWD (Super Handling All-Wheel Drive) can send more torque to the outside rear wheel, which "
                  "pushes the car's nose into the corner instead of just adding traction."),
-    "acura_nsx": (6, "A mid-engine twin-turbo V6 hybrid with three electric motors: one helping the engine, two "
+    "acura_nsx": (5, "A mid-engine twin-turbo V6 hybrid with three electric motors: one helping the engine, two "
                      "driving the front wheels and torque-vectoring them. Built in Ohio."),
-    "nsx_evo22": (7, "An 'Evo' is a mid-life update kit the series approves: teams can't invent their own parts on a "
+    "nsx_evo22": (6, "An 'Evo' is a mid-life update kit the series approves: teams can't invent their own parts on a "
                      "customer GT3 car, so improvements arrive as a homologated package."),
     "arx06": (7, "An LMDh prototype: the chassis comes from an approved constructor and the hybrid system is a spec "
                  "part shared by every car, while the maker supplies the engine and bodywork."),

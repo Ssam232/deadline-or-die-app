@@ -132,35 +132,34 @@ RIVALS = [
 ]
 
 # Your garage: a real-model progression, unlocked by driver level + coins. Drawings are stylized silhouettes.
-CARS = [
+CARS = [  # one ladder in rough real-world performance order; Honda cars kept their levels and prices
     {"id": "civic_si", "name": "Honda Civic Si", "base": 40, "cost": 0, "level": 1, "body": "sedan",
      "blurb": "Where every Honda guy starts. Rev it out."},
+    {"id": "tsx", "name": "Acura TSX", "base": 44, "cost": 250, "level": 2, "body": "tsx",
+     "blurb": "The grown-up sport sedan. Quietly quick, and a K24 that loves revs."},
+    {"id": "rsx", "name": "Acura RSX Type-S", "base": 47, "cost": 320, "level": 2, "body": "rsx",
+     "blurb": "A light three-door with a K20 that sings past 8,000 rpm."},
     {"id": "integra_r", "name": "Honda Integra Type R (DC2)", "base": 50, "cost": 400, "level": 2, "body": "coupe",
      "blurb": "Hand-ported legend. Earned, not bought."},
     {"id": "s2000", "name": "Honda S2000", "base": 60, "cost": 900, "level": 3, "body": "roadster",
      "blurb": "9,000 rpm. Roof down, deadlines done."},
+    {"id": "integra_s", "name": "Acura Integra Type S", "base": 66, "cost": 1400, "level": 4, "body": "integra_s",
+     "blurb": "The Integra name, back with a turbo and three pedals."},
     {"id": "ctr", "name": "Honda Civic Type R (FL5)", "base": 72, "cost": 1800, "level": 4, "body": "hatch",
      "blurb": "The wing says it all."},
+    {"id": "tlx_s", "name": "Acura TLX Type S", "base": 78, "cost": 2600, "level": 5, "body": "tlx",
+     "blurb": "Turbo V6 and a rear axle that pushes you through the corner."},
     {"id": "nsx", "name": "Honda NSX (NA1)", "base": 85, "cost": 3500, "level": 5, "body": "super",
      "blurb": "The one that embarrassed Ferrari."},
+    {"id": "acura_nsx", "name": "Acura NSX", "base": 94, "cost": 4800, "level": 6, "body": "super3",
+     "blurb": "Three motors, one engine, zero excuses."},
     {"id": "nsx_s", "name": "Honda NSX Type S", "base": 100, "cost": 6000, "level": 7, "body": "super2",
      "blurb": "Final form of the road car."},
     {"id": "nsx_gt3", "name": "Honda NSX GT3 Evo", "base": 120, "cost": 10000, "level": 9, "body": "gt3",
      "blurb": "The race car. Same class as your rig — park it next to it."},
-    # ── the Acura ladder: the long game (levels 10–16) ──
-    {"id": "rsx", "name": "Acura RSX Type-S", "base": 130, "cost": 13000, "level": 10, "body": "rsx",
-     "blurb": "Season two starts in a hatch that loves the rev limiter."},
-    {"id": "tsx", "name": "Acura TSX", "base": 140, "cost": 16500, "level": 11, "body": "tsx",
-     "blurb": "The grown-up sport sedan. Quietly quick."},
-    {"id": "integra_s", "name": "Acura Integra Type S", "base": 152, "cost": 20500, "level": 12, "body": "integra_s",
-     "blurb": "The Integra name, back with a turbo and three pedals."},
-    {"id": "tlx_s", "name": "Acura TLX Type S", "base": 165, "cost": 25000, "level": 13, "body": "tlx",
-     "blurb": "Turbo V6 and a rear axle that steers you through the corner."},
-    {"id": "acura_nsx", "name": "Acura NSX", "base": 180, "cost": 30000, "level": 14, "body": "super3",
-     "blurb": "Three motors, one engine, zero excuses."},
-    {"id": "nsx_evo22", "name": "Acura NSX GT3 Evo22", "base": 200, "cost": 36000, "level": 15, "body": "gt3evo",
+    {"id": "nsx_evo22", "name": "Acura NSX GT3 Evo22", "base": 150, "cost": 18000, "level": 12, "body": "gt3evo",
      "blurb": "The final evolution of the GT3 car."},
-    {"id": "arx06", "name": "Acura ARX-06", "base": 225, "cost": 45000, "level": 16, "body": "proto",
+    {"id": "arx06", "name": "Acura ARX-06", "base": 190, "cost": 40000, "level": 16, "body": "proto",
      "blurb": "A prototype. The top of the ladder — the whole year's work in one car."},
 ]
 CAR_BY_ID = {c["id"]: c for c in CARS}
@@ -186,7 +185,7 @@ TRACKS = [  # prizes stay a side-dish to real work at every stage (see race_sim 
     {"name": "Thesis Defense Ring", "laps": 12, "level": 8, "fee": 70, "ai": (150, 200), "prize": [260, 130, 65]},
     # the Acura-era endurance tracks: wider, faster fields; sweet-spot EV stays below the Ring's (race_sim2)
     {"name": "Prairie 12 Hours", "laps": 14, "level": 11, "fee": 95, "ai": (225, 300), "prize": [230, 115, 55]},
-    {"name": "Defense Day 24", "laps": 16, "level": 14, "fee": 120, "ai": (310, 410), "prize": [270, 135, 65]},
+    {"name": "Defense Day 24", "laps": 16, "level": 14, "fee": 120, "ai": (285, 380), "prize": [270, 135, 65]},
 ]
 
 # ── conditioning layer ──
@@ -7575,7 +7574,7 @@ with tab_garage:
                     flash(f"🎨 **{name}** unlocked and applied.", celebrate=True, sound="jackpot")
                     st.rerun()
 
-    with fold("showroom", "🏢 Showroom — the Honda → Acura ladder", False):
+    with fold("showroom", "🏢 Showroom — the Honda & Acura ladder", False):
         lvl_now = level_of(state["xp"])
         owned = car.setdefault("owned", ["civic_si"])
         for m in CARS:

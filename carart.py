@@ -1,5 +1,5 @@
 """
-🎨 Car art — original, stylized side profiles by body style. Every upgrade is visible on the car.
+🎨 Car art — stylized side profiles drawn to scale from each real car's proportions (no badges or logos). Every upgrade is visible on the car.
 
 Front of the car faces right. Pure functions returning SVG strings.
 """
@@ -12,102 +12,106 @@ GROUND = 124
 R_TIRE = 19
 
 # Upper body profile (rear-bottom → over the top → front-bottom), glass, light positions, wheel x's.
-BODIES = {
-    "sedan": {
-        "top": "M18,104 L18,88 Q18,78 30,76 L66,72 Q78,70 92,58 L112,44 Q126,37 150,36 L198,36 Q214,37 228,48 "
-               "L250,64 L300,68 Q330,71 338,80 Q342,88 340,104",
-        "glass": "M98,60 L114,47 Q128,40 150,40 L196,40 Q210,41 222,51 L236,62 Z",
-        "pillar": 158, "head": (322, 72, 14, 6), "tail": (19, 79, 8, 9), "wheels": (84, 272),
-        "deck": (30, 74), "roof_y": 36, "hood": (250, 300, 66), "door": (110, 236), "roundel": (176, 88),
-    },
-    "coupe": {
-        "top": "M18,104 L18,90 Q18,80 30,78 L56,76 Q74,72 96,54 L118,42 Q136,36 160,36 L196,37 Q212,39 226,50 "
-               "L248,64 L302,69 Q330,72 338,82 Q342,90 340,104",
-        "glass": "M102,57 L121,45 Q137,40 160,40 L194,41 Q208,43 219,52 L232,62 Z",
-        "pillar": None, "head": (322, 74, 14, 6), "tail": (19, 82, 8, 8), "wheels": (84, 272),
-        "deck": (32, 76), "roof_y": 36, "hood": (248, 302, 67), "door": (128, 236), "roundel": (180, 88),
-    },
-    "roadster": {
-        "top": "M18,104 L18,86 Q20,76 34,75 L100,73 Q108,72 114,68 L192,68 L202,66 L304,70 Q332,73 338,82 "
-               "Q342,90 340,104",
-        "glass": "M176,47 L181,47 L203,66 L197,66 Z",
-        "pillar": None, "head": (322, 73, 14, 6), "tail": (19, 80, 8, 8), "wheels": (84, 272),
-        "deck": (34, 74), "roof_y": 60, "hood": (205, 304, 68), "door": (130, 226), "roundel": (170, 88),
-        "roadster": True,
-    },
-    "hatch": {
-        "top": "M20,104 L20,74 Q22,58 34,52 L62,42 Q76,36 98,35 L190,35 Q210,36 226,48 L250,64 L300,68 "
-               "Q330,71 338,80 Q342,88 340,104",
-        "glass": "M70,62 L66,47 Q80,40 98,39 L188,39 Q206,40 220,50 L234,62 Z",
-        "pillar": 150, "head": (322, 72, 14, 6), "tail": (21, 70, 7, 12), "wheels": (84, 272),
-        "deck": (30, 66), "roof_y": 35, "hood": (250, 300, 66), "door": (104, 234), "roundel": (172, 88),
-    },
-    "super": {
-        "top": "M14,104 L14,92 Q14,84 26,82 L92,78 Q108,76 128,66 L146,57 Q160,51 180,50 L204,51 Q222,53 236,64 "
-               "L256,76 L310,82 Q336,86 342,94 Q345,99 343,104",
-        "glass": "M134,70 L150,60 Q162,55 180,54 L203,55 Q218,57 230,66 L236,73 Z",
-        "pillar": None, "head": (326, 86, 13, 4), "tail": (15, 85, 10, 5), "wheels": (90, 272),
-        "deck": (40, 80), "roof_y": 50, "hood": (256, 310, 78), "door": (150, 240), "roundel": (194, 96),
-        "intake": "M112,90 L146,86 L144,100 L116,101 Z",
-    },
+# ── side profiles from real proportions (metres) — stylized and badge-free, but shaped like the real cars ──
+# L length · H height · WB wheelbase · FO front overhang · TD tyre diameter · SILL rocker height
+# OUT: the body outline from the FRONT bumper's bottom, over the top, to the REAR bumper's bottom: (f, z) where
+#      f = metres back from the front bumper and z = metres above the ground. A third item "c" = a sharp corner.
+# DLO: the side glass (day-light opening) the same way. Everything else is placed from these numbers.
+PROFILES = {
+    "sedan": dict(  # Civic Si: long hood, sleek fastback-style sedan roof, short decklid
+        L=4.67, H=1.41, WB=2.735, FO=0.97, TD=0.65, SILL=0.21,
+        OUT=[(0.04, 0.25, "c"), (0.0, 0.42), (0.03, 0.62), (0.16, 0.75), (0.6, 0.83), (1.15, 0.95, "c"),
+             (1.55, 1.18), (1.92, 1.37), (2.45, 1.41), (3.0, 1.37), (3.55, 1.2), (3.98, 1.04, "c"), (4.42, 1.0),
+             (4.63, 0.97, "c"), (4.67, 0.8), (4.66, 0.45), (4.62, 0.26, "c")],
+        DLO=[(1.27, 0.98), (1.92, 1.31), (2.98, 1.31), (3.62, 1.07), (1.27, 0.96)],
+        B=2.42, DOORS=[1.25, 2.42, 3.35], BELT=0.98, HEAD=(0.03, 0.34, 0.66, 0.73), TAIL=(4.45, 4.67, 0.84, 0.93),
+        HOOD=(0.25, 1.05), ROOF=(2.0, 2.95), DECK=4.4, CAP=4.0),
+    "coupe": dict(  # Integra Type R (DC2): low three-door with a sloping hatch and a factory wing
+        L=4.38, H=1.32, WB=2.57, FO=0.92, TD=0.60, SILL=0.2,
+        OUT=[(0.04, 0.23, "c"), (0.0, 0.40), (0.03, 0.57), (0.2, 0.68), (0.62, 0.76), (1.12, 0.88, "c"),
+             (1.45, 1.08), (1.78, 1.29), (2.3, 1.32), (2.78, 1.29), (3.45, 1.07), (3.88, 0.99, "c"), (4.3, 0.96),
+             (4.38, 0.8), (4.37, 0.45), (4.33, 0.25, "c")],
+        DLO=[(1.17, 0.9), (1.78, 1.23), (2.7, 1.23), (3.3, 1.03), (1.17, 0.88)],
+        B=2.6, DOORS=[1.15, 2.6], BELT=0.9, HEAD=(0.03, 0.36, 0.59, 0.65), TAIL=(4.18, 4.38, 0.82, 0.92),
+        HOOD=(0.25, 1.0), ROOF=(1.95, 2.75), DECK=4.02, CAP=3.6, WING=3),
+    "roadster": dict(  # S2000: long hood, cockpit set far back, roll hoops, short tail
+        L=4.12, H=1.27, WB=2.40, FO=0.83, TD=0.63, SILL=0.19, OPEN=True,
+        OUT=[(0.04, 0.23, "c"), (0.0, 0.42), (0.04, 0.58), (0.26, 0.7), (0.8, 0.8), (1.55, 0.92, "c"),
+             (2.02, 1.11, "c"), (2.08, 1.11, "c"), (2.2, 0.95, "c"), (3.2, 0.95), (3.5, 0.97), (3.98, 0.98, "c"),
+             (4.11, 0.92), (4.12, 0.74), (4.11, 0.42), (4.07, 0.24, "c")],
+        DLO=[(1.6, 0.93), (2.0, 1.1), (2.06, 1.1), (1.72, 0.93)],
+        B=None, DOORS=[1.6, 2.75], BELT=0.94, HEAD=(0.04, 0.42, 0.6, 0.67), TAIL=(3.95, 4.12, 0.8, 0.9),
+        HOOD=(0.35, 1.45), ROOF=None, DECK=3.9, CAP=None, HOOPS=(2.82, 3.02), HOOP_Z=1.12),
+    "hatch": dict(  # Civic Type R (FL5): fastback five-door, flared arches, wing on tall stands
+        L=4.59, H=1.41, WB=2.735, FO=1.0, TD=0.68, SILL=0.18,
+        OUT=[(0.04, 0.21, "c"), (0.0, 0.38), (0.03, 0.6), (0.18, 0.74), (0.62, 0.82), (1.15, 0.94, "c"),
+             (1.55, 1.17), (1.92, 1.37), (2.45, 1.41), (3.05, 1.36), (3.85, 1.13), (4.3, 1.03, "c"), (4.53, 0.99),
+             (4.59, 0.82), (4.58, 0.45), (4.54, 0.22, "c")],
+        DLO=[(1.27, 0.97), (1.92, 1.31), (3.0, 1.3), (3.72, 1.09), (1.27, 0.95)],
+        B=2.42, DOORS=[1.25, 2.42, 3.3], BELT=0.97, HEAD=(0.03, 0.36, 0.64, 0.71), TAIL=(4.4, 4.59, 0.86, 0.96),
+        HOOD=(0.25, 1.05), ROOF=(2.0, 3.0), DECK=4.25, CAP=3.9, WING=4, FLARE=True),
+    "super": dict(  # NSX (NA1): very low, cab-forward canopy, long rear deck, full-width tail light
+        L=4.43, H=1.17, WB=2.53, FO=1.0, TD=0.63, SILL=0.16, MID=True,
+        OUT=[(0.04, 0.19, "c"), (0.0, 0.33), (0.04, 0.5), (0.35, 0.62), (0.95, 0.74), (1.4, 0.84, "c"),
+             (1.7, 1.02), (1.97, 1.15), (2.55, 1.17), (2.88, 1.13), (3.3, 0.99), (3.75, 0.93, "c"), (4.33, 0.9),
+             (4.43, 0.84), (4.43, 0.55), (4.4, 0.23, "c")],
+        DLO=[(1.47, 0.86), (1.97, 1.1), (2.82, 1.1), (3.08, 0.97), (2.95, 0.88), (1.47, 0.83)],
+        B=None, DOORS=[1.5, 2.85], BELT=0.84, HEAD=(0.08, 0.42, 0.52, 0.56), TAIL=(4.4, 4.43, 0.66, 0.8),
+        HOOD=(0.3, 1.3), ROOF=(2.05, 2.8), DECK=4.1, CAP=4.1,
+        INTAKE=[(2.72, 0.66), (3.1, 0.72), (3.08, 0.44), (2.76, 0.42)]),
+    "super2": dict(  # NSX (NC1) Type S: low wedge nose, flying-buttress rear, huge side scoop
+        L=4.535, H=1.215, WB=2.63, FO=1.03, TD=0.68, SILL=0.14, MID=True,
+        OUT=[(0.03, 0.18, "c"), (0.0, 0.32), (0.02, 0.48, "c"), (0.32, 0.62), (0.95, 0.77), (1.38, 0.87, "c"),
+             (1.72, 1.06), (1.98, 1.19), (2.55, 1.215), (2.95, 1.18), (3.45, 1.02), (3.85, 0.97, "c"), (4.38, 0.98),
+             (4.53, 0.93, "c"), (4.535, 0.6), (4.49, 0.22, "c")],
+        DLO=[(1.46, 0.9), (1.98, 1.14), (2.9, 1.14), (3.22, 0.99), (1.46, 0.86)],
+        B=None, DOORS=[1.48, 2.92], BELT=0.87, HEAD=(0.05, 0.42, 0.53, 0.58), TAIL=(4.47, 4.535, 0.83, 0.88),
+        HOOD=(0.3, 1.25), ROOF=(2.05, 2.85), DECK=4.15, CAP=4.2,
+        INTAKE=[(2.78, 0.82), (3.2, 0.88), (3.16, 0.4), (2.82, 0.4)]),
+    "rsx": dict(  # RSX Type-S: wedge three-door, beltline kicking up, long sloping hatch with a spoiler
+        L=4.37, H=1.40, WB=2.57, FO=0.94, TD=0.62, SILL=0.2,
+        OUT=[(0.04, 0.23, "c"), (0.0, 0.41), (0.03, 0.62), (0.18, 0.74), (0.55, 0.82), (1.05, 0.95, "c"),
+             (1.42, 1.17), (1.75, 1.37), (2.3, 1.4), (2.75, 1.36), (3.6, 1.12), (3.96, 1.04, "c"), (4.3, 0.99),
+             (4.37, 0.86), (4.36, 0.46), (4.32, 0.25, "c")],
+        DLO=[(1.15, 0.97), (1.75, 1.31), (2.7, 1.3), (3.45, 1.1), (3.2, 1.08), (1.15, 0.95)],
+        B=2.62, DOORS=[1.13, 2.62], BELT=0.97, HEAD=(0.03, 0.38, 0.64, 0.72), TAIL=(4.15, 4.37, 0.88, 0.98),
+        HOOD=(0.22, 0.95), ROOF=(1.9, 2.7), DECK=3.98, CAP=3.75, WING=2),
+    "tsx": dict(  # TSX: a classic three-box sport sedan, upright glass, short high decklid
+        L=4.66, H=1.455, WB=2.67, FO=0.95, TD=0.63, SILL=0.21,
+        OUT=[(0.04, 0.25, "c"), (0.0, 0.43), (0.02, 0.64), (0.15, 0.78), (0.6, 0.86), (1.15, 0.98, "c"),
+             (1.55, 1.22), (1.9, 1.42), (2.35, 1.455), (3.05, 1.44), (3.45, 1.3), (3.78, 1.1, "c"), (3.9, 1.06),
+             (4.55, 1.04), (4.66, 0.98, "c"), (4.66, 0.8), (4.64, 0.45), (4.6, 0.27, "c")],
+        DLO=[(1.27, 1.0), (1.9, 1.38), (3.04, 1.38), (3.38, 1.24), (3.62, 1.08), (1.27, 0.99)],
+        B=2.45, DOORS=[1.25, 2.45, 3.4], BELT=1.0, HEAD=(0.02, 0.33, 0.68, 0.77), TAIL=(4.48, 4.66, 0.86, 0.98),
+        HOOD=(0.25, 1.05), ROOF=(2.05, 3.0), DECK=4.4, CAP=3.3, C=3.3),
+    "integra_s": dict(  # Integra Type S: long fastback liftback roof, wide flares, small ducktail
+        L=4.73, H=1.39, WB=2.735, FO=1.0, TD=0.67, SILL=0.18,
+        OUT=[(0.04, 0.21, "c"), (0.0, 0.38), (0.03, 0.6), (0.18, 0.73), (0.6, 0.82), (1.18, 0.95, "c"),
+             (1.58, 1.17), (1.95, 1.35), (2.45, 1.39), (3.0, 1.36), (3.95, 1.12), (4.45, 1.03, "c"), (4.66, 1.0, "c"),
+             (4.73, 0.86), (4.72, 0.45), (4.68, 0.22, "c")],
+        DLO=[(1.3, 0.97), (1.95, 1.3), (3.0, 1.3), (3.82, 1.1), (3.55, 1.05), (1.3, 0.96)],
+        B=2.45, DOORS=[1.28, 2.45, 3.35], BELT=0.97, HEAD=(0.03, 0.36, 0.63, 0.7), TAIL=(4.5, 4.73, 0.88, 0.97),
+        HOOD=(0.25, 1.08), ROOF=(2.05, 2.95), DECK=4.45, CAP=3.9, WING=2, FLARE=True),
+    "tlx": dict(  # TLX Type S: long hood with a long dash-to-axle, cabin pushed back, coupe-like roof, ducktail
+        L=4.94, H=1.43, WB=2.87, FO=0.95, TD=0.68, SILL=0.18,
+        OUT=[(0.04, 0.21, "c"), (0.0, 0.4), (0.03, 0.63), (0.2, 0.77), (0.75, 0.86), (1.42, 1.0, "c"),
+             (1.85, 1.24), (2.22, 1.4), (2.72, 1.43), (3.28, 1.4), (4.05, 1.13), (4.38, 1.05, "c"), (4.82, 1.02, "c"),
+             (4.94, 0.94), (4.93, 0.45), (4.89, 0.22, "c")],
+        DLO=[(1.53, 1.02), (2.22, 1.35), (3.25, 1.34), (3.95, 1.1), (1.53, 1.0)],
+        B=2.78, DOORS=[1.5, 2.78, 3.65], BELT=1.01, HEAD=(0.03, 0.4, 0.67, 0.72), TAIL=(4.78, 4.94, 0.88, 0.95),
+        HOOD=(0.3, 1.32), ROOF=(2.3, 3.2), DECK=4.62, CAP=4.1),
+    "proto": dict(  # endurance prototype: splitter, tall wheel fenders, bubble canopy, fin, long tail
+        L=5.1, H=1.06, WB=3.15, FO=1.0, TD=0.71, SILL=0.14, MID=True, GT3=True, PROTO=True,
+        OUT=[(0.0, 0.1, "c"), (0.03, 0.3), (0.3, 0.44), (0.72, 0.68), (1.0, 0.8), (1.3, 0.76), (1.7, 0.78, "c"),
+             (2.05, 1.0), (2.5, 1.06), (2.92, 1.0), (3.35, 0.88), (3.85, 0.84), (4.15, 0.86), (4.55, 0.8),
+             (5.02, 0.72, "c"), (5.1, 0.42), (5.08, 0.14, "c")],
+        DLO=[(1.82, 0.84), (2.1, 1.0), (2.58, 1.01), (2.86, 0.92), (1.82, 0.84)],
+        B=None, DOORS=[1.75, 2.85], BELT=0.84, HEAD=(0.12, 0.45, 0.42, 0.46), TAIL=(5.0, 5.1, 0.58, 0.64),
+        HOOD=None, ROOF=None, DECK=4.85, CAP=None, WING=5,
+        FIN=[(2.8, 1.02), (4.55, 1.0), (4.6, 0.84), (3.35, 0.88)],
+        INTAKE=[(3.05, 0.62), (3.62, 0.66), (3.6, 0.38), (3.1, 0.36)]),
 }
-BODIES["super2"] = {
-    "top": "M14,104 L14,90 Q15,82 28,80 L96,76 Q112,74 130,63 L150,53 Q164,48 184,48 L206,49 Q226,52 240,64 "
-           "L262,78 L314,83 Q338,86 344,95 Q346,100 344,104",
-    "glass": "M138,66 L154,57 Q166,52 184,52 L205,53 Q222,56 234,66 L240,73 Z",
-    "pillar": None, "head": (328, 84, 13, 3), "tail": (15, 83, 11, 4), "wheels": (90, 274),
-    "deck": (40, 78), "roof_y": 48, "hood": (262, 314, 80), "door": (152, 242), "roundel": (196, 96),
-    "intake": "M108,88 L150,82 L148,101 L112,101 Z",
-}
-BODIES["gt3"] = {**BODIES["super2"], "gt3": True}
-# ── the Acura ladder: stylized, original silhouettes in the same language (no badges, no replicas) ──
-BODIES["rsx"] = {  # compact three-door liftback coupe: short wheelbase, glass sloping all the way to the tail
-    "top": "M20,104 L20,82 Q21,73 32,70 L56,63 Q78,54 100,45 L120,38 Q134,35 152,35 L190,36 Q206,38 220,48 "
-           "L244,63 L296,68 Q326,71 335,80 Q339,88 338,104",
-    "glass": "M64,63 L100,47 Q122,39 152,39 L188,40 Q202,42 214,51 L228,61 Z",
-    "pillar": 146, "head": (320, 72, 14, 6), "tail": (21, 72, 8, 8), "wheels": (92, 266),
-    "deck": (38, 66), "roof_y": 35, "hood": (244, 296, 65), "door": (112, 228), "roundel": (174, 88),
-}
-BODIES["tsx"] = {  # tidy four-door sport sedan
-    "top": "M18,104 L18,87 Q18,78 30,76 L70,72 Q84,69 98,57 L116,44 Q130,37 152,36 L196,36 Q212,37 226,48 "
-           "L248,63 L302,67 Q331,70 339,80 Q343,88 341,104",
-    "glass": "M104,59 L119,47 Q132,41 152,40 L194,40 Q208,41 220,51 L234,62 Z",
-    "pillar": 160, "head": (323, 71, 14, 6), "tail": (19, 78, 8, 9), "wheels": (84, 272),
-    "deck": (32, 74), "roof_y": 36, "hood": (248, 302, 65), "door": (112, 236), "roundel": (178, 88),
-}
-BODIES["integra_s"] = {  # five-door liftback with a fastback roofline and flared arches
-    "top": "M16,104 L16,84 Q17,74 28,71 L44,67 Q68,58 98,46 L120,38 Q134,34 156,34 L194,35 Q210,37 225,48 "
-           "L249,64 L304,69 Q332,72 339,81 Q343,89 341,104",
-    "glass": "M74,61 L102,47 Q124,38 156,38 L192,39 Q206,41 219,51 L233,62 Z",
-    "pillar": 154, "head": (323, 73, 15, 5), "tail": (17, 74, 9, 7), "wheels": (84, 274),
-    "deck": (32, 68), "roof_y": 34, "hood": (249, 304, 66), "door": (108, 234), "roundel": (178, 88),
-}
-BODIES["tlx"] = {  # long, low performance sedan
-    "top": "M14,104 L14,88 Q14,79 26,77 L68,73 Q84,70 100,58 L120,45 Q136,38 160,37 L202,37 Q218,38 232,49 "
-           "L254,64 L308,69 Q334,72 341,81 Q345,89 343,104",
-    "glass": "M106,60 L123,48 Q138,41 160,41 L200,41 Q214,42 226,52 L240,63 Z",
-    "pillar": 166, "head": (325, 72, 15, 5), "tail": (15, 79, 10, 6), "wheels": (80, 278),
-    "deck": (28, 75), "roof_y": 37, "hood": (254, 308, 66), "door": (114, 240), "roundel": (184, 88),
-}
-BODIES["super3"] = {  # hybrid mid-engine supercar: sharper wedge, bigger side intake
-    "top": "M14,104 L14,88 Q15,80 28,78 L94,74 Q112,72 130,62 L150,52 Q164,47 184,47 L206,48 Q226,51 240,63 "
-           "L264,78 L316,83 Q340,86 345,95 Q347,100 345,104",
-    "glass": "M138,65 L154,56 Q166,51 184,51 L205,52 Q222,55 234,65 L240,72 Z",
-    "pillar": None, "head": (330, 84, 13, 3), "tail": (15, 81, 11, 4), "wheels": (90, 276),
-    "deck": (40, 76), "roof_y": 47, "hood": (264, 316, 80), "door": (152, 242), "roundel": (196, 96),
-    "intake": "M104,86 L152,80 L150,101 L108,101 Z",
-}
-BODIES["gt3evo"] = {**BODIES["super3"], "gt3": True}
-BODIES["proto"] = {  # closed-cockpit endurance prototype: long low nose, bubble canopy, shark fin
-    "top": "M8,104 L8,82 Q10,74 22,72 L70,70 Q96,69 118,62 L140,50 Q152,44 170,43 L196,44 Q212,46 224,56 "
-           "L240,70 Q270,80 316,88 Q340,92 348,98 L348,104",
-    "glass": "M146,58 L156,50 Q166,46 180,46 L196,47 Q208,49 216,57 L222,64 Z",
-    "pillar": None, "head": (332, 90, 13, 3), "tail": (9, 78, 9, 4), "wheels": (82, 286),
-    "deck": (28, 72), "roof_y": 43, "hood": (240, 320, 80), "door": (150, 226), "roundel": (200, 92),
-    "intake": "M100,86 L140,80 L138,100 L104,101 Z", "gt3": True,
-    "fin": "M146,45 L46,55 L40,70 L70,69.5 Q96,68.5 118,62 L140,51 Z",
-}
-MID_ENGINE = {"super", "super2", "super3", "gt3", "gt3evo", "proto"}
+PROFILES["super3"] = PROFILES["super2"]                               # Acura NSX: the same NC1 shape
 
 # Visual tiers per part level (0..5)
 WHEEL_STYLES = [
@@ -115,12 +119,6 @@ WHEEL_STYLES = [
     ("10-spoke forged", "#5b5f68", 10), ("6-spoke bronze", "#b0823c", 6), ("center-lock", "#c19a49", 7),
 ]
 CALIPER = [None, "#2a2a2a", "#d62828", "#d62828", "#f4c430", "#f4c430"]
-
-
-def _bottom(xs: tuple[int, int], arch: int, x0: int, x1: int, sill: int = 104) -> str:
-    rear, front = xs
-    return (f" L{x1},{sill} L{front + arch},{sill} A{arch},{arch} 0 0 0 {front - arch},{sill}"
-            f" L{rear + arch},{sill} A{arch},{arch} 0 0 0 {rear - arch},{sill} L{x0},{sill} Z")
 
 
 def _hex(c: str) -> tuple[int, int, int]:
@@ -205,191 +203,308 @@ def _wheel(cx: float, cy: float, tires: int, brakes: int, gt3: bool, uid: str = 
     return "".join(out)
 
 
+def _scaled(p: dict, fx: float, fz: float, **over) -> dict:
+    """A profile stretched in length (fx) and height (fz): for the race versions of a road car."""
+    def pt(r):
+        return (r[0] * fx, r[1] * fz) + tuple(r[2:])
+    q = dict(p)
+    for k in ("OUT", "DLO", "INTAKE", "FIN"):
+        if p.get(k):
+            q[k] = [pt(r) for r in p[k]]
+    for k in ("HEAD", "TAIL"):
+        a, b, c, d = p[k]
+        q[k] = (a * fx, b * fx, c * fz, d * fz)
+    for k in ("B", "DECK", "CAP", "C"):
+        if p.get(k):
+            q[k] = p[k] * fx
+    for k in ("DOORS",):
+        q[k] = [x * fx for x in p[k]]
+    for k in ("HOOD", "ROOF"):
+        if p.get(k):
+            q[k] = (p[k][0] * fx, p[k][1] * fx)
+    q["BELT"] = p["BELT"] * fz
+    q.update(over)
+    return q
+
+
+PROFILES["gt3"] = _scaled(PROFILES["super2"], 4.64 / 4.535, 0.955, L=4.64, H=1.16, TD=0.71, SILL=0.14, GT3=True, WING=5)
+PROFILES["gt3evo"] = dict(PROFILES["gt3"])
+BODIES = PROFILES  # (older name, kept for callers)
+
+K = 65.0          # SVG units per metre: every car is drawn to the same scale
+CX = 178.0        # cars are centred on this x
+
+
+def _geom(p: dict):
+    x0 = CX - p["L"] * K / 2  # rear bumper x (front faces right)
+
+    def P(f: float, z: float) -> tuple[float, float]:
+        return x0 + (p["L"] - f) * K, GROUND - z * K
+    return P
+
+
+def _spline(pts: list, closed: bool = False) -> str:
+    """Smooth Catmull-Rom through the points (corners marked "c" stay sharp), as SVG cubic segments."""
+    out = [f"M{pts[0][0]:.1f},{pts[0][1]:.1f}"]
+    n = len(pts)
+    for i in range(n - 1 if not closed else n):
+        p1, p2 = pts[i], pts[(i + 1) % n]
+        p0 = pts[i - 1] if (i > 0 or closed) else p1
+        p3 = pts[(i + 2) % n] if (i + 2 < n or closed) else p2
+        if len(p1) > 2:  # sharp corner: no tangent from behind
+            p0 = p1
+        if len(p2) > 2:
+            p3 = p2
+        t = 0.18
+        c1 = (p1[0] + (p2[0] - p0[0]) * t, p1[1] + (p2[1] - p0[1]) * t)
+        c2 = (p2[0] - (p3[0] - p1[0]) * t, p2[1] - (p3[1] - p1[1]) * t)
+        out.append(f"C{c1[0]:.1f},{c1[1]:.1f} {c2[0]:.1f},{c2[1]:.1f} {p2[0]:.1f},{p2[1]:.1f}")
+    return " ".join(out) + (" Z" if closed else "")
+
+
+def _z_at(p: dict, f: float) -> float:
+    """Height of the body's top line at f (linear between outline points)."""
+    pts = [(r[0], r[1]) for r in p["OUT"]]
+    top = pts[2:-2]
+    best = max((z for ff, z in top if abs(ff - f) < 0.35), default=p["BELT"])
+    for (a, za), (b, zb) in zip(top, top[1:]):
+        if min(a, b) <= f <= max(a, b) and a != b:
+            return za + (zb - za) * (f - a) / (b - a)
+    return best
+
+
 def car_svg(model_body: str, color: str, number, parts: dict, condition: int, width: int = 440,
             studio: bool = False) -> str:
-    """Side profile with paint shading, reflections, glass glare, lights and every upgrade visible.
-    studio=True adds a showroom floor, spotlight and reflection (for the Showroom)."""
-    b = BODIES[model_body]
-    gt3 = b.get("gt3", False)
-    p = {k: int(v) for k, v in parts.items()}
-    aero, eng, tires, brakes, turbo = p.get("aero", 0), p.get("engine", 0), p.get("tires", 0), p.get("brakes", 0), \
-        p.get("turbo", 0)
-    weight = p.get("weight", 0)
-    drop = min(6, (tires + aero) // 2 + (3 if gt3 else 0))      # lowered stance
-    arch = 26 if gt3 else 23
-    rear_x, front_x = b["wheels"]
-    wy = GROUND - R_TIRE
-    x_start = int(b["top"][1:].split(",")[0])
-    body = b["top"] + _bottom(b["wheels"], arch, x_start, 340)
+    """Side profile drawn to scale from the car's real proportions, with paint shading, glass, lights and every
+    upgrade visible. studio=True adds a showroom floor, spotlight and reflection (for the Showroom)."""
+    p = PROFILES.get(model_body, PROFILES["sedan"])
+    P = _geom(p)
+    gt3 = bool(p.get("GT3"))
+    lv = {k: min(5, int(v)) for k, v in (parts or {}).items()}
+    aero, eng, tires, brakes, turbo, weight = (lv.get(k, 0) for k in ("aero", "engine", "tires", "brakes", "turbo", "weight"))
+    L, FO, WB = p["L"], p["FO"], p["WB"]
+    rt = p["TD"] / 2 * K + (0.8 if tires >= 3 else 0)
+    arch = rt + 3.2 + (1.6 if p.get("FLARE") or gt3 else 0)
+    fx, _ = P(FO, 0)
+    rx, _ = P(FO + WB, 0)
+    front, rear = P(0, 0)[0], P(L, 0)[0]
+    sill = GROUND - p["SILL"] * K
+    wy = GROUND - rt
+    drop = min(5, (tires + aero) // 2 + (2 if gt3 else 0))
     num = html.escape(str(number))
     dark = "#15161a"
-    u = _uid(model_body, color, str(sorted(p.items())), condition, studio)
-    hi, lo, sh = _mix(color, "#ffffff", .38), _mix(color, "#000000", .42), _mix(color, "#000000", .62)
+    u = _uid(model_body, color, str(sorted(lv.items())), condition, studio, "v2")
+    hi, lo, sh = _mix(color, "#ffffff", .4), _mix(color, "#000000", .4), _mix(color, "#000000", .62)
+    out_pts = [P(r[0], r[1]) + tuple(r[2:]) for r in p["OUT"]]
+    top = _spline(out_pts)
+    # bottom: from the rear bumper along the sill, cutting the wheel arches, back to the front bumper
+    fb, rb = out_pts[0], out_pts[-1]
+    bottom = (f" L{rb[0]:.1f},{sill:.1f} L{rx - arch:.1f},{sill:.1f} A{arch:.1f},{arch:.1f} 0 0 1 {rx + arch:.1f},{sill:.1f}"
+              f" L{fx - arch:.1f},{sill:.1f} A{arch:.1f},{arch:.1f} 0 0 1 {fx + arch:.1f},{sill:.1f} L{fb[0]:.1f},{fb[1]:.1f} Z")
+    body = top + bottom
+    roof_y = GROUND - p["H"] * K
+    belt_y = GROUND - p["BELT"] * K
     g = [f'<defs>'
          f'<linearGradient id="{u}b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{hi}"/>'
-         f'<stop offset=".38" stop-color="{color}"/><stop offset=".72" stop-color="{lo}"/><stop offset="1" stop-color="{sh}"/>'
+         f'<stop offset=".42" stop-color="{color}"/><stop offset=".74" stop-color="{lo}"/><stop offset="1" stop-color="{sh}"/>'
          f'</linearGradient>'
-         f'<linearGradient id="{u}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a4d63"/>'
-         f'<stop offset=".55" stop-color="#121821"/><stop offset="1" stop-color="#0a0d12"/></linearGradient>'
+         f'<linearGradient id="{u}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4a5f78"/>'
+         f'<stop offset=".5" stop-color="#151c26"/><stop offset="1" stop-color="#0a0d12"/></linearGradient>'
          f'<radialGradient id="{u}h" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fffbe6"/>'
-         f'<stop offset=".5" stop-color="#ffe9a8" stop-opacity=".6"/><stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/>'
+         f'<stop offset=".5" stop-color="#ffe9a8" stop-opacity=".55"/><stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/>'
          f'</radialGradient>'
          f'<radialGradient id="{u}t" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#ff4d4d"/>'
-         f'<stop offset=".55" stop-color="#d90429" stop-opacity=".55"/><stop offset="1" stop-color="#d90429" stop-opacity="0"/>'
-         f'</radialGradient>'
-         f'<clipPath id="{u}c"><path d="{body}"/></clipPath></defs>']
-
-    # paint: shaded body, then reflections clipped to it
-    g.append(f'<path d="{body}" fill="url(#{u}b)" stroke="#0b0c0e" stroke-width="1.4" stroke-linejoin="round"/>')
+         f'<stop offset=".55" stop-color="#d90429" stop-opacity=".5"/><stop offset="1" stop-color="#d90429" stop-opacity="0"/>'
+         f'</radialGradient><clipPath id="{u}c"><path d="{body}"/></clipPath></defs>']
+    # paint, then light and shadow clipped to the body: shoulder highlight band, lower-body shadow, a soft sweep
+    for wx in (rx, fx):  # wheel wells: dark inside the arch, so the tyre sits in the body instead of floating
+        g.append(f'<circle cx="{wx:.1f}" cy="{wy:.1f}" r="{arch - .4:.1f}" fill="#060608"/>')
+    g.append(f'<path d="{body}" fill="url(#{u}b)" stroke="#0b0c0e" stroke-width="1.3" stroke-linejoin="round"/>')
     g.append(f'<g clip-path="url(#{u}c)">'
-             f'<path d="M0,84 C90,78 200,80 360,90 L360,95 C200,86 90,84 0,90 Z" fill="#ffffff" opacity=".16"/>'  # door reflection band
-             f'<path d="M0,99 L360,99 L360,112 L0,112 Z" fill="#000000" opacity=".28"/>'  # rocker shadow
-             f'<path d="M210,40 L250,40 L120,112 L80,112 Z" fill="#ffffff" opacity=".05"/>'  # studio light sweep
-             f'</g>')
-    g.append(f'<path d="{b["top"]}" fill="none" stroke="#ffffff" stroke-opacity=".38" stroke-width="1.2" '
-             f'transform="translate(0,2.2)"/>')  # crisp shoulder highlight
-    # wheel-arch depth
-    for wx in (rear_x, front_x):
-        g.append(f'<path d="M{wx - arch},104 A{arch},{arch} 0 0 1 {wx + arch},104" fill="none" stroke="#000" '
-                 f'stroke-opacity=".55" stroke-width="3.2"/>')
-    # weight 2+: carbon roof
-    if weight >= 2 and not b.get("roadster"):
-        ry = b["roof_y"]
-        g.append(f'<path d="M{b["door"][0] + 10},{ry + 1} L{b["door"][1] - 30},{ry + 1}" stroke="#1d1e22" '
-                 f'stroke-width="4.4" stroke-linecap="round"/><path d="M{b["door"][0] + 12},{ry} L{b["door"][1] - 32},{ry}" '
-                 f'stroke="#ffffff" stroke-opacity=".18" stroke-width=".8" stroke-dasharray="2 1.4"/>')
-    if b.get("fin"):  # prototype shark fin along the engine cover
-        g.append(f'<path d="{b["fin"]}" fill="{lo}" stroke="#0b0c0e" stroke-width="1"/>'
-                 f'<path d="{b["fin"]}" fill="none" stroke="#ffffff" stroke-opacity=".18" stroke-width=".6" '
-                 f'transform="translate(0,1)"/>')
+             f'<path d="M{rear - 5},{belt_y + 6:.1f} C{rear + 90},{belt_y + 2:.1f} {front - 90},{belt_y + 2:.1f} {front + 5},{belt_y + 7:.1f} '
+             f'L{front + 5},{belt_y + 11:.1f} C{front - 90},{belt_y + 6:.1f} {rear + 90},{belt_y + 6:.1f} {rear - 5},{belt_y + 10:.1f} Z" '
+             f'fill="#ffffff" opacity=".17"/>'
+             f'<rect x="{rear - 5}" y="{sill - 9:.1f}" width="{front - rear + 10:.1f}" height="14" fill="#000" opacity=".3"/>'
+             f'<path d="M{CX + 30},{roof_y - 5:.1f} L{CX + 70},{roof_y - 5:.1f} L{CX - 40},{sill + 4:.1f} L{CX - 80},{sill + 4:.1f} Z" '
+             f'fill="#ffffff" opacity=".05"/>'
+             + (f'<path d="M{rx - arch - 4:.1f},{sill:.1f} Q{rx:.1f},{wy - arch - 7:.1f} {rx + arch + 4:.1f},{sill:.1f}" '
+                f'fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width="2.5"/>'
+                f'<path d="M{fx - arch - 4:.1f},{sill:.1f} Q{fx:.1f},{wy - arch - 7:.1f} {fx + arch + 4:.1f},{sill:.1f}" '
+                f'fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width="2.5"/>' if p.get("FLARE") or gt3 else "")
+             + '</g>')
+    g.append(f'<path d="{top}" fill="none" stroke="#ffffff" stroke-opacity=".35" stroke-width="1.1" transform="translate(0,1.8)"/>')
+    cl_y = belt_y + (sill - belt_y) * .42  # character line: a light edge over a soft shadow, front to rear
+    g.append(f'<g clip-path="url(#{u}c)"><path d="M{rx + arch + 2:.1f},{cl_y + 1.5:.1f} Q{CX:.1f},{cl_y - 1.5:.1f} {fx - arch - 2:.1f},{cl_y - 3:.1f}" '
+             f'stroke="#ffffff" stroke-opacity=".22" stroke-width="1" fill="none"/>'
+             f'<path d="M{rx + arch + 2:.1f},{cl_y + 3:.1f} Q{CX:.1f},{cl_y:.1f} {fx - arch - 2:.1f},{cl_y - 1.5:.1f}" '
+             f'stroke="#000" stroke-opacity=".22" stroke-width="1.4" fill="none"/></g>')
+    for wx in (rx, fx):  # arch lip depth
+        g.append(f'<path d="M{wx - arch:.1f},{sill:.1f} A{arch:.1f},{arch:.1f} 0 0 1 {wx + arch:.1f},{sill:.1f}" fill="none" '
+                 f'stroke="#000" stroke-opacity=".55" stroke-width="3"/>')
+    # prototype fin and side pods
+    if p.get("FIN"):
+        fin = _spline([P(*r[:2]) + ("c",) for r in p["FIN"]], closed=True)
+        g.append(f'<path d="{fin}" fill="{lo}" stroke="#0b0c0e" stroke-width="1"/>')
+    # carbon roof (weight 2+)
+    if weight >= 2 and p.get("ROOF") and not p.get("OPEN"):
+        (ax, ay), (bx, by) = P(p["ROOF"][0], _z_at(p, p["ROOF"][0]) - .01), P(p["ROOF"][1], _z_at(p, p["ROOF"][1]) - .01)
+        g.append(f'<path d="M{ax:.1f},{ay + 1.5:.1f} L{bx:.1f},{by + 1.5:.1f}" stroke="#1d1e22" stroke-width="4" stroke-linecap="round"/>'
+                 f'<path d="M{ax:.1f},{ay + 1:.1f} L{bx:.1f},{by + 1:.1f}" stroke="#ffffff" stroke-opacity=".18" stroke-width=".7" '
+                 f'stroke-dasharray="2 1.4"/>')
     # glass with glare
-    g.append(f'<path d="{b["glass"]}" fill="url(#{u}g)" stroke="#0b0c0e" stroke-width="1"/>')
-    g.append(f'<clipPath id="{u}w"><path d="{b["glass"]}"/></clipPath><g clip-path="url(#{u}w)">'
-             f'<path d="M130,30 L150,30 L118,70 L98,70 Z" fill="#ffffff" opacity=".18"/>'
-             f'<path d="M160,30 L168,30 L136,70 L128,70 Z" fill="#ffffff" opacity=".1"/>'
-             f'<path d="M190,30 L222,30 L200,70 L168,70 Z" fill="#9fc3e6" opacity=".08"/></g>')
-    if b["pillar"]:
-        g.append(f'<line x1="{b["pillar"]}" y1="40" x2="{b["pillar"] + 2}" y2="62" stroke="#0e0f12" stroke-width="5"/>')
-    # weight 4+: roll cage visible through the glass
-    if weight >= 4 and not b.get("roadster"):
-        x0, x1 = b["door"][0] + 20, b["door"][1] - 40
-        g.append(f'<path d="M{x0},60 L{x0 + 12},{b["roof_y"] + 8} L{x1},{b["roof_y"] + 8} L{x1 + 10},60" '
-                 f'stroke="#e5e5e5" stroke-width="1.6" fill="none" opacity=".8"/>')
-    if b.get("roadster"):  # roll hoops + folded soft top + a seat back
-        g.append('<path d="M128,68 Q132,56 140,56 Q148,56 150,68 Z M152,68 Q156,56 164,56 Q172,56 174,68 Z" fill="#26272c"/>'
-                 '<path d="M131,66 Q134,58 140,58" stroke="#ffffff" stroke-opacity=".15" fill="none"/>'
-                 '<path d="M100,72 Q104,64 118,64 L124,68 Z" fill="#1d1e22"/>'
-                 '<path d="M182,68 Q186,60 194,60 L196,68 Z" fill="#7a1d1d"/>')
-    # panel lines: doors, fender seams, fuel door, handle, mirror, side marker
-    d0, d1 = b["door"]
-    g.append(f'<path d="M{d0},64 L{d0 + 4},101 M{d1},62 L{d1 - 4},101" stroke="#000" stroke-opacity=".45" stroke-width="1"/>'
-             f'<path d="M{d0 + 1},64 L{d0 + 5},101" stroke="#ffffff" stroke-opacity=".12" stroke-width=".6" transform="translate(1,0)"/>'
-             f'<path d="M{front_x - arch - 6},70 Q{front_x - arch - 2},88 {front_x - arch + 2},101" stroke="#000" stroke-opacity=".3" fill="none"/>'
-             f'<path d="M{rear_x + arch + 6},72 Q{rear_x + arch + 2},88 {rear_x + arch - 2},101" stroke="#000" stroke-opacity=".3" fill="none"/>')
-    g.append(f'<rect x="{d1 - 30}" y="72" width="11" height="2.6" rx="1.2" fill="#000" opacity=".45"/>'
-             f'<rect x="{d1 - 30}" y="72" width="11" height="1" rx=".5" fill="#ffffff" opacity=".2"/>')
-    if not b.get("roadster"):
-        g.append(f'<circle cx="{rear_x + arch + 14}" cy="74" r="3" fill="none" stroke="#000" stroke-opacity=".35"/>')  # fuel door
-    mx = d1 - 4 if model_body not in MID_ENGINE else d1 - 2
-    g.append(f'<path d="M{mx},62 l9,-2 q3,0 2,4 l-9,3 Z" fill="url(#{u}b)" stroke="#0b0c0e" stroke-width=".8"/>')  # mirror
-    g.append(f'<rect x="{front_x + arch + 4}" y="82" width="6" height="2.2" rx="1" fill="#ff9f1c" opacity=".85"/>')  # marker
-    # super/gt3 side intake
-    if b.get("intake"):
-        g.append(f'<path d="{b["intake"]}" fill="#0c0d10"/><path d="{b["intake"]}" fill="none" stroke="#ffffff" '
-                 f'stroke-opacity=".15" stroke-width=".8"/>')
-        ix = int(b["intake"].split(",")[0][1:])
-        for k in range(4):
-            g.append(f'<path d="M{ix + 6 + k * 7},{89 + k * .2:.1f} l-3,10" stroke="#2a2c31" stroke-width="1.2"/>')
-    # front: grille / air dam, rear: bumper reflector and diffuser shadow
-    g.append('<path d="M318,92 L340,93 L340,102 L314,102 Z" fill="#0c0d10" opacity=".9"/>'
-             '<path d="M320,95 L338,95.5 M320,98 L338,98.5" stroke="#3a3d44" stroke-width=".8"/>')
-    g.append(f'<rect x="{x_start + 1}" y="94" width="7" height="2" rx="1" fill="#b3121f" opacity=".85"/>')
-    # engine visuals
-    h0, h1, hy = b["hood"]
-    if eng >= 2:
-        g.append(f'<path d="M{h0 + 18},{hy + 1} l10,-1 M{h0 + 22},{hy + 3} l10,-1" stroke="{dark}" stroke-width="2"/>')
-    if eng >= 3:  # side stripe with a pinstripe
-        g.append('<path d="M24,94 L336,94" stroke="#ffffff" stroke-opacity=".9" stroke-width="3"/>'
-                 '<path d="M24,97.4 L336,97.4" stroke="#ffffff" stroke-opacity=".55" stroke-width=".8"/>')
-    if eng >= 4:  # hood bulge / scoop
-        g.append(f'<path d="M{h0 + 6},{hy} Q{(h0 + h1) / 2},{hy - 5} {h1 - 10},{hy + 1}" fill="none" stroke="{dark}" '
-                 f'stroke-width="2.5"/>')
-    if eng >= 5:  # carbon hood
-        g.append(f'<path d="M{h0},{hy - 1} L{h1},{hy + 3}" stroke="#202124" stroke-width="5" stroke-linecap="round"/>'
-                 f'<path d="M{h0 + 2},{hy - 2} L{h1 - 2},{hy + 2}" stroke="#ffffff" stroke-opacity=".15" stroke-width=".8" stroke-dasharray="2 1.4"/>')
+    dlo = _spline([P(*r[:2]) + ("c",) for r in p["DLO"]], closed=True)
+    g.append(f'<path d="{dlo}" fill="#0b0c0f" stroke="#0b0c0f" stroke-width="3.2" stroke-linejoin="round"/>'
+             f'<path d="{dlo}" fill="url(#{u}g)" stroke="#2b2f37" stroke-width=".7"/>')
+    g.append(f'<clipPath id="{u}w"><path d="{dlo}"/></clipPath><g clip-path="url(#{u}w)">'
+             f'<path d="M{CX - 30},{roof_y - 4:.1f} L{CX - 12},{roof_y - 4:.1f} L{CX - 52},{belt_y + 2:.1f} L{CX - 70},{belt_y + 2:.1f} Z" fill="#ffffff" opacity=".2"/>'
+             f'<path d="M{CX - 2},{roof_y - 4:.1f} L{CX + 6},{roof_y - 4:.1f} L{CX - 34},{belt_y + 2:.1f} L{CX - 42},{belt_y + 2:.1f} Z" fill="#ffffff" opacity=".1"/>'
+             f'<path d="M{CX + 30},{roof_y - 4:.1f} L{CX + 64},{roof_y - 4:.1f} L{CX + 30},{belt_y + 2:.1f} L{CX - 4},{belt_y + 2:.1f} Z" fill="#9fc3e6" opacity=".08"/>'
+             + (f'<rect x="{P(p["B"], 0)[0] - 2.4:.1f}" y="{roof_y - 4:.1f}" width="4.8" height="{belt_y - roof_y + 6:.1f}" fill="#0b0c0f"/>'
+                if p.get("B") else "")
+             + (f'<path d="M{P(p["C"], 0)[0]:.1f},{roof_y - 4:.1f} L{P(p["C"], 0)[0] + 8:.1f},{belt_y + 4:.1f} L{P(p["C"], 0)[0] + 3:.1f},{belt_y + 4:.1f} Z" fill="#0b0c0f"/>'
+                if p.get("C") else "")
+             + '</g>')
+    # roll cage through the glass (weight 4+)
+    if weight >= 4 and not p.get("OPEN"):
+        a_, b_ = P(p["DOORS"][0] + .25, 0)[0], P(p["DOORS"][-1] - .1, 0)[0]
+        g.append(f'<path d="M{a_:.1f},{belt_y:.1f} L{a_ - 10:.1f},{roof_y + 7:.1f} L{b_ + 8:.1f},{roof_y + 7:.1f} L{b_:.1f},{belt_y:.1f}" '
+                 f'stroke="#e5e5e5" stroke-width="1.5" fill="none" opacity=".75"/>')
+    if p.get("OPEN"):  # roadster: seats, headrests, roll hoops behind them
+        h0, h1 = p["HOOPS"]
+        hz = p["HOOP_Z"]
+        for f_ in (h0, h1):
+            x_, y_ = P(f_, hz)
+            g.append(f'<path d="M{x_ - 8:.1f},{belt_y:.1f} Q{x_ - 8:.1f},{y_:.1f} {x_:.1f},{y_:.1f} Q{x_ + 8:.1f},{y_:.1f} {x_ + 8:.1f},{belt_y:.1f} Z" '
+                     f'fill="#202227" stroke="#0b0c0e" stroke-width=".8"/>')
+        sx, sy = P(h0 - .35, p["BELT"] + .2)
+        g.append(f'<path d="M{sx - 10:.1f},{belt_y:.1f} Q{sx - 6:.1f},{sy:.1f} {sx + 6:.1f},{sy:.1f} L{sx + 8:.1f},{belt_y:.1f} Z" fill="#7a1d1d"/>')
+    # door cuts, handle, mirror, fuel door, side marker
+    for k_, f_ in enumerate(p["DOORS"]):
+        x_ = P(f_, 0)[0]
+        g.append(f'<path d="M{x_:.1f},{belt_y + 1:.1f} L{x_ + (1.5 if k_ == 0 else -1.5):.1f},{sill - 1:.1f}" stroke="#000" stroke-opacity=".45" stroke-width="1"/>'
+                 f'<path d="M{x_ + 1:.1f},{belt_y + 1:.1f} L{x_ + 2.5:.1f},{sill - 1:.1f}" stroke="#fff" stroke-opacity=".1" stroke-width=".6"/>')
+    hx = P(p["DOORS"][1] - .25 if len(p["DOORS"]) > 1 else p["DOORS"][0] + .5, 0)[0]
+    g.append(f'<rect x="{hx:.1f}" y="{belt_y + 6:.1f}" width="10" height="2.4" rx="1.2" fill="#000" opacity=".45"/>'
+             f'<rect x="{hx:.1f}" y="{belt_y + 6:.1f}" width="10" height=".9" rx=".45" fill="#fff" opacity=".22"/>')
+    mx, my = P(p["DOORS"][0] + .12, p["BELT"] + .05)
+    g.append(f'<path d="M{mx:.1f},{my:.1f} l8,-3 q3,0 2.4,3.6 l-8,2.6 Z" fill="url(#{u}b)" stroke="#0b0c0e" stroke-width=".8"/>')
+    if not p.get("PROTO"):
+        g.append(f'<circle cx="{rx + arch + 9:.1f}" cy="{belt_y + 7:.1f}" r="3" fill="none" stroke="#000" stroke-opacity=".35"/>')
+        g.append(f'<rect x="{fx + arch + 3:.1f}" y="{belt_y + 10:.1f}" width="6" height="2.2" rx="1" fill="#ff9f1c" opacity=".85"/>')
+    if p.get("INTAKE"):
+        ip = _spline([P(*r) + ("c",) for r in p["INTAKE"]], closed=True)
+        g.append(f'<path d="{ip}" fill="#0c0d10"/><path d="{ip}" fill="none" stroke="#fff" stroke-opacity=".14" stroke-width=".8"/>')
+        a_ = P(p["INTAKE"][0][0], 0)[0]
+        b_ = P(p["INTAKE"][1][0], 0)[0]
+        ty = P(0, (p["INTAKE"][0][1] + p["INTAKE"][3][1]) / 2)[1]
+        for k_ in range(4):
+            xx = a_ + (b_ - a_) * (k_ + 1) / 5
+            g.append(f'<path d="M{xx:.1f},{ty - 5:.1f} l-3,10" stroke="#2a2c31" stroke-width="1.2"/>')
+    # front intake / grille shadow and rear reflector, placed from the bumper heights
+    gx, gy = P(0.02, 0.36)
+    g.append(f'<path d="M{gx - 26:.1f},{gy - 3:.1f} L{gx + 1:.1f},{gy - 2:.1f} L{gx:.1f},{gy + 8:.1f} L{gx - 30:.1f},{gy + 8:.1f} Z" fill="#0c0d10" opacity=".9"/>'
+             f'<path d="M{gx - 24:.1f},{gy:.1f} L{gx - 1:.1f},{gy + .5:.1f} M{gx - 26:.1f},{gy + 3:.1f} L{gx - 1:.1f},{gy + 3.5:.1f}" stroke="#3a3d44" stroke-width=".8"/>')
+    ex, ey = P(L - .02, 0.42)
+    g.append(f'<rect x="{ex + 1:.1f}" y="{ey:.1f}" width="7" height="2" rx="1" fill="#b3121f" opacity=".85"/>')
+    # engine: hood vents → stripe → bulge → carbon hood
+    if p.get("HOOD"):
+        (h0x, h0y), (h1x, h1y) = P(p["HOOD"][0], _z_at(p, p["HOOD"][0])), P(p["HOOD"][1], _z_at(p, p["HOOD"][1]))
+        if eng >= 2:
+            mxh, myh = (h0x + h1x) / 2, (h0y + h1y) / 2
+            g.append(f'<path d="M{mxh - 6:.1f},{myh + 2:.1f} l9,-1 M{mxh - 3:.1f},{myh + 4:.1f} l9,-1" stroke="{dark}" stroke-width="2"/>')
+        if eng >= 4:
+            g.append(f'<path d="M{h1x + 4:.1f},{h1y + 1:.1f} Q{(h0x + h1x) / 2:.1f},{min(h0y, h1y) - 5:.1f} {h0x - 6:.1f},{h0y + 1:.1f}" '
+                     f'fill="none" stroke="{dark}" stroke-width="2.4"/>')
+        if eng >= 5:
+            g.append(f'<path d="M{h1x:.1f},{h1y + .5:.1f} L{h0x:.1f},{h0y + .5:.1f}" stroke="#202124" stroke-width="5" stroke-linecap="round"/>'
+                     f'<path d="M{h1x:.1f},{h1y:.1f} L{h0x:.1f},{h0y:.1f}" stroke="#fff" stroke-opacity=".15" stroke-width=".7" stroke-dasharray="2 1.4"/>')
+    if eng >= 3:
+        sy_ = (belt_y + sill) / 2 + 3
+        g.append(f'<g clip-path="url(#{u}c)"><path d="M{rear:.1f},{sy_:.1f} L{front:.1f},{sy_:.1f}" stroke="#fff" stroke-opacity=".9" stroke-width="3"/>'
+                 f'<path d="M{rear:.1f},{sy_ + 3.4:.1f} L{front:.1f},{sy_ + 3.4:.1f}" stroke="#fff" stroke-opacity=".5" stroke-width=".8"/></g>')
     # lights with glow
-    hx, hyy, hw, hh = b["head"]
-    g.append(f'<ellipse cx="{hx + hw / 2 + 4}" cy="{hyy + hh / 2}" rx="{hw + 6}" ry="{hh + 5}" fill="url(#{u}h)" opacity=".75"/>'
-             f'<rect x="{hx}" y="{hyy}" width="{hw}" height="{hh}" rx="2" fill="#eef1f5" stroke="#0b0c0e" stroke-width=".6"/>'
-             f'<rect x="{hx + 1}" y="{hyy + hh - 1.6}" width="{hw - 2}" height="1.1" rx=".5" fill="#ffffff"/>'
-             f'<circle cx="{hx + hw * .35}" cy="{hyy + hh * .45}" r="{min(hh, hw) * .28:.1f}" fill="#c8d6e8"/>')
-    tx, ty, tw, th = b["tail"]
-    g.append(f'<ellipse cx="{tx + tw / 2 - 2}" cy="{ty + th / 2}" rx="{tw + 5}" ry="{th + 4}" fill="url(#{u}t)" opacity=".7"/>'
-             f'<rect x="{tx}" y="{ty}" width="{tw}" height="{th}" rx="2" fill="#c1121f" stroke="#5a0710" stroke-width=".5"/>'
-             f'<rect x="{tx + 1}" y="{ty + 1}" width="{tw - 2}" height="{max(1, th * .3):.1f}" rx=".6" fill="#ff6b6b"/>')
-    # number roundel
-    rx, ry = b["roundel"]
-    g.append(f'<circle cx="{rx}" cy="{ry - 6}" r="10" fill="#fff" stroke="#111" stroke-width="1.2"/>'
-             f'<text x="{rx}" y="{ry - 2}" font-size="11" font-family="Arial,sans-serif" font-weight="700" '
+    a, b, c, d = p["HEAD"]
+    (hx0, hy0), (hx1, hy1) = P(b, d), P(a, c)
+    hw, hh = hx1 - hx0, hy1 - hy0
+    g.append(f'<ellipse cx="{hx1 + 2:.1f}" cy="{(hy0 + hy1) / 2:.1f}" rx="{hw * .7 + 6:.1f}" ry="{hh + 5:.1f}" fill="url(#{u}h)" opacity=".75"/>'
+             f'<path d="M{hx0:.1f},{hy0 + hh * .35:.1f} L{hx1 - 1:.1f},{hy0:.1f} Q{hx1 + 1:.1f},{hy0:.1f} {hx1:.1f},{hy1 - 1:.1f} '
+             f'L{hx0 + 2:.1f},{hy1:.1f} Z" fill="#eef1f5" stroke="#0b0c0e" stroke-width=".6"/>'
+             f'<path d="M{hx0 + 3:.1f},{hy1 - 1.2:.1f} L{hx1 - 2:.1f},{hy1 - 1.8:.1f}" stroke="#ffffff" stroke-width="1"/>')
+    a, b, c, d = p["TAIL"]
+    (tx0, ty0), (tx1, ty1) = P(b, d), P(a, c)
+    g.append(f'<ellipse cx="{tx0 + 2:.1f}" cy="{(ty0 + ty1) / 2:.1f}" rx="{tx1 - tx0 + 5:.1f}" ry="{ty1 - ty0 + 4:.1f}" fill="url(#{u}t)" opacity=".7"/>'
+             f'<rect x="{tx0:.1f}" y="{ty0:.1f}" width="{max(3, tx1 - tx0):.1f}" height="{ty1 - ty0:.1f}" rx="1.5" fill="#c1121f" stroke="#5a0710" stroke-width=".5"/>'
+             f'<rect x="{tx0 + .8:.1f}" y="{ty0 + .8:.1f}" width="{max(1.5, tx1 - tx0 - 1.6):.1f}" height="{max(1, (ty1 - ty0) * .3):.1f}" rx=".6" fill="#ff6b6b"/>')
+    # number roundel on the door
+    rnx = P((p["DOORS"][0] + (p["B"] or p["DOORS"][-1])) / 2 if p.get("B") else (p["DOORS"][0] + p["DOORS"][-1]) / 2, 0)[0]
+    rny = (belt_y + sill) / 2 - 1
+    g.append(f'<circle cx="{rnx:.1f}" cy="{rny:.1f}" r="9.5" fill="#fff" stroke="#111" stroke-width="1.2"/>'
+             f'<text x="{rnx:.1f}" y="{rny + 3.8:.1f}" font-size="10.5" font-family="Arial,sans-serif" font-weight="700" '
              f'text-anchor="middle" fill="#111">{num}</text>')
-    # aero
-    if aero >= 1 or gt3:  # front lip / splitter
+    # aero: splitter → skirts → canards → diffuser → rear wing tiers (factory wing on some cars)
+    fby = fb[1]
+    if aero >= 1 or gt3:
         ext = 10 if (aero >= 5 or gt3) else 5
-        g.append(f'<path d="M300,104 L{340 + ext},104 L{338 + ext},107 L300,107 Z" fill="{dark}"/>'
-                 f'<path d="M300,104 L{340 + ext},104" stroke="#ffffff" stroke-opacity=".15" stroke-width=".7"/>')
-    if aero >= 2:  # side skirt
-        g.append(f'<path d="M{rear_x + arch},103 L{front_x - arch},103" stroke="{dark}" stroke-width="4"/>')
-    if aero >= 3:  # canards
-        g.append('<path d="M330,90 l12,-2 l-2,4 Z M332,97 l11,-1 l-2,4 Z" fill="#1b1c20"/>')
-    if aero >= 5 or gt3:  # rear diffuser
-        g.append('<path d="M14,104 L44,104 L40,110 M24,104 L20,110 M34,104 L30,110" stroke="#111" '
-                 'stroke-width="2.5" fill="none"/>')
-    # rear wing tiers (factory hatch & GT3 have their own)
-    dx, dy = b["deck"]
-    wing_tier = max(aero, 4 if gt3 else 0, 3 if model_body == "hatch" else 0)
-    if wing_tier == 2:
-        g.append(f'<path d="M{dx - 10},{dy} L{dx + 16},{dy - 3} L{dx + 16},{dy} Z" fill="{dark}"/>')  # lip
-    elif wing_tier == 3:
-        g.append(f'<rect x="{dx - 14}" y="{dy - 10}" width="34" height="4" rx="2" fill="{dark}"/>'
-                 f'<rect x="{dx - 14}" y="{dy - 10}" width="34" height="1.2" rx=".6" fill="#ffffff" opacity=".18"/>'
-                 f'<rect x="{dx - 4}" y="{dy - 6}" width="3" height="7" fill="{dark}"/>'
-                 f'<rect x="{dx + 10}" y="{dy - 6}" width="3" height="7" fill="{dark}"/>')
-    elif wing_tier >= 4:  # swan-neck GT wing
-        big = wing_tier >= 5
-        top = dy - (20 if big else 15)
-        span = 52 if big else 42
-        g.append(f'<path d="M{dx - 22},{top} L{dx - 22 + span},{top - 3} L{dx - 22 + span},{top + 2} '
-                 f'L{dx - 22},{top + 4} Z" fill="{dark}" stroke="#666" stroke-width=".6"/>'
-                 f'<path d="M{dx - 22},{top + .4} L{dx - 22 + span},{top - 2.6}" stroke="#ffffff" stroke-opacity=".22" stroke-width=".7"/>'
-                 f'<rect x="{dx - 24}" y="{top - 5}" width="3" height="13" fill="{dark}"/>'
-                 f'<path d="M{dx - 4},{top + 2} Q{dx - 8},{dy - 6} {dx + 2},{dy}" stroke="{dark}" stroke-width="3" fill="none"/>'
-                 f'<path d="M{dx + 12},{top + 1} Q{dx + 8},{dy - 6} {dx + 18},{dy}" stroke="{dark}" stroke-width="3" fill="none"/>')
-    # turbo / exhaust
-    if turbo >= 1:
+        g.append(f'<path d="M{front - 40:.1f},{fby:.1f} L{front + ext:.1f},{fby:.1f} L{front + ext - 2:.1f},{fby + 3:.1f} L{front - 40:.1f},{fby + 3:.1f} Z" fill="{dark}"/>')
+    if aero >= 2 or gt3:
+        g.append(f'<path d="M{rx + arch:.1f},{sill + 1:.1f} L{fx - arch:.1f},{sill + 1:.1f}" stroke="{dark}" stroke-width="4"/>')
+    if aero >= 3:
+        cx_, cy_ = P(0.05, 0.45)
+        g.append(f'<path d="M{cx_ - 10:.1f},{cy_ - 4:.1f} l12,-2 l-2,4 Z M{cx_ - 8:.1f},{cy_ + 3:.1f} l11,-1 l-2,4 Z" fill="#1b1c20"/>')
+    if aero >= 5 or gt3:
+        dx_, dy_ = rb[0], rb[1]
+        g.append(f'<path d="M{dx_:.1f},{dy_:.1f} L{dx_ + 30:.1f},{dy_:.1f} M{dx_ + 6:.1f},{dy_:.1f} L{dx_ + 2:.1f},{dy_ + 6:.1f} '
+                 f'M{dx_ + 16:.1f},{dy_:.1f} L{dx_ + 12:.1f},{dy_ + 6:.1f} M{dx_ + 26:.1f},{dy_:.1f} L{dx_ + 22:.1f},{dy_ + 6:.1f}" '
+                 f'stroke="#111" stroke-width="2.4" fill="none"/>')
+    if p.get("DECK"):
+        dx, dy = P(p["DECK"], _z_at(p, p["DECK"]))
+        tier = max(aero, int(p.get("WING", 0)))
+        if tier == 2:
+            g.append(f'<path d="M{dx - 12:.1f},{dy + 1:.1f} L{dx + 14:.1f},{dy - 3:.1f} L{dx + 16:.1f},{dy + 1:.1f} Z" fill="{dark}"/>')
+        elif tier == 3:
+            g.append(f'<rect x="{dx - 16:.1f}" y="{dy - 11:.1f}" width="36" height="4" rx="2" fill="{dark}"/>'
+                     f'<rect x="{dx - 16:.1f}" y="{dy - 11:.1f}" width="36" height="1.2" rx=".6" fill="#fff" opacity=".18"/>'
+                     f'<rect x="{dx - 6:.1f}" y="{dy - 7:.1f}" width="3" height="8" fill="{dark}"/>'
+                     f'<rect x="{dx + 9:.1f}" y="{dy - 7:.1f}" width="3" height="8" fill="{dark}"/>')
+        elif tier >= 4:
+            big = tier >= 5
+            ty_ = dy - (19 if big else 15)
+            span = 54 if big else 44
+            x_l = dx - 26
+            g.append(f'<path d="M{x_l:.1f},{ty_:.1f} L{x_l + span:.1f},{ty_ - 3:.1f} L{x_l + span:.1f},{ty_ + 2:.1f} L{x_l:.1f},{ty_ + 4:.1f} Z" '
+                     f'fill="{dark}" stroke="#666" stroke-width=".6"/>'
+                     f'<rect x="{x_l - 2:.1f}" y="{ty_ - 5:.1f}" width="3" height="13" fill="{dark}"/>'
+                     f'<path d="M{dx - 6:.1f},{ty_ + 2:.1f} Q{dx - 10:.1f},{dy - 6:.1f} {dx:.1f},{dy:.1f}" stroke="{dark}" stroke-width="3" fill="none"/>'
+                     f'<path d="M{dx + 10:.1f},{ty_ + 1:.1f} Q{dx + 6:.1f},{dy - 6:.1f} {dx + 16:.1f},{dy:.1f}" stroke="{dark}" stroke-width="3" fill="none"/>')
+    # exhaust → intercooler → anti-lag flames
+    ey_ = rb[1] - 7
+    if turbo >= 1 or p.get("MID"):
         tip = 3 + turbo
-        g.append(f'<rect x="{10 - tip}" y="98" width="{tip + 10}" height="5" rx="2.4" fill="#c4c7cd" stroke="#555" stroke-width=".6"/>'
-                 f'<ellipse cx="{10 - tip + 1}" cy="100.5" rx="1.2" ry="2" fill="#2a2b30"/>')
-    if turbo >= 3:  # front-mount intercooler peeking through the bumper
-        g.append('<path d="M326,92 L340,92 L340,100 L326,100 Z" fill="#3b3f46"/>'
-                 '<path d="M328,94 L338,94 M328,96 L338,96 M328,98 L338,98" stroke="#7d828c" stroke-width=".8"/>')
+        g.append(f'<rect x="{rear - tip:.1f}" y="{ey_:.1f}" width="{tip + 9:.1f}" height="4.6" rx="2.3" fill="#c4c7cd" stroke="#555" stroke-width=".6"/>'
+                 f'<ellipse cx="{rear - tip + 1:.1f}" cy="{ey_ + 2.3:.1f}" rx="1.2" ry="1.9" fill="#2a2b30"/>')
+    if turbo >= 3 and not p.get("MID"):
+        ix_, iy_ = P(0.03, 0.34)
+        g.append(f'<path d="M{ix_ - 14:.1f},{iy_:.1f} L{ix_:.1f},{iy_:.1f} L{ix_:.1f},{iy_ + 7:.1f} L{ix_ - 14:.1f},{iy_ + 7:.1f} Z" fill="#3b3f46"/>'
+                 f'<path d="M{ix_ - 12:.1f},{iy_ + 2:.1f} L{ix_ - 2:.1f},{iy_ + 2:.1f} M{ix_ - 12:.1f},{iy_ + 4.5:.1f} L{ix_ - 2:.1f},{iy_ + 4.5:.1f}" stroke="#7d828c" stroke-width=".8"/>')
     if turbo >= 4:
         size = 6 + (turbo - 3) * 5
-        g.append(f'<path d="M{8 - 3},100 l-{size},-3 l{size * .4},3 l-{size},3 Z" fill="#ff9f1c"/>'
-                 f'<path d="M{8 - 3},100 l-{size * .55},-1.5 l{size * .2},1.5 l-{size * .55},1.5 Z" fill="#ffe66d"/>')
-    # weight 3+: red tow hook
+        fx0 = rear - 3 - turbo
+        g.append(f'<path d="M{fx0:.1f},{ey_ + 2.3:.1f} l-{size},-3 l{size * .4},3 l-{size},3 Z" fill="#ff9f1c"/>'
+                 f'<path d="M{fx0:.1f},{ey_ + 2.3:.1f} l-{size * .55},-1.5 l{size * .2},1.5 l-{size * .55},1.5 Z" fill="#ffe66d"/>')
     if weight >= 3:
-        g.append('<path d="M341,98 l6,0 l0,4 l-6,0" stroke="#d62828" stroke-width="2" fill="none"/>')
-    # damage
+        g.append(f'<path d="M{front + 1:.1f},{fby - 6:.1f} l6,0 l0,4 l-6,0" stroke="#d62828" stroke-width="2" fill="none"/>')
     if condition < 60:
-        g.append('<path d="M200,82 l18,8 M240,80 l10,14 M110,88 l14,6" stroke="#111" stroke-width="2"/>')
+        g.append(f'<path d="M{CX + 20},{belt_y + 8:.1f} l18,8 M{CX + 60},{belt_y + 6:.1f} l10,14 M{CX - 70},{belt_y + 12:.1f} l14,6" stroke="#111" stroke-width="2"/>')
     if condition < 30:
-        g.append('<circle cx="300" cy="56" r="9" fill="#777" opacity=".5"/><circle cx="314" cy="40" r="12" fill="#777" opacity=".35"/>')
-
-    wheels = (_wheel(rear_x, wy, tires, brakes, gt3, u + "a") + _wheel(front_x, wy, tires, brakes, gt3, u + "f"))
+        g.append(f'<circle cx="{front - 40:.1f}" cy="{roof_y + 4:.1f}" r="9" fill="#777" opacity=".5"/>'
+                 f'<circle cx="{front - 26:.1f}" cy="{roof_y - 10:.1f}" r="12" fill="#777" opacity=".35"/>')
+    s_ = rt / R_TIRE
+    wheels = "".join(f'<g transform="translate({wx:.1f},{wy:.1f}) scale({s_:.3f}) translate({-wx:.1f},{-wy:.1f})">'
+                     f'{_wheel(wx, wy, tires, brakes, gt3, u + tag)}</g>' for wx, tag in ((rx, "a"), (fx, "f")))
     car_g = f'<g transform="translate(0,{drop})">{"".join(g)}</g>{wheels}'
-    shadow = (f'<ellipse cx="180" cy="{GROUND + 1}" rx="170" ry="5" fill="#000" opacity=".45"/>'
-              f'<ellipse cx="{rear_x}" cy="{GROUND}" rx="24" ry="3" fill="#000" opacity=".5"/>'
-              f'<ellipse cx="{front_x}" cy="{GROUND}" rx="24" ry="3" fill="#000" opacity=".5"/>')
+    shadow = (f'<ellipse cx="{CX:.1f}" cy="{GROUND + 1}" rx="{(front - rear) / 2 + 6:.1f}" ry="5" fill="#000" opacity=".45"/>'
+              f'<ellipse cx="{rx:.1f}" cy="{GROUND}" rx="{rt + 5:.1f}" ry="3" fill="#000" opacity=".5"/>'
+              f'<ellipse cx="{fx:.1f}" cy="{GROUND}" rx="{rt + 5:.1f}" ry="3" fill="#000" opacity=".5"/>')
     if not studio:
         return (f'<svg viewBox="-6 20 368 112" width="100%" style="max-width:{width}px" xmlns="http://www.w3.org/2000/svg">'
                 f'{shadow}{car_g}</svg>')
@@ -401,10 +516,10 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
              f'<stop offset=".6" stop-color="#fff" stop-opacity="0"/></linearGradient>'
              f'<mask id="{u}k"><rect x="-20" y="{GROUND}" width="400" height="60" fill="url(#{u}m)"/></mask></defs>'
              f'<rect x="-20" y="-10" width="400" height="200" fill="url(#{u}s)"/>'
-             f'<path d="M110,-10 L250,-10 L320,{GROUND} L40,{GROUND} Z" fill="url(#{u}f)" opacity=".5"/>'  # spotlight cone
+             f'<path d="M110,-10 L250,-10 L320,{GROUND} L40,{GROUND} Z" fill="url(#{u}f)" opacity=".5"/>'
              f'<rect x="-20" y="{GROUND}" width="400" height="60" fill="#0b0c10"/>'
              f'<path d="M-20,{GROUND} L380,{GROUND}" stroke="#ffffff" stroke-opacity=".08"/>')
-    reflection = (f'<g mask="url(#{u}k)"><g transform="translate(0,{2 * GROUND}) scale(1,-1)">{car_g}</g></g>')
+    reflection = f'<g mask="url(#{u}k)"><g transform="translate(0,{2 * GROUND}) scale(1,-1)">{car_g}</g></g>'
     return (f'<svg viewBox="-14 6 384 158" width="100%" style="max-width:{width}px;border-radius:14px" '
             f'xmlns="http://www.w3.org/2000/svg">{floor}{reflection}{shadow}{car_g}</svg>')
 
