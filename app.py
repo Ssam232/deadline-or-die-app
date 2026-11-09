@@ -88,6 +88,7 @@ import backups as BK
 import journal_notion as JN
 import quickparse as Q
 import raceviz as RV
+import seasons as SE
 import lounge as L
 import valuation as V
 import zotero as Z
@@ -121,7 +122,8 @@ PARTS = {
     "turbo": {"label": "Forced induction", "icon": "💨", "base": 80, "weight": 5, "desc": "Overtaking punch"},
     "weight": {"label": "Weight reduction", "icon": "🪶", "base": 45, "weight": 4, "desc": "Power-to-weight"},
 }
-MAX_PART_LEVEL = 5
+MAX_PART_LEVEL = 7  # L6–L7 only fit the Acura ladder's chassis (see garage.CHASSIS)
+PRESTIGE_STEP, PRESTIGE_MAX = 0.05, 4  # each retired build: +5% on task coins, up to +20%
 
 RIVALS = [
     "Tomorrow Tom", "Snooze Button", "Doomscroll Dan", "Just-One-Episode",
@@ -145,15 +147,36 @@ CARS = [
      "blurb": "Final form of the road car."},
     {"id": "nsx_gt3", "name": "Honda NSX GT3 Evo", "base": 120, "cost": 10000, "level": 9, "body": "gt3",
      "blurb": "The race car. Same class as your rig — park it next to it."},
+    # ── the Acura ladder: the long game (levels 10–16) ──
+    {"id": "rsx", "name": "Acura RSX Type-S", "base": 130, "cost": 13000, "level": 10, "body": "rsx",
+     "blurb": "Season two starts in a hatch that loves the rev limiter."},
+    {"id": "tsx", "name": "Acura TSX", "base": 140, "cost": 16500, "level": 11, "body": "tsx",
+     "blurb": "The grown-up sport sedan. Quietly quick."},
+    {"id": "integra_s", "name": "Acura Integra Type S", "base": 152, "cost": 20500, "level": 12, "body": "integra_s",
+     "blurb": "The Integra name, back with a turbo and three pedals."},
+    {"id": "tlx_s", "name": "Acura TLX Type S", "base": 165, "cost": 25000, "level": 13, "body": "tlx",
+     "blurb": "Turbo V6 and a rear axle that steers you through the corner."},
+    {"id": "acura_nsx", "name": "Acura NSX", "base": 180, "cost": 30000, "level": 14, "body": "super3",
+     "blurb": "Three motors, one engine, zero excuses."},
+    {"id": "nsx_evo22", "name": "Acura NSX GT3 Evo22", "base": 200, "cost": 36000, "level": 15, "body": "gt3evo",
+     "blurb": "The final evolution of the GT3 car."},
+    {"id": "arx06", "name": "Acura ARX-06", "base": 225, "cost": 45000, "level": 16, "body": "proto",
+     "blurb": "A prototype. The top of the ladder — the whole year's work in one car."},
 ]
 CAR_BY_ID = {c["id"]: c for c in CARS}
 SHOWROOM_PAINT = {"civic_si": ("#b3122a", 21), "integra_r": ("#f1f0ea", 11), "s2000": ("#1f4aa8", 2),
-                  "ctr": ("#e7e6e1", 1), "nsx": ("#c8102e", 8), "nsx_s": ("#e8a43a", 30), "nsx_gt3": ("#f2f2ee", 30)}
+                  "ctr": ("#e7e6e1", 1), "nsx": ("#c8102e", 8), "nsx_s": ("#e8a43a", 30), "nsx_gt3": ("#f2f2ee", 30),
+                  "rsx": ("#f0b323", 5), "tsx": ("#2b4a8a", 14), "integra_s": ("#2f6fb5", 23), "tlx_s": ("#b71c1c", 35),
+                  "acura_nsx": ("#c9ccd1", 17), "nsx_evo22": ("#ff6a13", 93), "arx06": ("#d7263d", 6)}
 # what each one comes with from the factory, so the showroom shows it at its best stock spec
 SHOWROOM_SPEC = {"civic_si": {"tires": 1}, "integra_r": {"tires": 2, "aero": 1, "brakes": 1},
                  "s2000": {"tires": 2, "brakes": 1}, "ctr": {"tires": 3, "aero": 3, "brakes": 3},
                  "nsx": {"tires": 3, "brakes": 2}, "nsx_s": {"tires": 4, "aero": 2, "brakes": 4},
-                 "nsx_gt3": {"tires": 5, "aero": 5, "brakes": 5, "weight": 4}}
+                 "nsx_gt3": {"tires": 5, "aero": 5, "brakes": 5, "weight": 4},
+                 "rsx": {"tires": 2, "brakes": 1}, "tsx": {"tires": 2, "brakes": 2},
+                 "integra_s": {"tires": 3, "aero": 2, "brakes": 3}, "tlx_s": {"tires": 3, "brakes": 3, "aero": 1},
+                 "acura_nsx": {"tires": 4, "aero": 2, "brakes": 4}, "nsx_evo22": {"tires": 5, "aero": 5, "brakes": 5, "weight": 4},
+                 "arx06": {"tires": 5, "aero": 5, "brakes": 5, "weight": 5}}
 
 TRACKS = [  # prizes stay a side-dish to real work at every stage (see race_sim in the README)
     {"name": "Parking Lot Sprint", "laps": 3, "level": 1, "fee": 8, "ai": (30, 48), "prize": [50, 25, 12]},
@@ -161,6 +184,9 @@ TRACKS = [  # prizes stay a side-dish to real work at every stage (see race_sim 
     {"name": "Foothills Grand Prix", "laps": 7, "level": 4, "fee": 35, "ai": (80, 105), "prize": [140, 70, 35]},
     {"name": "Rockies 6 Hours", "laps": 10, "level": 6, "fee": 50, "ai": (115, 150), "prize": [200, 100, 50]},
     {"name": "Thesis Defense Ring", "laps": 12, "level": 8, "fee": 70, "ai": (150, 200), "prize": [260, 130, 65]},
+    # the Acura-era endurance tracks: wider, faster fields; sweet-spot EV stays below the Ring's (race_sim2)
+    {"name": "Prairie 12 Hours", "laps": 14, "level": 11, "fee": 95, "ai": (225, 300), "prize": [230, 115, 55]},
+    {"name": "Defense Day 24", "laps": 16, "level": 14, "fee": 120, "ai": (310, 410), "prize": [270, 135, 65]},
 ]
 
 # ── conditioning layer ──
@@ -1134,12 +1160,18 @@ def chip(deadline: datetime) -> str:
     return "🟢"
 
 
-def level_of(xp: int) -> int:
-    return int(math.sqrt(max(xp, 0) / 50)) + 1
-
-
 def xp_for_level(lvl: int) -> int:
-    return 50 * (lvl - 1) ** 2
+    """Levels 1–10 as always (50·(L−1)²); past 10 the curve steepens so the Acura ladder is a months-long climb."""
+    return 50 * (lvl - 1) ** 2 + (150 * (lvl - 10) ** 2 if lvl > 10 else 0)
+
+
+def level_of(xp: int) -> int:
+    lvl = int(math.sqrt(max(xp, 0) / 50)) + 1  # exact up to 10
+    while lvl > 1 and xp_for_level(lvl) > xp:
+        lvl -= 1
+    while xp_for_level(lvl + 1) <= xp:
+        lvl += 1
+    return lvl
 
 
 def bank(state: dict, delta: int, reason: str) -> None:
@@ -1195,6 +1227,18 @@ def car_rating(state: dict) -> float:
     eff = G.effective(car["parts"], mid)
     raw = CAR_BY_ID[mid]["base"] + sum(eff[k] * PARTS[k]["weight"] for k in PARTS)
     return raw * (0.55 + 0.45 * car["condition"] / 100)
+
+
+def prestige_ready(state: dict) -> tuple[bool, int, int]:
+    """(ready, cars owned, parts maxed): the whole ladder owned and every part tuned to the top."""
+    car = state["car"]
+    owned = sum(1 for c in CARS if c["id"] in car.get("owned", []))
+    maxed = sum(1 for k in PARTS if int(car["parts"].get(k, 0)) >= MAX_PART_LEVEL)
+    return owned == len(CARS) and maxed == len(PARTS), owned, maxed
+
+
+def prestige_mult(state: dict) -> float:
+    return 1 + PRESTIGE_STEP * min(int(state.get("prestige", 0)), PRESTIGE_MAX)
 
 
 def part_cost(part: str, lvl: int) -> int:
@@ -1358,10 +1402,10 @@ def open_crate(state: dict, t: dict) -> str:
         bank(state, n, "📦 Pit crate (big)")
         return f"📦✨ Big crate: **+{n} coins**"
     if kind == "part":
-        open_parts = [k for k in PARTS if car["parts"][k] < MAX_PART_LEVEL]
+        open_parts = [k for k in PARTS if car["parts"][k] < 5]  # crates stop at L5: L6–L7 are bought, not dropped
         if not open_parts:
             bank(state, 150, "📦 Pit crate (parts maxed)")
-            return "📦💎 Rare crate: parts maxed, so **+150 coins**"
+            return "📦💎 Rare crate: crate parts maxed, so **+150 coins**"
         k = random.choice(open_parts)
         car["parts"][k] += 1
         return f"📦💎 **RARE DROP — free {PARTS[k]['icon']} {PARTS[k]['label']} upgrade → L{car['parts'][k]}**"
@@ -1444,7 +1488,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
         tok["double"] -= 1
         dbl, used_token = 2, True
     t["_guard"] = guard * dbl
-    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl))
+    pm_ = prestige_mult(state)
+    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl * pm_))
     parts = [f"base {base}"] + guard_why + (["×2 ⚡ token"] if used_token else ["×2 ⚡ double"] if dbl == 2 else [])
     if early:
         parts.append(f"+{int(early * 100)}% early")
@@ -1454,6 +1499,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
         parts.append(f"×{streak_mult:.1f} streak")
     if t.get("extensions"):
         parts.append(f"−{int((1 - ext_cut) * 100)}% extensions")
+    if pm_ > 1:
+        parts.append(f"×{pm_:.2f} ⭐ prestige")
     return total, ", ".join(parts)
 
 
@@ -3595,6 +3642,30 @@ def render_car_card(state: dict) -> None:
         st.button("Garage →", key="car_garage", type="tertiary", on_click=_go_tab, args=("🔧 Garage",))
 
 
+def render_season_card(state: dict) -> None:
+    """🏆 The season on the Today rail: week, countdown, points and the title you're on course for."""
+    pg = SE.progress(state, now().date())
+    nxt = pg["next"]
+    cab = state.get("trophies", [])
+    with st.container(key="season_card"):
+        st.markdown(
+            f"<div class='dod-season'><div class='hd'><b>🏆 Season {pg['n']}</b><span>Week {pg['week']} of "
+            f"{SE.SEASON_WEEKS} · {pg['left']} day{'s' * (pg['left'] != 1)} left</span></div>"
+            f"<div class='bar'><i style='width:{100 * pg['frac']:.0f}%'></i></div>"
+            f"<div class='pts'><b>{pg['points']}</b> pts · on course for {pg['cup']} <b>{html.escape(pg['title'])}</b>"
+            + (f" · {nxt['need']} to {nxt['cup']} {html.escape(nxt['title'])}" if nxt else "") + "</div>"
+            f"<div class='chips'><span>✅ {pg['finishes']} finishes</span><span>🏁 {pg['wins']} wins · "
+            f"{pg['podiums']} podiums</span><span>🔥 best streak {pg['best_streak']} d</span></div>"
+            f"<div class='why'>Finishes {SE.FINISH_POINTS} pts · wins {SE.RACE_POINTS[1]} · streak day "
+            f"{SE.STREAK_POINTS}. Top track this season: {html.escape(RV.TOP_TRACK)} · "
+            f"{html.escape(RV.layout_name(RV.TOP_TRACK))}.</div>"
+            + (("<div class='cab'>" + (f"<span>⭐ Prestige ×{state['prestige']}</span>" if state.get("prestige") else "")
+                + "".join(f"<span title='Season {t['n']}: {html.escape(t['title'])} · {t['points']} pts'>"
+                          f"{t['cup']} S{t['n']}</span>" for t in cab[-8:]) + "</div>")
+               if cab or state.get("prestige") else "")
+            + "</div>", unsafe_allow_html=True)
+
+
 # ── 📓 journal: morning check-in, evening questionnaire, weekly recap ──
 def _scale_pills(label: str, opts: dict, key: str, default=None):
     return st.pills(label, list(opts), default=default, key=key, format_func=lambda k: opts[k])
@@ -5632,6 +5703,19 @@ CSS = """<style>
 .dod-car .chips span{font-size:.75rem;color:var(--muted);background:var(--card,#141821);border:1px solid var(--line);border-radius:999px;
   padding:2px 9px}
 .dod-car .why{color:#ff6a5c;font-size:.8rem;margin-top:6px}
+.dod-season{border:1px solid var(--line);border-radius:16px;padding:10px 14px 12px;margin:0 0 .5rem;
+  background:radial-gradient(120% 90% at 50% 0%,#232033,#121620 70%)}
+.dod-season .hd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.dod-season .hd b{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-size:1.05rem;color:#ece8df}
+.dod-season .hd span{margin-left:auto;color:var(--muted);font-size:.8rem}
+.dod-season .bar{height:6px;border-radius:3px;background:var(--track,#262b36);overflow:hidden;margin:7px 0 6px}
+.dod-season .bar i{display:block;height:100%;background:linear-gradient(90deg,#f5c518,#ff9f1c);border-radius:3px}
+.dod-season .pts{font-size:.86rem;color:#d6d2c8}.dod-season .pts b{color:#ece8df}
+.dod-season .chips,.dod-season .cab{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+.dod-season .chips span,.dod-season .cab span{font-size:.75rem;color:var(--muted);background:var(--card,#141821);
+  border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.dod-season .cab span{color:#f5c518;border-color:#5a4a12}
+.dod-season .why{color:var(--muted);font-size:.74rem;margin-top:6px}
 .st-key-car_card [data-testid^="stBaseButton-tertiary"],.st-key-card_goals_today [data-testid^="stBaseButton-tertiary"]{
   color:var(--muted);font-size:.85rem;padding:0;min-height:0}
 .st-key-drop_reveal{animation:dodDropOut .6s ease-in 4.8s both;overflow:hidden}
@@ -6214,6 +6298,16 @@ crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
 _made_good = daily.make_good(state, bank, DL)
 _moved_off = daily.release_moved(state)
+# 🏆 seasons: keep the season's best streak, close a finished season (trophy + fresh grid), rotate the top track
+SE.track_streak(state, now().date())
+_new_trophies = SE.rollover(state, now().date())
+RV.SEASON = SE.season_of(now().date())[0]
+if _new_trophies:
+    save_state(state)
+    for _tr in _new_trophies:
+        flash(f"{_tr['cup']} **Season {_tr['n']} — {_tr['title']}**: {_tr['points']} pts · {_tr['finishes']} finishes · "
+              f"{_tr['wins']} wins · best streak {_tr['best_streak']} d. Rival heat reset, and {RV.TOP_TRACK} has a new "
+              f"layout ({RV.layout_name(RV.TOP_TRACK)}). Cars, paint and coins carry over.", celebrate=True, sound="jackpot")
 if _moved_off:
     _made_good = _made_good + [
         "🗺️ Off today's mission: " + ", ".join(
@@ -6369,6 +6463,8 @@ with tab_today:
         with c_rail:
             with st.container(key="tg_car"):
                 render_car_card(state)
+            with st.container(key="tg_season"):
+                render_season_card(state)
             if not state.get("timer"):
                 with st.container(key="tg_timer"):
                     render_timer(state)
@@ -7479,7 +7575,7 @@ with tab_garage:
                     flash(f"🎨 **{name}** unlocked and applied.", celebrate=True, sound="jackpot")
                     st.rerun()
 
-    with fold("showroom", "🏢 Showroom — the Honda ladder", False):
+    with fold("showroom", "🏢 Showroom — the Honda → Acura ladder", False):
         lvl_now = level_of(state["xp"])
         owned = car.setdefault("owned", ["civic_si"])
         for m in CARS:
@@ -7512,6 +7608,28 @@ with tab_garage:
                     flash(f"🔑 **{m['name']}** is yours. Every coin of it came from finished work.", celebrate=True,
                           sound="jackpot")
                     st.rerun()
+
+    ready_, n_own, n_max = prestige_ready(state)
+    pres = int(state.get("prestige", 0))
+    with fold("prestige", f"⭐ Prestige{f' ×{pres}' if pres else ''}", False):
+        st.caption(f"Own the whole ladder ({len(CARS)} cars) and tune every part to L{MAX_PART_LEVEL}, then retire the "
+                   f"build: all parts go back to stock, you keep every car, your paint and your coins, and you get a "
+                   f"permanent ⭐ badge plus **+{int(PRESTIGE_STEP * 100)}% coins on every task** "
+                   f"(stacks to +{int(PRESTIGE_STEP * PRESTIGE_MAX * 100)}%).")
+        st.progress(min(1.0, (n_own + n_max) / (len(CARS) + len(PARTS))),
+                    text=f"🚗 {n_own}/{len(CARS)} cars owned · 🔧 {n_max}/{len(PARTS)} parts at L{MAX_PART_LEVEL}"
+                         + (f" · ⭐ ×{pres} (+{int((prestige_mult(state) - 1) * 100)}% coins now)" if pres else ""))
+        if ready_:
+            sure = st.checkbox("I'm retiring this build: every part back to stock", key="pres_sure")
+            if st.button("⭐ Retire the build", type="primary", disabled=not sure, key="pres_go"):
+                for k in PARTS:
+                    car["parts"][k] = 0
+                state["prestige"] = pres + 1
+                state.setdefault("prestige_log", []).append({"at": now().isoformat(), "n": pres + 1})
+                save_state(state)
+                flash(f"⭐ **Prestige {pres + 1}.** The build is retired; the badge is forever. Task coins now pay "
+                      f"×{prestige_mult(state):.2f}. Time to build it again.", celebrate=True, sound="jackpot")
+                st.rerun()
 
     st.subheader("Upgrades")
     cap_now = G.cap(model["id"])
@@ -7582,7 +7700,8 @@ with tab_race:
         track = TRACKS[names.index(pick)]
         lo, hi = track["ai"]
         rating = track_rating(state, track)
-        st.caption("🏁 " + RV.TRACK_CHARACTER.get(track["name"], ([], ""))[1].capitalize() + ".")
+        st.caption("🏁 " + RV.TRACK_CHARACTER.get(track["name"], ([], ""))[1].capitalize() + "."
+                   + (f" Season {RV.SEASON} layout: **{RV.layout_name(track['name'])}**." if track["name"] == RV.TOP_TRACK else ""))
         m_ = sandbag(state, track)
         pz = [round(x * m_) for x in track["prize"]]
         st.markdown(f"Your car **{rating:.0f}** here vs rivals **{lo}–{hi}** · Entry **{track['fee']} 🪙** · "

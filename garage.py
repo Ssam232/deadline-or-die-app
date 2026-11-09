@@ -15,6 +15,10 @@ UPGRADES = {
         ("Individual throttle bodies", "One throttle per cylinder: razor-sharp throttle response and that intake howl."),
         ("Built motor", "Forged pistons and rods so the engine survives more rpm and boost. On its own it adds "
                         "strength, not power — it's what makes the next mod safe."),
+        ("Dry-sump oiling", "Oil lives in a separate tank and a pump scavenges it from the engine, so hard cornering "
+                            "can't slosh it away from the pickup — and with no deep sump the engine can sit lower."),
+        ("Race engine + hybrid boost", "An electric motor fills in torque out of slow corners while the engine is still "
+                                       "building revs. Energy harvested under braking gets deployed on the exit."),
     ],
     "tires": [
         ("Sport street tires", "Softer rubber = more grip, faster wear. Tires are the only part of the car "
@@ -27,6 +31,10 @@ UPGRADES = {
                                    "sketchy in the rain."),
         ("Race slicks + center-lock", "Zero tread, maximum grip. A center-lock wheel has one big nut for fast "
                                       "pit stops."),
+        ("Magnesium race wheels", "Even lighter than forged aluminum. Less rotating mass means quicker acceleration "
+                                  "and braking — the wheel is a flywheel you have to spin up every time."),
+        ("Prototype slicks + tyre warmers", "Race tyres only grip inside a narrow temperature window. Electric "
+                                           "blankets bring them up to temperature before the car leaves the pits."),
     ],
     "aero": [
         ("Front lip", "Limits how much air goes under the nose — less front lift at speed."),
@@ -38,6 +46,10 @@ UPGRADES = {
                               "stays clean. Downforce = grip in fast corners, paid for with drag."),
         ("Full aero + diffuser", "The diffuser lets air under the rear expand and speed up, dropping its "
                                  "pressure — the car gets sucked to the track."),
+        ("Underbody venturi tunnels", "Shaped tunnels under the car squeeze the air and speed it up, dropping its "
+                                      "pressure: ground-effect downforce with very little drag."),
+        ("Prototype aero + shark fin", "The tall fin on a prototype's engine cover keeps it stable when it's sliding "
+                                       "sideways, and helps stop the car from lifting off if it spins at speed."),
     ],
     "brakes": [
         ("Performance pads", "Pads rated for higher temperatures so they don't fade after repeated hard stops."),
@@ -48,6 +60,10 @@ UPGRADES = {
         ("Two-piece floating rotors", "Aluminum hat + iron ring: lighter, and the ring can expand with heat "
                                       "instead of warping."),
         ("Carbon-ceramic brakes", "Massive heat tolerance and very light — endurance-racing and hypercar tech."),
+        ("Carbon-carbon discs", "Discs and pads made of carbon: they only work properly when they're very hot, "
+                                "and then they stop harder and lighter than anything else."),
+        ("Brake-by-wire + regen blending", "A computer splits each stop between the hybrid's regenerative braking and "
+                                           "the friction brakes, so the pedal feels the same however much is being harvested."),
     ],
     "turbo": [
         ("Small turbo kit", "A turbo uses exhaust energy to spin a compressor that crams in more air. "
@@ -59,6 +75,10 @@ UPGRADES = {
                                     "that's where the pops and flames come from."),
         ("Race turbo + E85", "Ethanol resists knock and cools the intake charge, so the engine can take far "
                              "more boost."),
+        ("Twin-scroll turbo", "Keeps the exhaust pulses from different cylinders apart on the way into the turbine, "
+                              "so it spools faster with less lag."),
+        ("Hot-V twin turbo", "Turbos mounted inside the V of the engine: a shorter exhaust path for quicker response "
+                             "and a lower, more compact package."),
     ],
     "weight": [
         ("Light battery + rear seats out", "Less mass to accelerate, brake and turn. Power-to-weight beats raw power."),
@@ -67,6 +87,10 @@ UPGRADES = {
                                 "mandatory at most tracks."),
         ("Roll cage", "Safety plus chassis stiffness — a stiff shell lets the suspension do the work."),
         ("Polycarbonate + carbon panels", "The full race diet. Every kilo removed helps everywhere at once."),
+        ("Carbon tub", "A one-piece carbon-fibre safety cell: stiffer and lighter than a steel shell, and it "
+                       "protects the driver in a crash."),
+        ("Ballast placement", "Race cars are often built under the weight limit, then ballast is bolted in low down "
+                              "exactly where the engineers want it — weight becomes a tuning tool."),
     ],
 }
 
@@ -91,6 +115,21 @@ CHASSIS = {
                  "pull itself out of corners."),
     "nsx_gt3": (5, "A customer race car. GT3 series use Balance of Performance — weight and power tweaks so very "
                    "different cars can race wheel-to-wheel."),
+    # ── the Acura ladder (levels 10–16): higher tune caps, one lesson per chassis ──
+    "rsx": (5, "Its K-series engine has i-VTEC: on top of VTEC's two cam profiles, VTC continuously shifts the intake "
+               "cam's timing, so you get low-rpm torque and a high-rpm rush."),
+    "tsx": (5, "Double-wishbone front suspension keeps the tyre more upright as the car leans, so the contact patch "
+               "stays flat on the road through a corner — rare in a family sedan."),
+    "integra_s": (6, "A liftback: a sedan's profile, but the whole rear glass lifts with the hatch. The Type S shares "
+                     "its turbocharged 2.0 with the Civic Type R and only comes with a manual."),
+    "tlx_s": (6, "SH-AWD (Super Handling All-Wheel Drive) can send more torque to the outside rear wheel, which "
+                 "pushes the car's nose into the corner instead of just adding traction."),
+    "acura_nsx": (6, "A mid-engine twin-turbo V6 hybrid with three electric motors: one helping the engine, two "
+                     "driving the front wheels and torque-vectoring them. Built in Ohio."),
+    "nsx_evo22": (7, "An 'Evo' is a mid-life update kit the series approves: teams can't invent their own parts on a "
+                     "customer GT3 car, so improvements arrive as a homologated package."),
+    "arx06": (7, "An LMDh prototype: the chassis comes from an approved constructor and the hybrid system is a spec "
+                 "part shared by every car, while the maker supplies the engine and bodywork."),
 }
 
 

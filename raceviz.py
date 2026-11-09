@@ -18,7 +18,26 @@ TRACK_SHAPES = {
                        "270,120 C230,135 250,170 200,172 C140,175 90,190 50,160 Z",
     "Thesis Defense Ring": "M40,40 L150,40 L170,70 L280,60 C305,58 305,100 280,110 L220,120 L240,160 L60,165 "
                            "C30,165 25,130 45,120 L90,100 L40,80 Z",
+    "Prairie 12 Hours": "M30,150 L230,150 C300,150 300,96 250,90 L200,84 C170,80 175,46 205,40 L280,30 "
+                        "C300,28 300,12 280,12 L60,14 C20,16 14,60 36,80 L70,108 C82,120 20,118 30,150 Z",
 }
+# The top track changes layout every season (seasons.py); same name, new corners to learn.
+TOP_TRACK = "Defense Day 24"
+TOP_LAYOUTS = [
+    ("Grand Circuit", "M40,160 L250,160 C300,160 305,120 270,112 L200,98 C170,92 180,60 210,56 L270,50 "
+                      "C305,46 300,14 266,14 L120,16 C80,18 90,52 60,60 C30,68 20,100 30,130 C34,146 30,156 40,160 Z"),
+    ("Esses Layout", "M30,100 C30,40 80,20 130,40 C160,52 170,20 210,22 C260,24 300,40 296,80 C292,110 250,104 236,126 "
+                     "C222,150 270,170 220,172 L90,172 C50,172 60,140 46,128 C34,118 30,112 30,100 Z"),
+    ("Night Configuration", "M50,30 L270,30 C300,30 300,70 270,72 L150,80 C130,82 130,104 150,106 L270,114 "
+                            "C302,116 300,170 266,170 L60,170 C26,170 20,130 40,118 L80,96 C96,86 30,84 28,56 "
+                            "C26,40 34,30 50,30 Z"),
+]
+SEASON = 1  # set by the app each run
+
+
+def layout_name(track: str) -> str:
+    return TOP_LAYOUTS[(SEASON - 1) % len(TOP_LAYOUTS)][0] if track == TOP_TRACK else ""
+
 # What each track rewards (parts get a 30% bonus there) — and how to say it.
 TRACK_CHARACTER = {
     "Parking Lot Sprint": (["tires", "brakes", "weight"], "tight, twisty and all about braking and grip"),
@@ -26,6 +45,8 @@ TRACK_CHARACTER = {
     "Foothills Grand Prix": (["engine", "turbo"], "long straights — straight-line speed wins it"),
     "Rockies 6 Hours": (["brakes", "weight", "engine"], "an endurance race — brakes that survive the heat and a light car"),
     "Thesis Defense Ring": (["engine", "aero", "tires"], "brutal everywhere — power, downforce and grip"),
+    "Prairie 12 Hours": (["turbo", "engine", "weight"], "endless prairie straights and a twelve-hour night — power that lasts"),
+    "Defense Day 24": (["aero", "brakes", "tires"], "twenty-four hours against the best — downforce, brakes and tyres that survive"),
 }
 RIVAL_COLORS = ["#4cc9f0", "#f72585", "#90be6d", "#f9c74f", "#b5179e", "#577590", "#f3722c"]
 PASS_PHRASES = ["late on the brakes into the hairpin", "around the outside of turn 3", "with a better exit onto the straight",
@@ -113,7 +134,8 @@ def replay_html(track: str, history: list[list[float]], names: list[str], colors
     data = {"h": [[round(d / finish, 4) for d in row] for row in history], "names": names, "colors": colors,
             "you": you_idx, "laps": laps, "ticker": ticker, "dnf": dnf_tick, "ms": int(seconds * 1000),
             "start": int(start_ms) if start_ms else None, "srv": int(__import__("time").time() // 60 * 60000)}
-    path = TRACK_SHAPES.get(track, TRACK_SHAPES["Parking Lot Sprint"])
+    path = (TOP_LAYOUTS[(SEASON - 1) % len(TOP_LAYOUTS)][1] if track == TOP_TRACK
+            else TRACK_SHAPES.get(track, TRACK_SHAPES["Parking Lot Sprint"]))
     return f"""<div style="font-family:system-ui,sans-serif;color:#eee;background:#0d0f14;border-radius:12px;padding:8px">
 <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
 <svg id="trk" viewBox="0 0 320 190" style="flex:1 1 260px;max-width:420px">

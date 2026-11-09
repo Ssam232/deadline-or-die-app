@@ -60,6 +60,54 @@ BODIES["super2"] = {
     "intake": "M108,88 L150,82 L148,101 L112,101 Z",
 }
 BODIES["gt3"] = {**BODIES["super2"], "gt3": True}
+# ── the Acura ladder: stylized, original silhouettes in the same language (no badges, no replicas) ──
+BODIES["rsx"] = {  # compact three-door liftback coupe: short wheelbase, glass sloping all the way to the tail
+    "top": "M20,104 L20,82 Q21,73 32,70 L56,63 Q78,54 100,45 L120,38 Q134,35 152,35 L190,36 Q206,38 220,48 "
+           "L244,63 L296,68 Q326,71 335,80 Q339,88 338,104",
+    "glass": "M64,63 L100,47 Q122,39 152,39 L188,40 Q202,42 214,51 L228,61 Z",
+    "pillar": 146, "head": (320, 72, 14, 6), "tail": (21, 72, 8, 8), "wheels": (92, 266),
+    "deck": (38, 66), "roof_y": 35, "hood": (244, 296, 65), "door": (112, 228), "roundel": (174, 88),
+}
+BODIES["tsx"] = {  # tidy four-door sport sedan
+    "top": "M18,104 L18,87 Q18,78 30,76 L70,72 Q84,69 98,57 L116,44 Q130,37 152,36 L196,36 Q212,37 226,48 "
+           "L248,63 L302,67 Q331,70 339,80 Q343,88 341,104",
+    "glass": "M104,59 L119,47 Q132,41 152,40 L194,40 Q208,41 220,51 L234,62 Z",
+    "pillar": 160, "head": (323, 71, 14, 6), "tail": (19, 78, 8, 9), "wheels": (84, 272),
+    "deck": (32, 74), "roof_y": 36, "hood": (248, 302, 65), "door": (112, 236), "roundel": (178, 88),
+}
+BODIES["integra_s"] = {  # five-door liftback with a fastback roofline and flared arches
+    "top": "M16,104 L16,84 Q17,74 28,71 L44,67 Q68,58 98,46 L120,38 Q134,34 156,34 L194,35 Q210,37 225,48 "
+           "L249,64 L304,69 Q332,72 339,81 Q343,89 341,104",
+    "glass": "M74,61 L102,47 Q124,38 156,38 L192,39 Q206,41 219,51 L233,62 Z",
+    "pillar": 154, "head": (323, 73, 15, 5), "tail": (17, 74, 9, 7), "wheels": (84, 274),
+    "deck": (32, 68), "roof_y": 34, "hood": (249, 304, 66), "door": (108, 234), "roundel": (178, 88),
+}
+BODIES["tlx"] = {  # long, low performance sedan
+    "top": "M14,104 L14,88 Q14,79 26,77 L68,73 Q84,70 100,58 L120,45 Q136,38 160,37 L202,37 Q218,38 232,49 "
+           "L254,64 L308,69 Q334,72 341,81 Q345,89 343,104",
+    "glass": "M106,60 L123,48 Q138,41 160,41 L200,41 Q214,42 226,52 L240,63 Z",
+    "pillar": 166, "head": (325, 72, 15, 5), "tail": (15, 79, 10, 6), "wheels": (80, 278),
+    "deck": (28, 75), "roof_y": 37, "hood": (254, 308, 66), "door": (114, 240), "roundel": (184, 88),
+}
+BODIES["super3"] = {  # hybrid mid-engine supercar: sharper wedge, bigger side intake
+    "top": "M14,104 L14,88 Q15,80 28,78 L94,74 Q112,72 130,62 L150,52 Q164,47 184,47 L206,48 Q226,51 240,63 "
+           "L264,78 L316,83 Q340,86 345,95 Q347,100 345,104",
+    "glass": "M138,65 L154,56 Q166,51 184,51 L205,52 Q222,55 234,65 L240,72 Z",
+    "pillar": None, "head": (330, 84, 13, 3), "tail": (15, 81, 11, 4), "wheels": (90, 276),
+    "deck": (40, 76), "roof_y": 47, "hood": (264, 316, 80), "door": (152, 242), "roundel": (196, 96),
+    "intake": "M104,86 L152,80 L150,101 L108,101 Z",
+}
+BODIES["gt3evo"] = {**BODIES["super3"], "gt3": True}
+BODIES["proto"] = {  # closed-cockpit endurance prototype: long low nose, bubble canopy, shark fin
+    "top": "M8,104 L8,82 Q10,74 22,72 L70,70 Q96,69 118,62 L140,50 Q152,44 170,43 L196,44 Q212,46 224,56 "
+           "L240,70 Q270,80 316,88 Q340,92 348,98 L348,104",
+    "glass": "M146,58 L156,50 Q166,46 180,46 L196,47 Q208,49 216,57 L222,64 Z",
+    "pillar": None, "head": (332, 90, 13, 3), "tail": (9, 78, 9, 4), "wheels": (82, 286),
+    "deck": (28, 72), "roof_y": 43, "hood": (240, 320, 80), "door": (150, 226), "roundel": (200, 92),
+    "intake": "M100,86 L140,80 L138,100 L104,101 Z", "gt3": True,
+    "fin": "M146,45 L46,55 L40,70 L70,69.5 Q96,68.5 118,62 L140,51 Z",
+}
+MID_ENGINE = {"super", "super2", "super3", "gt3", "gt3evo", "proto"}
 
 # Visual tiers per part level (0..5)
 WHEEL_STYLES = [
@@ -210,6 +258,10 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
         g.append(f'<path d="M{b["door"][0] + 10},{ry + 1} L{b["door"][1] - 30},{ry + 1}" stroke="#1d1e22" '
                  f'stroke-width="4.4" stroke-linecap="round"/><path d="M{b["door"][0] + 12},{ry} L{b["door"][1] - 32},{ry}" '
                  f'stroke="#ffffff" stroke-opacity=".18" stroke-width=".8" stroke-dasharray="2 1.4"/>')
+    if b.get("fin"):  # prototype shark fin along the engine cover
+        g.append(f'<path d="{b["fin"]}" fill="{lo}" stroke="#0b0c0e" stroke-width="1"/>'
+                 f'<path d="{b["fin"]}" fill="none" stroke="#ffffff" stroke-opacity=".18" stroke-width=".6" '
+                 f'transform="translate(0,1)"/>')
     # glass with glare
     g.append(f'<path d="{b["glass"]}" fill="url(#{u}g)" stroke="#0b0c0e" stroke-width="1"/>')
     g.append(f'<clipPath id="{u}w"><path d="{b["glass"]}"/></clipPath><g clip-path="url(#{u}w)">'
@@ -238,7 +290,7 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
              f'<rect x="{d1 - 30}" y="72" width="11" height="1" rx=".5" fill="#ffffff" opacity=".2"/>')
     if not b.get("roadster"):
         g.append(f'<circle cx="{rear_x + arch + 14}" cy="74" r="3" fill="none" stroke="#000" stroke-opacity=".35"/>')  # fuel door
-    mx = d1 - 4 if model_body not in ("super", "super2", "gt3") else d1 - 2
+    mx = d1 - 4 if model_body not in MID_ENGINE else d1 - 2
     g.append(f'<path d="M{mx},62 l9,-2 q3,0 2,4 l-9,3 Z" fill="url(#{u}b)" stroke="#0b0c0e" stroke-width=".8"/>')  # mirror
     g.append(f'<rect x="{front_x + arch + 4}" y="82" width="6" height="2.2" rx="1" fill="#ff9f1c" opacity=".85"/>')  # marker
     # super/gt3 side intake
@@ -363,6 +415,9 @@ TOP = {  # length, width, cabin (x0, x1) from the rear, nose taper, open cockpit
     "hatch": (21, 11, (-7, 5), 2.5, False), "roadster": (21, 10, (-3, 3), 3.5, True),
     "super": (25, 12, (-1, 7), 4.5, False), "super2": (25, 12, (-1, 7), 5, False),
     "gt3": (26, 13, (-1, 7), 4.5, False),
+    "rsx": (22, 11, (-4, 5), 3, False), "tsx": (24, 11, (-5, 5), 3, False), "integra_s": (24, 11, (-4, 5), 3.2, False),
+    "tlx": (26, 12, (-5, 6), 3.5, False), "super3": (25, 12, (-1, 7), 5, False), "gt3evo": (26, 13, (-1, 7), 4.5, False),
+    "proto": (30, 13, (1, 8), 7, False),
 }
 
 
@@ -371,7 +426,7 @@ def car_topdown(model_body: str, color: str, number, parts: dict) -> str:
     from tyres 3+; a stripe from engine 4+."""
     L, W, (c0, c1), taper, open_ = TOP.get(model_body, TOP["sedan"])
     p = {k: int(v) for k, v in (parts or {}).items()}
-    gt3 = model_body == "gt3"
+    gt3 = model_body in ("gt3", "gt3evo", "proto")
     h, w = L / 2, W / 2
     tw = 1.4 if p.get("tires", 0) >= 3 or gt3 else 1.0
     num = html.escape(str(number))[:3]
