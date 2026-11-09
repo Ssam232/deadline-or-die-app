@@ -1687,6 +1687,12 @@ def fold(k: str, label: str, default: bool = True, card: bool = False):
     return st.expander(label, expanded=folds.get(k, default), key=wk, on_change="rerun")
 
 
+def togo_label(label: str, key: str, default) -> str:
+    """A date box's label with its days to go, so the count stays in view while the calendar is open."""
+    d_ = st.session_state.get(key, default)
+    return f"{label} · {R.days_to_go(d_, now().date())}" if isinstance(d_, date) else label
+
+
 def _when(d: datetime) -> str:
     """A due time that doesn't tick: 'today 6:30 PM', 'Sat 11:59 PM'."""
     day = "today" if d.date() == now().date() else "tomorrow" if d.date() == now().date() + timedelta(days=1) \
@@ -1886,7 +1892,7 @@ def points_guide() -> None:
 def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
     fk = st.session_state.setdefault(f"_{key}_n", 0)
     c1, c2 = st.columns(2)
-    d = c1.date_input("Due date", value=now().date() + timedelta(days=1), min_value=now().date(), key=f"{key}_d{fk}")
+    d = c1.date_input(togo_label("Due date", f"{key}_d{fk}", now().date() + timedelta(days=1)), value=now().date() + timedelta(days=1), min_value=now().date(), key=f"{key}_d{fk}")
     with c2:
         tm = time_wheel("Due time", dtime(23, 55), key=f"{key}_t{fk}")
     start_dt = start_picker(f"{key}_s{fk}", default=None, label="I'll start in (optional)")
@@ -2202,7 +2208,7 @@ def render_event_planner(state: dict) -> None:
     if pick == "__typed":
         c1, c2 = st.columns([2, 1])
         title = c1.text_input("What is it?", placeholder="e.g. CSB conference — poster", key="ev_title")
-        ev_date = c2.date_input("When", value=today + timedelta(days=21), min_value=today + timedelta(days=1),
+        ev_date = c2.date_input(togo_label("When", "ev_date", today + timedelta(days=21)), value=today + timedelta(days=21), min_value=today + timedelta(days=1),
                                 key="ev_date")
         page = None
     else:
@@ -6155,7 +6161,7 @@ def render_new_goal(state: dict) -> None:
     title = st.text_input("Goal", value=title0, key=f"{k}_t", placeholder="The big thing you're working towards")
     c1, c2 = st.columns([2, 1])
     why = c1.text_input("Why it matters (shown when you need it)", key=f"{k}_w")
-    target = c2.date_input("Target date", value=target0, min_value=today, key=f"{k}_d")
+    target = c2.date_input(togo_label("Target date", f"{k}_d", target0), value=target0, min_value=today, key=f"{k}_d")
     if st.button("🗺️ Create goal & plan it", type="primary", key=f"{k}_go"):
         if not (title or "").strip():
             st.error("Name the goal first.")
@@ -6191,21 +6197,28 @@ def render_goal_task_form(state: dict, g: dict) -> None:
                                  help="0 = on the goal's due date. Counts back from it, so the plan moves with the goal.")
         due_d = target - timedelta(days=int(before)) if before is not None else None
     else:
-        due_d = c1.date_input("Deadline (required)", value=None, min_value=now().date(), key=f"gt_due_{gid}",
+        _picked = st.session_state.get(f"gt_due_{gid}")
+        due_d = c1.date_input(("Deadline · " + R.days_to_go(_picked, now().date()) if _picked else "Deadline (required)")
+                              + (f" · goal {R.days_to_go(target, now().date())}" if target else ""),
+                              value=None, min_value=now().date(), key=f"gt_due_{gid}",
                               help="Like every block, it needs a date it's due by.")
     due_t = c2.time_input("Due at", value=dtime(23, 59), step=900, key=f"gt_due_t_{gid}")
     mins = c3.selectbox("Est. length", BLOCK_LENGTHS, index=3, format_func=min_label, key=f"gt_len_{gid}")
-    if rel and due_d:
+    if due_d:  # days to go stays in view whichever way you set it
+        gap = (target - due_d).days if target else None
         st.caption(f"📅 Due **{due_d:%a %b} {due_d.day}** · **{R.days_to_go(due_d, now().date())}**"
-                   + (" · the goal's due date" if due_d == target else
-                      f" · {(target - due_d).days} day{'s' * ((target - due_d).days != 1)} before the goal's"))
+                   + ("" if gap is None else " · the goal's due date" if gap == 0 else
+                      f" · {gap} day{'s' * (gap != 1)} before the goal's" if gap > 0 else
+                      f" · {-gap} day{'s' * (gap != -1)} after the goal's"))
+    elif target:
+        st.caption(f"🏁 The goal is due **{target:%a %b} {target.day}** · **{R.days_to_go(target, now().date())}**")
     cat = st.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"gt_cat_{gid}")
     book = st.toggle("🗓️ Also book time for it", key=f"gt_book_{gid}",
                      help="Puts it on a day and time like a block (calendar, phone heads-up, that day's mission). "
                           "Miss the slot and it isn't dead: it's due at its deadline.")
     if book:
         b1, b2 = st.columns(2)
-        bday = b1.date_input("Work on it", value=now().date(), min_value=now().date(), key=f"gt_bday_{gid}")
+        bday = b1.date_input(togo_label("Work on it", f"gt_bday_{gid}", now().date()), value=now().date(), min_value=now().date(), key=f"gt_bday_{gid}")
         bstart = b2.time_input("Start", value=dtime(9, 0), step=900, key=f"gt_bstart_{gid}")
     if target and due_d and due_d > target:
         st.caption(f"⚠️ That's after the goal's target ({target:%a %b} {target.day}).")
@@ -6258,7 +6271,9 @@ def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str =
     under = st.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
                          if (t.get("node") or "") in opts else 0, format_func=opts.get, key=f"{k}_u")
     c1, c2, c3 = st.columns(3)
-    due_d = c1.date_input("Deadline", value=max(now().date(), due0.date()), min_value=now().date(), key=f"{k}_dd")
+    _picked = st.session_state.get(f"{k}_dd") or max(now().date(), due0.date())
+    due_d = c1.date_input(f"Deadline · {R.days_to_go(_picked, now().date())}", value=max(now().date(), due0.date()),
+                          min_value=now().date(), key=f"{k}_dd")
     due_t = c2.time_input("Due at", value=due0.timetz().replace(tzinfo=None), step=900, key=f"{k}_dt")
     cur_m = int(b.get("minutes") or t.get("minutes") or 45)
     lens = sorted(set(BLOCK_LENGTHS + [cur_m]))
@@ -6268,12 +6283,15 @@ def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str =
     if book:
         b1, b2 = st.columns(2)
         bday0 = date.fromisoformat(b["date"]) if b else min(due_d, max(now().date(), due_d))
-        day = b1.date_input("Work on it", value=max(now().date(), bday0), min_value=now().date(), key=f"{k}_d")
+        day = b1.date_input(togo_label("Work on it", f"{k}_d", max(now().date(), bday0)), value=max(now().date(), bday0), min_value=now().date(), key=f"{k}_d")
         hh, mm = (int(x) for x in (b.get("start") or "09:00").split(":"))
         start = b2.time_input("Start", value=dtime(hh, mm), step=900, key=f"{k}_s")
     if g.get("target") and t.get("due_before_goal") is not None:
         st.caption(f"📅 Set relative to the goal's due date: saving keeps it relative "
                    f"({(date.fromisoformat(g['target']) - due_d).days} days before) · due **{R.days_to_go(due_d, now().date())}**.")
+    else:
+        st.caption(f"📅 Due **{due_d:%a %b} {due_d.day}** · **{R.days_to_go(due_d, now().date())}**"
+                   + (f" · goal {R.days_to_go(date.fromisoformat(g['target']), now().date())}" if g.get("target") else ""))
     if st.button("💾 Save changes", type="primary", key=f"{k}_save") and (title or "").strip():
         if book and day > due_d:
             st.error("The booked day is after the deadline: move one of them.")
@@ -6431,7 +6449,7 @@ def render_task_quick_edit(state: dict, g: dict, tid: str) -> None:
         c1, c2 = st.columns(2)
         under = c1.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
                              if (t.get("node") or "") in opts else 0, format_func=opts.get, key=f"{k}_u")
-        due = c2.date_input("Due", value=max(now().date(), dl.date()), min_value=now().date(), key=f"{k}_d")
+        due = c2.date_input(togo_label("Due", f"{k}_d", max(now().date(), dl.date())), value=max(now().date(), dl.date()), min_value=now().date(), key=f"{k}_d")
         go = st.form_submit_button("💾 Save", type="primary")
     if go and (title or "").strip():
         t.update(title=title.strip(), node=under or None,
@@ -6584,7 +6602,7 @@ def render_goal_edit(state: dict, g: dict, k0: str = "ge") -> None:
         nt = st.text_input("Goal", value=g["title"], key=f"{k0}_t_{g['id']}")
         c1, c2 = st.columns([2, 1])
         nw = c1.text_input("Why it matters", value=g.get("why", ""), key=f"{k0}_w_{g['id']}")
-        nd = c2.date_input("Target date", value=target, key=f"{k0}_d_{g['id']}")
+        nd = c2.date_input(togo_label("Target date", f"{k0}_d_{g['id']}", target), value=target, key=f"{k0}_d_{g['id']}")
         if st.form_submit_button("💾 Save", type="primary") and (nt or "").strip():
             g.update(title=nt.strip(), why=(nw or "").strip(), target=nd.isoformat())
             moved_ = 0
@@ -6643,7 +6661,7 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
             what = st.text_input("What", placeholder="One piece of work, e.g. Read · Meeting · Draft")
             under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"rb_under_{gid}")
             c1, c2, c3 = st.columns(3)
-            first = c1.date_input("First day", value=first0, min_value=now().date(), key=f"rb_first_{gid}")
+            first = c1.date_input(togo_label("First day", f"rb_first_{gid}", first0), value=first0, min_value=now().date(), key=f"rb_first_{gid}")
             days = c2.number_input("Days", 1, 21, 1, key=f"rb_days_{gid}",
                                    help="Read for 2 days → 2. One block per day, same time each day.")
             start = c3.time_input("Start", value=dtime(9, 0), step=900, key=f"rb_start_{gid}")
@@ -6714,7 +6732,9 @@ with tab_goals:
                              f"({(target - now().date()).days} days)")
             big = R.goal_bonus(g, state["tasks"])
             if R.stages(g) or any(t.get("block") for t in gtasks):
-                render_flow(state, g)
+                n_open = sum(1 for t in gtasks if t["status"] == "open")
+                with fold(f"flow_{g['id']}", f"🗺️ Flowchart · {len(R.stages(g))} stages · {n_open} open blocks"):
+                    render_flow(state, g)
                 render_block_plays(state, g)
                 if st.toggle("↕ Drag to rearrange", key=f"rm_arr_{g['id']}",
                              help="Drag steps between stages, or up/down to change which comes first."):
