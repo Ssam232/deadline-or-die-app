@@ -1,0 +1,5 @@
+{"added":"2026-11-09","papers":[
+{"doi":"10.1016/j.ddmod.2019.10.002","title":"Diaphragm Muscle Adaptations in Health and Disease","tags":["remodeling"],"type":"review","level":"foundational","before":"Locomotor and respiratory muscle abnormalities in HFrEF and HFpEF"},
+{"doi":"10.1152/ajpheart.00085.2007","title":"Diaphragm single-fiber weakness and loss of myosin in congestive heart failure rats","tags":["heart-diaphragm","remodeling"],"species":"rat","level":"specialized","before":"Artificial Selection for Whole Animal Low Intrinsic Aerobic Capacity Co-Segregates with Hypoxia-Induced Cardiac Pump Failure"},
+{"doi":"10.1016/j.ijcard.2008.12.042","title":"Heart failure decreases passive tension generation of rat diaphragm fibers","tags":["heart-diaphragm"],"species":"rat","level":"specialized","before":"Artificial Selection for Whole Animal Low Intrinsic Aerobic Capacity Co-Segregates with Hypoxia-Induced Cardiac Pump Failure"}
+]}
