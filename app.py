@@ -4338,7 +4338,7 @@ def _timer_controls(state: dict) -> None:
                     tm["planned"] - FLOW_STEP, work, brk)) * 60)
             save_state(state)
             st.toast(f"Flow mode: +{FLOW_STEP} min. Ride it.", icon="🌊")
-            st.rerun()
+            st.rerun(scope="app")
     c3, c4 = st.columns([3, 1])
     if c3.button("⏹️ Stop & log", type="secondary" if paused else "primary", use_container_width=True, key="tm_stop"):
         mins = min(PM.work_done(eff, work, brk), tm["planned"] + 15)
@@ -4474,7 +4474,7 @@ function buttons(o){var L_=[];
  var sg=JSON.stringify(L_);if(sg===sig||Date.now()-busy<2500)return;sig=sg;var bt=$('bt');bt.innerHTML='';
  L_.forEach(function(x){var b=document.createElement('button');b.textContent=x[1];b.disabled=!!x[2];if(x[3])b.className='pri';
   b.onclick=function(){act(x[0],b);};bt.appendChild(b);});}
-window.__dodSet=function(s){S=s;busy=0;sig='';$('m').textContent='';
+window.__dodSet=function(s){try{LASTJ=JSON.stringify(s||null);}catch(e){}S=s;busy=0;sig='';$('m').textContent='';
  if(!s){document.body.className='over';$('t').textContent='✓';$('t').style.color='#2ec4b6';$('p').textContent='Session over';
   $('bt').innerHTML='';return;}
  document.body.className='';$('n').textContent=s.title;document.title='⏱️ '+s.title;if(s.trkD!==curD)track();tick();};
@@ -4484,20 +4484,25 @@ function tick(){if(!S)return;var o=dodTick(S,Date.now());
  if(trail){trail.setAttribute('stroke',S.PA?'#5b6070':S.ACC);trail.setAttribute('stroke-dasharray',(L*Math.min(1,o.frac))+' 99999');}
  place(o.ph==='done'?0:o.frac);document.title=o.time+' · '+S.title;buttons(o);}
 setInterval(tick,250);
-if(H&&H.__dodTimer!==undefined)window.__dodSet(H.__dodTimer);
+var LASTJ=null;
+setInterval(function(){try{if(!H||H.closed)return;var j=JSON.stringify(H.__dodTimer||null);
+ if(j!==LASTJ){LASTJ=j;window.__dodSet(H.__dodTimer||null);}}catch(e){}},1000);
+if(H&&H.__dodTimer!==undefined){LASTJ=JSON.stringify(H.__dodTimer||null);window.__dodSet(H.__dodTimer);}
 """
 
 POP_MANAGER_JS = TIMER_CORE_JS + SPLASH_JS + r"""
 (function(){
- if(window.__dodPopInit==='v3')return;window.__dodPopInit='v3';var MEMO={};
- var W=null,base=null;
- function build(w){var d=w.document;w.__host=window;d.title='⏱️ Focus timer';
+ if(window.__dodPopInit==='v4')return;window.__dodPopInit='v4';var MEMO={};
+ var W=window.__dodPopW||null,base=null;
+ function build(w){var d=w.document;w.__host=window;w.__dodV=4;d.title='⏱️ Focus timer';
   d.head.innerHTML='<meta name="viewport" content="width=device-width,initial-scale=1"><style>'+__CSS__+'</style>';
   d.body.innerHTML=__BODY__;var sc=d.createElement('script');sc.textContent=__PAGE__;d.body.appendChild(sc);}
  window.__dodPush=function(){if(W&&!W.closed&&W.__dodSet){try{W.__dodSet(window.__dodTimer);}catch(e){}}};
  window.__dodPopOpen=function(){
   if(W&&!W.closed){try{W.focus();}catch(e){}window.__dodPush();return true;}
-  var done=function(w){if(!w)return false;W=w;try{if(!w.__dodSet)build(w);else{w.__host=window;window.__dodPush();}}catch(e){}return true;};
+  var done=function(w){if(!w)return false;
+   try{if(w.__dodSet&&w.__dodV!==4){w.close();w=window.open('','dodtimer','popup,width=360,height=420');if(!w)return false;}}catch(e){}
+   W=window.__dodPopW=w;try{if(!w.__dodSet)build(w);else{w.__host=window;window.__dodPush();}}catch(e){}return true;};
   if(window.documentPictureInPicture){  // Chrome desktop: a window that floats over every app
    return documentPictureInPicture.requestWindow({width:340,height:360}).then(done).catch(function(){
     return done(window.open('','dodtimer','popup,width=360,height=420'));});}
@@ -4558,7 +4563,7 @@ def _timer_hook_js(state_json: str) -> str:
     return (f"(function(){{var P;try{{P=parent;P.document;}}catch(e){{return;}}"
             f"var s={state_json};if(s)s.OFF=(function(d){{return Math.abs(d)>120000?Math.round(d/900000)*900000:0}})"
             f"({int(time.time() // 60 * 60000)}-Date.now());P.__dodTimer=s;"
-            f"if(P.__dodPopInit!=='v3'){{var sc=P.document.createElement('script');sc.textContent={mgr};"
+            f"if(P.__dodPopInit!=='v4'){{var sc=P.document.createElement('script');sc.textContent={mgr};"
             f"P.document.body.appendChild(sc);sc.remove();}}if(P.__dodPush)P.__dodPush();}})();")
 
 
