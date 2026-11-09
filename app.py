@@ -4345,7 +4345,7 @@ function dodTick(s,now){
  var wd=(!W||!B)?e:Math.floor(e/(W+B))*W+Math.min(e%(W+B),W);wd=Math.min(wd,T);
  var ph='work',left=(T-e)*60000;
  if(wd>=T)ph='done';else if(W&&B){var c=W+B,r=e%c;if(r<W)left=Math.min(W-r,T-wd)*60000;else{ph='break';left=(c-r)*60000;}}
- var o={frac:s.FL?(e%25)/25:wd/T,color:s.ACC};
+ var o={frac:s.FL?(e%25)/25:wd/T,color:s.ACC,ph:ph,due:!!(s.FL&&e>=s.CHK)};
  if(s.PA){o.time=s.FL?dodMMSS(e*60000):dodMMSS(left);o.line='Paused '+dodMMSS(now-s.PA);o.color='#8b909c';}
  else if(s.FL){o.time=dodMMSS(e*60000);o.line=e>=s.CHK?'🌊 Check-in: still flowing?':'🌊 Flow · check-in at '+s.CHK+' min';
    if(e>=s.CHK)o.color='#29e3ff';}
@@ -4355,39 +4355,87 @@ function dodTick(s,now){
  return o;}
 """
 
+POP_PAGE_CSS = """*{box-sizing:border-box}html,body{margin:0;height:100%;background:#0e1117;color:#ece8df;
+font-family:system-ui,-apple-system,sans-serif;overflow:hidden}
+body{display:flex;flex-direction:column;align-items:center;padding:10px 12px 12px;gap:4px;text-align:center}
+#n{font-size:13px;font-weight:600;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#svg{flex:1 1 auto;min-height:60px;width:100%;max-width:520px}
+.row{display:flex;align-items:baseline;gap:10px;justify-content:center}
+#t{font:700 clamp(30px,min(13vw,11vh),88px)/1 system-ui,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+#p{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8b909c}
+#bt{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:6px;width:100%}
+#bt button{flex:1 1 40%;min-height:36px;border-radius:10px;border:1px solid #343a47;background:#1b1f27;color:#ece8df;
+ font:600 13px system-ui,sans-serif;cursor:pointer}#bt button.pri{background:#f5c518;border-color:#f5c518;color:#111}
+#bt button:disabled{opacity:.45;cursor:default}#m{font-size:11px;color:#8b909c;min-height:14px}
+.over #svg,.over #bt{opacity:.25;pointer-events:none}"""
+
+POP_PAGE_BODY = ('<div id="n"></div><svg id="svg" viewBox="0 0 300 172" preserveAspectRatio="xMidYMid meet"></svg>'
+                 '<div class="row"><div id="t">--:--</div><div id="p"></div></div><div id="m"></div><div id="bt"></div>')
+
+# runs inside the pop-out window itself: its own clock (so a hidden app tab can't freeze it), the track and car,
+# and buttons that press the app's real Pause / Skip break / Keep going / Stop & log
+POP_PAGE_JS = TIMER_CORE_JS + r"""
+var S=null,H=window.__host,NS='http://www.w3.org/2000/svg',tr=null,L=0,car=null,trail=null,curD=null,sig='',busy=0;
+function $(i){return document.getElementById(i);}
+function track(){var v=$('svg');curD=S.trkD;v.innerHTML='<text id="tl" x="4" y="9" font-size="7" fill="#5b6070" letter-spacing=".07em"></text>'+
+ '<path id="track" d="'+S.trkD+'" fill="none" stroke="#262b36" stroke-width="9" stroke-linejoin="round"/>'+
+ '<path d="'+S.trkD+'" fill="none" stroke="#3a4050" stroke-width=".7" stroke-dasharray="3 4"/>'+
+ '<path id="trail" d="'+S.trkD+'" fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="0 99999"/>'+
+ '<g id="car">'+S.sprite+'</g>';$('tl').textContent=S.trkL;tr=$('track');L=tr.getTotalLength();car=$('car');trail=$('trail');}
+function place(f){if(!tr)return;var d=L*Math.min(.9999,Math.max(0,f)),a=tr.getPointAtLength(d),b=tr.getPointAtLength(Math.min(L,d+1));
+ car.setAttribute('transform','translate('+a.x+','+a.y+') rotate('+(Math.atan2(b.y-a.y,b.x-a.x)*180/Math.PI)+') scale(.85)');}
+function act(k,b){if(!H||H.closed){$('m').textContent='The app tab is closed. Open it to use these.';return;}
+ busy=Date.now();b.disabled=true;b.textContent='…';$('m').textContent='Sent to the app…';
+ try{H.__dodAct(k);}catch(e){$('m').textContent='Couldn’t reach the app tab.';}}
+function buttons(o){var L_=[];
+ if(S.PA)L_.push(['tm_resume','▶️ Resume',0,1]);else L_.push(['tm_pause',S.pauseLabel,!S.canPause,0]);
+ if(!S.FL&&o.ph==='break'&&!S.PA)L_.push(['tm_skip','☕ Skip break',0,0]);
+ if(o.due&&!S.PA)L_.push(['tm_flow_ok','🌊 Keep going',0,1]);
+ L_.push(['tm_stop','⏹️ Stop & log',0,!o.due&&!S.PA]);
+ var sg=JSON.stringify(L_);if(sg===sig||Date.now()-busy<2500)return;sig=sg;var bt=$('bt');bt.innerHTML='';
+ L_.forEach(function(x){var b=document.createElement('button');b.textContent=x[1];b.disabled=!!x[2];if(x[3])b.className='pri';
+  b.onclick=function(){act(x[0],b);};bt.appendChild(b);});}
+window.__dodSet=function(s){S=s;busy=0;sig='';$('m').textContent='';
+ if(!s){document.body.className='over';$('t').textContent='✓';$('t').style.color='#2ec4b6';$('p').textContent='Session over';
+  $('bt').innerHTML='';return;}
+ document.body.className='';$('n').textContent=s.title;document.title='⏱️ '+s.title;if(s.trkD!==curD)track();tick();};
+function tick(){if(!S)return;var o=dodTick(S,Date.now());$('t').textContent=o.time;$('t').style.color=o.color;$('p').textContent=o.line;
+ if(trail){trail.setAttribute('stroke',S.PA?'#5b6070':S.ACC);trail.setAttribute('stroke-dasharray',(L*Math.min(1,o.frac))+' 99999');}
+ place(o.ph==='done'?0:o.frac);document.title=o.time+' · '+S.title;buttons(o);}
+setInterval(tick,250);
+if(H&&H.__dodTimer!==undefined)window.__dodSet(H.__dodTimer);
+"""
+
 POP_MANAGER_JS = TIMER_CORE_JS + r"""
 (function(){
- if(window.__dodPopInit)return;window.__dodPopInit=1;
+ if(window.__dodPopInit==='v2')return;window.__dodPopInit='v2';
  var W=null,base=null;
- function css(){return '*{box-sizing:border-box}html,body{margin:0;height:100%;background:#0e1117;color:#ece8df;'+
-  'font-family:system-ui,-apple-system,sans-serif}body{display:flex;flex-direction:column;justify-content:center;'+
-  'align-items:center;gap:6px;padding:12px;text-align:center}#n{font-size:13px;color:#8b909c;max-width:100%;'+
-  'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#t{font:700 min(22vw,30vh)/1 system-ui,sans-serif;'+
-  'font-variant-numeric:tabular-nums;letter-spacing:-.02em}#p{font-size:13px;color:#8b909c}'+
-  '#b{width:86%;height:5px;border-radius:9px;background:#262b36;overflow:hidden}#b i{display:block;height:100%;width:0}';}
- function build(d){d.title='⏱️ Focus timer';var st=d.createElement('style');st.textContent=css();d.head.appendChild(st);
-  d.body.innerHTML='<div id="n"></div><div id="t">--:--</div><div id="b"><i></i></div><div id="p"></div>';}
+ function build(w){var d=w.document;w.__host=window;d.title='⏱️ Focus timer';
+  d.head.innerHTML='<meta name="viewport" content="width=device-width,initial-scale=1"><style>'+__CSS__+'</style>';
+  d.body.innerHTML=__BODY__;var sc=d.createElement('script');sc.textContent=__PAGE__;d.body.appendChild(sc);}
+ window.__dodPush=function(){if(W&&!W.closed&&W.__dodSet){try{W.__dodSet(window.__dodTimer);}catch(e){}}};
  window.__dodPopOpen=function(){
-  if(W&&!W.closed){try{W.focus();}catch(e){}return true;}
-  var done=function(w){if(!w)return false;W=w;try{build(w.document);}catch(e){}return true;};
+  if(W&&!W.closed){try{W.focus();}catch(e){}window.__dodPush();return true;}
+  var done=function(w){if(!w)return false;W=w;try{if(!w.__dodSet)build(w);else{w.__host=window;window.__dodPush();}}catch(e){}return true;};
   if(window.documentPictureInPicture){  // Chrome desktop: a window that floats over every app
-   return documentPictureInPicture.requestWindow({width:300,height:190}).then(done).catch(function(){
-    return done(window.open('','dodtimer','popup,width=320,height=220'));});}
-  return done(window.open('','dodtimer','popup,width=320,height=220'));};
+   return documentPictureInPicture.requestWindow({width:340,height:360}).then(done).catch(function(){
+    return done(window.open('','dodtimer','popup,width=360,height=420'));});}
+  return done(window.open('','dodtimer','popup,width=360,height=420'));};
+ // a button in the pop-out presses the app's own button (switching to Today first if you're on another tab)
+ window.__dodAct=function(k){
+  var find=function(){var b=document.querySelector('.st-key-'+k+' button');return b&&!b.disabled?b:null;};
+  var b=find();if(b){b.click();return;}
+  var tab=[].slice.call(document.querySelectorAll('[role=tab]')).filter(function(t){return /Today/.test(t.textContent);})[0];
+  if(tab)tab.click();var n=0,iv=setInterval(function(){var b=find();if(b){clearInterval(iv);b.click();}else if(++n>30)clearInterval(iv);},400);};
  setInterval(function(){
   var s=window.__dodTimer,d=document;
-  if(base===null)base=d.title;
-  if(s){var o=dodTick(s,Date.now());
-   if(d.title.indexOf('SESSION DONE')<0)d.title='⏱️ '+o.time+' · '+s.title;
-   if(W&&!W.closed){try{var w=W.document;w.getElementById('t').textContent=o.time;w.getElementById('t').style.color=o.color;
-    w.getElementById('p').textContent=o.line;w.getElementById('n').textContent=s.title;
-    var i=w.querySelector('#b i');i.style.width=(Math.min(1,o.frac)*100)+'%';i.style.background=o.color;}catch(e){}}}
-  else{if(d.title.indexOf('⏱️')===0)d.title=base||'Deadline or Die';d.body.classList.remove('dod-focus');
-   if(W&&!W.closed){try{W.document.getElementById('t').textContent='✓';W.document.getElementById('p').textContent='Session over';
-    W.document.querySelector('#b i').style.width='0';}catch(e){}}}
- },500);
+  if(base===null)base=d.title.indexOf('⏱️')===0?'Deadline or Die':d.title;
+  if(s){var o=dodTick(s,Date.now());if(d.title.indexOf('SESSION DONE')<0)d.title='⏱️ '+o.time+' · '+s.title;}
+  else{if(d.title.indexOf('⏱️')===0)d.title=base||'Deadline or Die';d.body.classList.remove('dod-focus');}
+ },1000);
 })();
-"""
+""".replace("__CSS__", json.dumps(POP_PAGE_CSS)).replace("__BODY__", json.dumps(POP_PAGE_BODY)).replace(
+    "__PAGE__", json.dumps(POP_PAGE_JS))
 
 
 def _timer_js_state(state: dict, tm: dict | None) -> str:
@@ -4395,6 +4443,15 @@ def _timer_js_state(state: dict, tm: dict | None) -> str:
     if not tm:
         return "null"
     t = next((x for x in state["tasks"] if x["id"] == tm.get("task_id")), None)
+    trk, car = track_for(tm), state["car"]
+    mid = car.get("model", "civic_si")
+    sprite = carart.car_topdown(CAR_BY_ID.get(mid, CAR_BY_ID["civic_si"])["body"], car["color"], car["number"],
+                                G.effective(car["parts"], mid))
+    if tm.get("flow"):
+        have = 1 + tm.get("period", 0) - tm.get("free_used", 0)
+        can_p, p_lbl = have > 0, (f"⏸️ Pause · {have} banked" if have > 0 else "⏸️ No pause banked")
+    else:
+        can_p, p_lbl = True, f"⏸️ Pause · −{PM.pause_cost(tm)} 🪙"
     return json.dumps({
         "S": int(parse_dt(tm["start"]).timestamp() * 1000), "PT": int(tm.get("paused_total", 0.0) * 1000),
         "SK": int(tm.get("skipped", 0.0) * 1000),
@@ -4402,7 +4459,9 @@ def _timer_js_state(state: dict, tm: dict | None) -> str:
         "W": tm.get("work") or 0, "B": tm.get("brk") or 0, "T": tm["planned"],
         "WALL": PM.wall_minutes(tm["planned"], tm.get("work") or None, tm.get("brk") or None),
         "FL": bool(tm.get("flow")), "CHK": int(tm.get("check", 0)), "ACC": accent(state)[0],
-        "title": (t["title"] if t else "Focus session")[:60]}).replace("</", "<\\/")
+        "title": (t["title"] if t else "Focus session")[:60],
+        "trkD": trk["d"], "trkL": f"{trk['name'].upper()} · {trk['km']:.3f} KM · {trk['series']}", "sprite": sprite,
+        "canPause": can_p, "pauseLabel": p_lbl}).replace("</", "<\\/")
 
 
 def _timer_hook_js(state_json: str) -> str:
@@ -4411,8 +4470,8 @@ def _timer_hook_js(state_json: str) -> str:
     return (f"(function(){{var P;try{{P=parent;P.document;}}catch(e){{return;}}"
             f"var s={state_json};if(s)s.OFF=(function(d){{return Math.abs(d)>120000?Math.round(d/900000)*900000:0}})"
             f"({int(time.time() // 60 * 60000)}-Date.now());P.__dodTimer=s;"
-            f"if(!P.__dodPopInit){{var sc=P.document.createElement('script');sc.textContent={mgr};"
-            f"P.document.body.appendChild(sc);sc.remove();}}}})();")
+            f"if(P.__dodPopInit!=='v2'){{var sc=P.document.createElement('script');sc.textContent={mgr};"
+            f"P.document.body.appendChild(sc);sc.remove();}}if(P.__dodPush)P.__dodPush();}})();")
 
 
 def _popout_click_js() -> str:
