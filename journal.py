@@ -11,6 +11,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+def _hm(minutes) -> str:
+    """45 min · 1 h · 1 h 30 min (no decimal hours)."""
+    m = int(round(minutes or 0))
+    h, r = divmod(m, 60)
+    return f"{r} min" if not h else f"{h} h" + (f" {r} min" if r else "")
+
+
 MOODS = {1: "😫", 2: "😕", 3: "😐", 4: "🙂", 5: "😄"}
 MOOD_WORDS = {1: "rough", 2: "meh", 3: "okay", 4: "good", 5: "great"}
 ENERGY = {1: "🪫", 2: "🔋", 3: "🔋🔋", 4: "⚡", 5: "⚡⚡"}
@@ -168,11 +175,11 @@ def mood_face(v: float | None) -> str:
 def recap_text(r: dict) -> str:
     end = r["start"] + timedelta(days=6)
     lines = [f"Week of {r['start']:%b} {r['start'].day}–{end:%b} {end.day}",
-             f"⏱️ {r['focus_min'] / 60:.1f} h focused · ✅ {r['done']} done · mood {mood_face(r['mood_avg'])}"
+             f"⏱️ {_hm(r['focus_min'])} focused · ✅ {r['done']} done · mood {mood_face(r['mood_avg'])}"
              + (f" ({r['mood_avg']:.1f}/5)" if r["mood_avg"] is not None else "")
              + f" · 📓 {r['journaled']}/7 days journaled"]
     if r["best"]:
-        lines.append(f"Best day: {r['best']['date']:%A} ({r['best']['focus'] / 60:.1f} h)")
+        lines.append(f"Best day: {r['best']['date']:%A} ({_hm(r['best']['focus'])})")
     if r.get("bailouts"):
         lines.append("🪂 Bailed out: " + ", ".join(f"{d_:%a} ({why})" for d_, why in r["bailouts"]))
     if r["wins"]:

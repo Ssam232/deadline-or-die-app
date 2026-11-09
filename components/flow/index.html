@@ -9,11 +9,14 @@ g.node{cursor:pointer}
 g.node:hover path,g.node:hover polygon,g.node:hover ellipse{filter:brightness(1.35)}
 g.node.sel path,g.node.sel polygon{stroke-width:3.2px}
 #hint{color:#8b909c;font-size:12px;margin:2px 0 0}
+g.plus{cursor:pointer;opacity:.75}g.plus:hover{opacity:1}
+g.plus circle{fill:#f5d76e;stroke:#0e1117;stroke-width:1.5}
+g.plus text{fill:#2a2410;font:700 12px system-ui,sans-serif;pointer-events:none}
 </style>
 <script src="viz-standalone.js"></script>
 </head>
 <body>
-<div id="wrap"></div><div id="hint">Tap a box to edit it.</div>
+<div id="wrap"></div><div id="hint">Tap a box to edit it · ＋ adds a note to it.</div>
 <script>
 // 🗺️ The roadmap flow chart, drawn with Graphviz (viz.js, MIT) and clickable: tapping a box sends its id back to
 // the app, which opens that block / stage / goal for editing right under the chart.
@@ -36,12 +39,25 @@ window.addEventListener("message", ev => {
     const svg = viz.renderSVGElement(a.dot);
     svg.removeAttribute("width"); svg.removeAttribute("height");
     const w = document.getElementById("wrap"); w.innerHTML = ""; w.appendChild(svg);
+    const NS = "http://www.w3.org/2000/svg";
     svg.querySelectorAll("g.node").forEach(g => {
+      const id = (g.querySelector("title") || {}).textContent;
       g.addEventListener("click", () => {
-        const id = (g.querySelector("title") || {}).textContent;
         mark(id);
         send("streamlit:setComponentValue", {value: {id: id, t: Date.now()}, dataType: "json"});
       });
+      if (id.startsWith("n_")) return;  // notes themselves don't get a ＋
+      // ＋ badge on the box's top-right corner: a note pinned to this box, in one tap
+      const shape = g.querySelector("path,polygon,ellipse"); if (!shape) return;
+      const b = shape.getBBox(), p = document.createElementNS(NS, "g");
+      p.setAttribute("class", "plus");
+      p.setAttribute("transform", "translate(" + (b.x + b.width - 3) + "," + (b.y + 3) + ")");
+      p.innerHTML = '<title>Add a note here</title><circle r="8"></circle><text text-anchor="middle" dy="4">+</text>';
+      p.addEventListener("click", e => {
+        e.stopPropagation(); mark(id);
+        send("streamlit:setComponentValue", {value: {id: id, add: true, t: Date.now()}, dataType: "json"});
+      });
+      g.parentNode.appendChild(p);
     });
     mark(a.sel); height();
     setTimeout(height, 120);

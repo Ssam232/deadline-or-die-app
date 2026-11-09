@@ -690,7 +690,7 @@ DASH_EVERY = 45  # seconds between dashboard refreshes
 def _journal_header(state: dict, d: date, pm: dict) -> str:
     done = J.done_on(state, d, TZ)
     return (f"{J.MOODS.get(pm.get('mood'), '')} {J.MOOD_WORDS.get(pm.get('mood'), '')} · energy "
-            f"{J.ENERGY.get(pm.get('energy'), '')} · ⏱️ {J.focus_on(state, d) / 60:.1f} h focused · ✅ {len(done)} done"
+            f"{J.ENERGY.get(pm.get('energy'), '')} · ⏱️ {hmin(J.focus_on(state, d))} focused · ✅ {len(done)} done"
             + (f" ({', '.join(t['title'] for t in done[:4])})" if done else ""))
 
 
@@ -1888,10 +1888,10 @@ def cat_label(k: str) -> str:
 
 
 def min_label(m: int) -> str:
-    return f"{m} min" if m < 60 else f"{m / 60:g} h"
+    return hmin(m)
 
 
-def hm(minutes: float) -> str:
+def hmin(minutes: float) -> str:
     """A time for people, not a decimal: 45 min · 1 h · 1 h 30 min."""
     m = int(round(minutes or 0))
     h, r = divmod(m, 60)
@@ -3824,15 +3824,15 @@ def render_journal(state: dict) -> None:
     st.markdown(f"#### 🗓️ {'Week so far' if pick == 'This week' and today < end else 'Weekly recap'} · "
                 f"{ws:%b} {ws.day}–{end:%b} {end.day}")
     st.markdown("<div class='dod-pills'>"
-                f"<span>⏱️ <b>{r['focus_min'] / 60:.1f} h</b> focused</span><span>✅ <b>{r['done']}</b> done</span>"
+                f"<span>⏱️ <b>{hmin(r['focus_min'])}</b> focused</span><span>✅ <b>{r['done']}</b> done</span>"
                 f"<span>Mood <b>{J.mood_face(r['mood_avg'])}</b>"
                 + (f" {r['mood_avg']:.1f}/5" if r["mood_avg"] is not None else "") + "</span>"
                 f"<span>📓 <b>{r['journaled']}</b>/7 journaled</span>"
-                + (f"<span>🏆 Best: <b>{r['best']['date']:%a}</b> {r['best']['focus'] / 60:.1f} h</span>" if r["best"] else "")
+                + (f"<span>🏆 Best: <b>{r['best']['date']:%a}</b> {hmin(r['best']['focus'])}</span>" if r["best"] else "")
                 + "</div>", unsafe_allow_html=True)
     import altair as alt
     acc = accent(state)[0]
-    df = pd.DataFrame([{"Day": f"{x['date']:%a}", "i": k, "Focus h": round(x["focus"] / 60, 2), "Focus": hm(x["focus"]),
+    df = pd.DataFrame([{"Day": f"{x['date']:%a}", "i": k, "Focus h": round(x["focus"] / 60, 2), "Focus": hmin(x["focus"]),
                         "Mood": x["mood"], "Face": J.mood_face(x["mood"]) if x["mood"] is not None else ""}
                        for k, x in enumerate(r["rows"])])
     if not df.empty:
@@ -3881,7 +3881,7 @@ def render_journal(state: dict) -> None:
         am, pm = e.get("am") or {}, e.get("pm") or {}
         done = J.done_on(state, d_, TZ)
         head = (f"{d_:%a %b} {d_.day} · " + (f"{J.MOODS[am['mood']]}" if am else "·") + " → "
-                + (f"{J.MOODS[pm['mood']]}" if pm else "·") + f" · ⏱️ {J.focus_on(state, d_) / 60:.1f} h · ✅ {len(done)}")
+                + (f"{J.MOODS[pm['mood']]}" if pm else "·") + f" · ⏱️ {hmin(J.focus_on(state, d_))} · ✅ {len(done)}")
         with st.expander(head, key=f"exp_jr_{d_.isoformat()}"):
             if (d_ == jd and pm) or (d_.isoformat() in state.get("late_journal_ok", []) and not pm):
                 _journal_form(state, d_, f"je_{d_.isoformat()}")
@@ -3920,7 +3920,7 @@ def _recap_text(ts: list[dict], period: str) -> str:
     by = {}
     for t in ts:
         by.setdefault(t.get("category") or "admin", []).append(t)
-    lines = [f"{period}: {len(ts)} things done · {sum(t.get('minutes') or 0 for t in ts) / 60:.1f} h"]
+    lines = [f"{period}: {len(ts)} things done · {hmin(sum(t.get('minutes') or 0 for t in ts))}"]
     for cat in V.CATEGORIES:
         if by.get(cat):
             lines.append(f"\n{V.CATEGORIES[cat]['label']}")
@@ -3942,8 +3942,8 @@ def render_scrapbook(state: dict) -> None:
         return
     mins = sum(t.get("minutes") or 0 for t in ts)
     timed = sum(t.get("focus_min") or 0 for t in ts)
-    st.markdown(f"<div class='dod-pills'><span>✅ <b>{len(ts)}</b> done</span><span>🕒 <b>{mins / 60:.1f} h</b> of work"
-                f"</span><span>⏱️ <b>{timed / 60:.1f} h</b> on the timer</span><span>🪙 <b>+{sum(t.get('reward', 0) for t in ts)}"
+    st.markdown(f"<div class='dod-pills'><span>✅ <b>{len(ts)}</b> done</span><span>🕒 <b>{hmin(mins)}</b> of work"
+                f"</span><span>⏱️ <b>{hmin(timed)}</b> on the timer</span><span>🪙 <b>+{sum(t.get('reward', 0) for t in ts)}"
                 f"</b></span></div>", unsafe_allow_html=True)
     with fold("stats_recap", "📋 Recap to paste (supervisor meeting, journal, thesis log)", False):
         st.code(_recap_text(ts, per), language=None)
@@ -6795,6 +6795,27 @@ def render_goal_notes(state: dict, g: dict, only: str | None = None) -> None:
                 st.rerun()
 
 
+def render_quick_note(state: dict, g: dict, target: str, head) -> None:
+    """＋ on a roadmap box: one field, already pinned to that box. Enter or Add and it's on the chart."""
+    gid = g["id"]
+    targets = _note_targets(state, g)
+    if target not in targets:
+        target = "goal"
+    head.markdown(f"**📝 Note on** {html.escape(targets[target])}")
+    with st.form(f"qn_{gid}", clear_on_submit=True, border=False, enter_to_submit=True):
+        txt = st.text_input("Note", placeholder="An aspect, a risk, a person, an idea…", key=f"qn_txt_{gid}",
+                            label_visibility="collapsed", max_chars=400)
+        c1, c2 = st.columns([3, 1], vertical_alignment="center")
+        col = c1.pills("Colour", list(NOTE_COLOR_LABELS), default="yellow", key=f"qn_col_{gid}",
+                       format_func=lambda c: NOTE_COLOR_LABELS[c].split()[0], label_visibility="collapsed") or "yellow"
+        if c2.form_submit_button("📝 Add", type="primary", use_container_width=True) and (txt or "").strip():
+            g.setdefault("notes", []).append({"id": uuid.uuid4().hex[:8], "text": txt.strip()[:400], "on": target,
+                                              "color": col, "created": now().isoformat()})
+            st.session_state.pop(f"flow_sel_{gid}", None)
+            save_state(state)
+            st.rerun()
+
+
 def render_flow(state: dict, g: dict) -> None:
     """The roadmap as a flow chart you can tap: the box you tap opens for editing right underneath."""
     gid = g["id"]
@@ -6807,7 +6828,7 @@ def render_flow(state: dict, g: dict) -> None:
         st.graphviz_chart(dot, use_container_width=True)
     if ev and ev.get("t") != st.session_state.get(f"flow_t_{gid}"):
         st.session_state[f"flow_t_{gid}"] = ev.get("t")
-        sel = st.session_state[f"flow_sel_{gid}"] = ev.get("id")
+        sel = st.session_state[f"flow_sel_{gid}"] = ("add:" if ev.get("add") else "") + (ev.get("id") or "")
     if not sel:
         return
     with st.container(border=True, key=f"flow_ed_{gid}"):
@@ -6815,7 +6836,9 @@ def render_flow(state: dict, g: dict) -> None:
         if c2.button("✕", key=f"flow_x_{gid}", help="Close"):
             st.session_state.pop(f"flow_sel_{gid}", None)
             st.rerun()
-        if sel == "goal":
+        if sel.startswith("add:"):
+            render_quick_note(state, g, sel[4:], c1)
+        elif sel == "goal":
             c1.markdown("**✏️ The goal**")
             render_goal_edit(state, g, "fg")
         elif sel.startswith("s_"):
@@ -7137,13 +7160,13 @@ def render_focus_periods(state: dict) -> None:
     days_in = [lo + timedelta(days=i) for i in range((min(hi, today) - lo).days + 1)] if lo <= today else []
     active = [d for d in days_in if g["day"].get(d, 0) >= 1]
     best = max(active, key=lambda d: g["day"][d]) if active else None
-    delta = (f"<span>{'▲' if total >= prev else '▼'} <b>{abs(total - prev) / 60:.1f} h</b> vs previous</span>"
+    delta = (f"<span>{'▲' if total >= prev else '▼'} <b>{hmin(abs(total - prev))}</b> vs previous</span>"
              if prev or total else "")
     st.markdown("<div class='dod-pills'>"
-                f"<span>⏱️ <b>{total / 60:.1f} h</b> focused</span>"
+                f"<span>⏱️ <b>{hmin(total)}</b> focused</span>"
                 f"<span>📅 <b>{len(active)}</b>/{len(days_in) or 0} days</span>"
-                + (f"<span>Avg <b>{total / len(active) / 60:.1f} h</b> on days you worked</span>" if active else "")
-                + (f"<span>🏆 Best <b>{best:%a %b} {best.day}</b> · {g['day'][best] / 60:.1f} h</span>" if best else "")
+                + (f"<span>Avg <b>{hmin(total / len(active))}</b> on days you worked</span>" if active else "")
+                + (f"<span>🏆 Best <b>{best:%a %b} {best.day}</b> · {hmin(g['day'][best])}</span>" if best else "")
                 + delta + "</div>", unsafe_allow_html=True)
     if not total:
         st.caption("No timer sessions in this period. Only the ⏱️ focus timer counts here: claiming a task or "
@@ -7154,12 +7177,12 @@ def render_focus_periods(state: dict) -> None:
         label_of = lambda d: f"{d:%b}"  # noqa: E731
         rows = [{"When": date(lo.year, m, 1).strftime("%b"), "i": m,
                  "Hours": round(sum(v for d, v in g["day"].items() if d.month == m) / 60, 1),
-                 "Time": hm(sum(v for d, v in g["day"].items() if d.month == m))} for m in range(1, 13)]
+                 "Time": hmin(sum(v for d, v in g["day"].items() if d.month == m))} for m in range(1, 13)]
     else:
         label_of = ((lambda d: f"{d:%a}") if kind == "Week" else (lambda d: f"{d.month}/{d.day}") if kind == "30 days"
                     else (lambda d: str(d.day)))  # noqa: E731
         rows = [{"When": label_of(d), "i": i,
-                 "Hours": round(g["day"].get(d, 0) / 60, 2), "Time": hm(g["day"].get(d, 0)), "now": d == today}
+                 "Hours": round(g["day"].get(d, 0) / 60, 2), "Time": hmin(g["day"].get(d, 0)), "now": d == today}
                 for i, d in enumerate(lo + timedelta(days=k) for k in range((hi - lo).days + 1))]
     df = pd.DataFrame(rows)
     unit = "month" if kind == "Year" else "day"
@@ -7200,13 +7223,13 @@ def render_focus_periods(state: dict) -> None:
     if kind == "Week":
         cells = [{"Day": f"{lo + timedelta(days=i):%a}", "d": i, "Hour": _hlabel(h), "h": h,
                   "Minutes": round(g["dh"].get((lo + timedelta(days=i), h), 0)),
-                  "Focus": hm(g["dh"].get((lo + timedelta(days=i), h), 0))} for i in range(7) for h in range(5, 24)]
+                  "Focus": hmin(g["dh"].get((lo + timedelta(days=i), h), 0))} for i in range(7) for h in range(5, 24)]
         ttl = "**Day × hour** · minutes"
     else:
         agg = defaultdict(float)
         for (d, h), v in g["dh"].items():
             agg[(d.weekday(), h)] += v
-        cells = [{"Day": wd[i], "d": i, "Hour": _hlabel(h), "h": h, "Minutes": round(agg.get((i, h), 0)), "Focus": hm(agg.get((i, h), 0))}
+        cells = [{"Day": wd[i], "d": i, "Hour": _hlabel(h), "h": h, "Minutes": round(agg.get((i, h), 0)), "Focus": hmin(agg.get((i, h), 0))}
                  for i in range(7) for h in range(5, 24)]
         ttl = "**Weekday × hour** · total minutes in the period"
     st.markdown(ttl)
@@ -7254,7 +7277,7 @@ with tab_stats:
     rate = full["on_time"] / full["done"] if full["done"] else None
     k[1].metric("On time", f"{rate:.0%}" if rate is not None else "—",
                 delta=f"{full['failed']} missed" if full["failed"] else None, delta_color="inverse")
-    k[2].metric("Focus hours", f"{full['focus_min'] / 60:.1f}", help="Timer-logged work minutes (breaks excluded).")
+    k[2].metric("Focus", hmin(full['focus_min']), help="Timer-logged work minutes (breaks excluded).")
     k[3].metric("Active days", f"{full['active_days']}/28")
     zc_ = zotero_cfg(state)
     if zc_:
@@ -7280,7 +7303,7 @@ with tab_stats:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Hours by category** · 28 days")
-            cat = pd.DataFrame([{"Category": V.CATEGORIES.get(c_, {}).get("label", c_), "Hours": round(m_ / 60, 1), "Time": hm(m_)}
+            cat = pd.DataFrame([{"Category": V.CATEGORIES.get(c_, {}).get("label", c_), "Hours": round(m_ / 60, 1), "Time": hmin(m_)}
                                 for c_, m_ in full["cat_min"].items()]).sort_values("Hours", ascending=False) \
                 if full["cat_min"] else pd.DataFrame({"Category": [], "Hours": []})
             _chart(alt.Chart(cat).mark_bar(cornerRadiusEnd=4, color=VIZ["normal"]).encode(
@@ -7300,7 +7323,7 @@ with tab_stats:
     st.subheader("🧠 How the engine uses this")
     if not PROFILE["ready"]:
         st.caption(f"The engine starts steering after {I.MIN_ACTIVE_DAYS} active days with 2+ hours logged "
-                   f"(you're at {PROFILE['active_days']} day(s), {PROFILE['total_min'] / 60:.1f} h, up to yesterday). "
+                   f"(you're at {PROFILE['active_days']} day(s), {hmin(PROFILE['total_min'])}, up to yesterday). "
                    "Until then, surprises are spread evenly from 9 AM to 7 PM.")
     else:
         w0, w1 = PROFILE["window"]

@@ -50,6 +50,13 @@ def _seq(*parts) -> str:
     return "dod" + hashlib.sha1("|".join(map(str, parts)).encode()).hexdigest()[:20]
 
 
+def _hmin(minutes) -> str:
+    """45 min · 1 h · 1 h 30 min (no decimal hours)."""
+    m = int(round(minutes or 0))
+    h, r = divmod(m, 60)
+    return f"{r} min" if not h else f"{h} h" + (f" {r} min" if r else "")
+
+
 def _hm(dt: datetime) -> str:
     return dt.strftime("%I:%M %p").lstrip("0")
 
@@ -209,7 +216,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
         r = J.recap(save, J.week_start(d), now.tzinfo, through=now.date())
         rat = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=J.RECAP_HOUR)
         out.append(_alarm(("recap", d), rat, "🗓️ Your week",
-                          f"{r['focus_min'] / 60:.1f} h focused · {r['done']} done · mood {J.mood_face(r['mood_avg'])}. "
+                          f"{_hmin(r['focus_min'])} focused · {r['done']} done · mood {J.mood_face(r['mood_avg'])}. "
                           "Stats → Journal for the full recap.", 3, ["calendar"], True))
     return out
 
