@@ -20,6 +20,7 @@ import math
 import os
 import random
 import re
+import statistics
 import threading
 import time
 import uuid
@@ -1488,7 +1489,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
         dbl, used_token = 2, True
     t["_guard"] = guard * dbl
     pm_ = prestige_mult(state)
-    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl * pm_))
+    pr_ = float(t.get("prorate") or 1.0)  # timer under target as proof: pays its share
+    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl * pm_ * pr_))
     parts = [f"base {base}"] + guard_why + (["×2 ⚡ token"] if used_token else ["×2 ⚡ double"] if dbl == 2 else [])
     if early:
         parts.append(f"+{int(early * 100)}% early")
@@ -1500,6 +1502,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
         parts.append(f"−{int((1 - ext_cut) * 100)}% extensions")
     if pm_ > 1:
         parts.append(f"×{pm_:.2f} ⭐ prestige")
+    if pr_ < 1:
+        parts.append(f"×{pr_:.2f} timer pro-rated ({t.get('proof_timer', 0):.0f} min logged)")
     return total, ", ".join(parts)
 
 
@@ -1754,6 +1758,7 @@ def _when(d: datetime) -> str:
 
 
 OFFSCREEN_MAX_MIN, OFFSCREEN_PER_DAY = 45, 3  # calls, bookings, errands: short tasks, a few a day
+PRORATE_MIN, PRORATE_FLOOR = 5, 0.0  # 5+ min on the timer counts as proof, paying exactly its share of the target
 
 
 def offscreen_left(state: dict) -> int:
@@ -1770,10 +1775,14 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     use_ai = s["ai_steward"] and bool(get_secret("ANTHROPIC_API_KEY"))
     fm, need = timer_proof(t)
     timer_ok = fm >= need
+    partial = not timer_ok and fm >= PRORATE_MIN  # under target: still proof, but it pays its share
+    pr_ = max(PRORATE_FLOOR, fm / need) if partial else 1.0
     if fm:
-        dot = "#2ec4b6" if timer_ok else "#5b6070"
+        dot = "#2ec4b6" if timer_ok else "#f5c518" if partial else "#5b6070"
         tail = ("— that's your proof. A file or link is optional." if timer_ok else
-                f"— log {need - fm:.0f} more min and the timer alone counts as proof.")
+                f"— counts as proof on its own, paying ×{pr_:.2f} ({fm:.0f} of the {need:.0f} min the timer needs). "
+                f"Attach a file or link for the full reward." if partial else
+                f"— log {PRORATE_MIN - fm:.0f} more min and the timer counts as (pro-rated) proof.")
         st.markdown(f"<div class='dod-row' style='border:0;padding:2px 0 6px'><span class='dod-dot' "
                     f"style='background:{dot}'></span><div><b>⏱️ {fm:.0f} of {t.get('minutes') or 0} min on the "
                     f"focus timer</b> <span class='m'>{tail}</span></div></div>", unsafe_allow_html=True)
@@ -1795,9 +1804,16 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
                                placeholder="Confirmation #, who you spoke to, the time it's booked for…", **touch)
         up, link = None, ""
     else:
-        up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else ""),
+        up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else
+                              " — optional, pays in full" if partial else ""),
                               type=PROOF_TYPES, key=f"file_{k}", **touch)
         link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}", **touch)
+    actual = None
+    if not timer_ok and not (partial and not up and not link.strip()):  # the timer isn't the proof: ask how long it took
+        actual = st.number_input("Actual time taken (min, optional)", min_value=1, max_value=24 * 60, value=None, step=5,
+                                 key=f"actual_{k}", placeholder=f"estimated {t.get('minutes') or '?'}",
+                                 help="Doesn't change your coins. It trains your estimates: Stats shows how long "
+                                      "your tasks really take vs what you planned.")
     g_ = next((g for g in state.get("goals", []) if g["id"] == t.get("goal_id")), None)
     pin = bool(g_) and st.checkbox(f"📝 Also pin “What did you do?” to the {g_['title'][:40]} roadmap as a note",
                                    key=f"pin_{k}", **touch) if g_ else False
@@ -1812,7 +1828,8 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     errors, data, h = [], None, None
     if len(note.strip()) < 15:
         errors.append("Write at least a real sentence about what you did.")
-    if timer_ok:
+    use_pr = partial and not offs and not up and not link.strip()  # the pro-rated timer is the proof
+    if timer_ok or use_pr:
         pass  # logged focus time is the proof: no file or link needed
     elif offs:
         if len(detail.strip()) < 4:
@@ -1823,9 +1840,11 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         errors.append(f"Tasks of {V.FILE_REQUIRED_FROM}+ min need a real file as proof (screenshot, doc, photo), "
                       f"or {need:.0f} min on the focus timer.")
     elif s["strict_proof"] and not up:
-        errors.append(f"Strict mode: attach a file, or log {need:.0f} min on the focus timer.")
-    if not timer_ok and not offs and not up and not link.strip():
-        errors.append(f"Attach a file or a link, or log {need:.0f} min on the focus timer.")
+        errors.append(f"Strict mode: attach a file, or log {need:.0f} min on the focus timer "
+                      f"({PRORATE_MIN}+ min counts too, pro-rated).")
+    if not timer_ok and not use_pr and not offs and not up and not link.strip():
+        errors.append(f"Attach a file or a link, or log {need:.0f} min on the focus timer "
+                      f"({PRORATE_MIN}+ min counts too, pro-rated).")
     if up:
         data = up.getvalue()
         h = hashlib.sha256(data).hexdigest()
@@ -1843,6 +1862,9 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         with st.spinner("Race steward reviewing your proof…"):
             try:
                 stamp = f"\n[App-verified: {fm:.0f} min logged on the focus timer for this task]" if fm else ""
+                if use_pr:
+                    stamp += (f"\n[The timer is under the {need:.0f} min target, so it counts as partial proof and the "
+                              f"reward is pro-rated ×{pr_:.2f}. Judge whether the note describes real work.]")
                 if offs:
                     stamp += f"\n[Off-screen task, no file possible. Detail given: {detail.strip()}]"
                 verdict = ai_verify(state, t, note + stamp, link, data, up.name if up else "", up.type if up else "")
@@ -1869,6 +1891,11 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
               "proof_file": proof_path, "verdict": verdict, "proof_timer": round(fm, 1) if timer_ok else None})
     if offs:
         t.update(proof_kind="offscreen", proof_detail=detail.strip()[:200])
+    t.pop("prorate", None)
+    if use_pr:
+        t.update(prorate=round(pr_, 3), proof_timer=round(fm, 1), proof_kind="timer_partial")
+    if actual:
+        t["actual_min"] = int(actual)
     if pin and g_:  # the write-up becomes a sticky note on this block in the roadmap
         txt_ = re.sub(r"^⏱️ \d+ min on the focus timer\.\s*", "", note.strip()) or note.strip()
         g_.setdefault("notes", []).append({"id": uuid.uuid4().hex[:8], "text": txt_[:400], "on": "t_" + t["id"],
@@ -1878,7 +1905,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         bank(state, reward, f"🏁 Done: {t['title']}")
         shield_msgs = SH.on_finish(state, at, reward, bank)
         g_ = t.pop("_guard", 1.0)
-        xp_gain = max(1, round(t["xp"] * (min(1.0, g_) if g_ < 1.5 else 2)))
+        xp_gain = max(1, round(t["xp"] * (min(1.0, g_) if g_ < 1.5 else 2) * float(t.get("prorate") or 1.0)))
         state["xp"] += xp_gain
         state["streak"] += 1
         state["best_streak"] = max(state["best_streak"], state["streak"])
@@ -1904,7 +1931,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
             msg += f"\n\n❄️ You took speed back from the rivals (heat {state['rival_heat']})."
         sound = "jackpot" if ("JACKPOT" in crate or "RARE" in crate) else "win"
     else:
-        refund = t["penalty"] // 2
+        refund = int(round(t["penalty"] // 2 * float(t.get("prorate") or 1.0)))
         bank(state, refund, f"🩹 Redeemed: {t['title']}")
         for m_ in SH.on_finish(state, at, refund, bank):
             st.session_state.setdefault("flash", []).append(("success", m_))
@@ -7447,6 +7474,28 @@ def _rings_svg(vals: list[tuple[float, str]], size: int = 132) -> str:
     return "".join(out) + "</svg>"
 
 
+def estimate_accuracy(state: dict, today: date, days: int = 28):
+    """Median actual ÷ estimated minutes for recently finished tasks with a real time:
+    the 'Actual time taken' you typed, or the focus timer when it was the full proof.
+    Returns (overall, count, [(category, ratio)] for categories with 3+ tasks) or None."""
+    since = (today - timedelta(days=days)).isoformat()
+    rows = []
+    for t in state.get("tasks", []):
+        if t.get("status") not in ("done", "redeemed") or (t.get("completed_at") or "")[:10] < since:
+            continue
+        est = t.get("minutes") or 0
+        act = t.get("actual_min") or (t.get("proof_timer") if not t.get("prorate") else None)
+        if est > 0 and act:
+            rows.append((t.get("category") or "other", act / est))
+    if len(rows) < 3:
+        return None
+    by: dict = {}
+    for c_, r_ in rows:
+        by.setdefault(c_, []).append(r_)
+    cats = sorted(((c_, statistics.median(v)) for c_, v in by.items() if len(v) >= 3), key=lambda x: -x[1])
+    return statistics.median(r_ for _, r_ in rows), len(rows), cats[:3]
+
+
 def render_today_recap(state: dict) -> None:
     """🏁 Today, like a post-workout screen: a name for the day, activity rings, the big numbers, a timeline of your
     sessions over a heat strip of the hours, and the splits."""
@@ -7694,6 +7743,16 @@ with tab_stats:
     hr_ = DL.hit_rate(state, now().date())
     if hr_ is not None:
         st.caption(f"🔁 Dailies hit rate (28 days): **{hr_:.0%}**")
+    ea_ = estimate_accuracy(state, now().date())
+    if ea_:
+        r_, n_, cats_ = ea_
+        verdict_ = ("right on" if 0.9 <= r_ <= 1.1 else
+                    f"tasks take **{r_:.1f}×** what you plan" if r_ > 1 else f"tasks take **{r_:.0%}** of what you plan")
+        st.caption(f"⏳ Estimates (28 days, {n_} tasks with a real time): {verdict_}"
+                   + (" · " + " · ".join(f"{V.CATEGORIES.get(c_, {}).get('label', c_)} ×{v_:.1f}" for c_, v_ in cats_)
+                      if cats_ else ""),
+                   help="From the 'Actual time taken' you enter when submitting proof, or the focus timer when it "
+                        "was the proof. Median of actual ÷ estimate.")
 
     if not full["done"] and not full["focus_min"]:
         st.info("Nothing logged yet. Finish a task or run a focus session and this page starts filling in.")
