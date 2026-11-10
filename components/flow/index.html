@@ -7,7 +7,9 @@ html,body{margin:0;padding:0;background:transparent;font-family:system-ui,sans-s
 @media (max-width:640px){#wrap svg{min-width:660px}}
 g.node{cursor:pointer}
 g.node:hover path,g.node:hover polygon,g.node:hover ellipse{filter:brightness(1.35)}
-g.node.sel path,g.node.sel polygon{stroke-width:3.2px}
+g.node.sel path,g.node.sel polygon,g.node.sel ellipse{stroke:#f5c518;stroke-width:4.5px;filter:drop-shadow(0 0 7px rgba(245,197,24,.75))}
+g.node.sel text{font-weight:700}
+svg.has-sel g.node:not(.sel){opacity:.55}svg.has-sel g.node:not(.sel):hover{opacity:1}
 #hint{color:#8b909c;font-size:12px;margin:2px 0 0}
 g.plus{cursor:pointer;opacity:.75}g.plus:hover{opacity:1}
 g.plus circle{fill:#f5d76e;stroke:#0e1117;stroke-width:1.5}
@@ -16,7 +18,7 @@ g.plus text{fill:#2a2410;font:700 12px system-ui,sans-serif;pointer-events:none}
 <script src="viz-standalone.js"></script>
 </head>
 <body>
-<div id="wrap"></div><div id="hint">Tap a box to edit it · ＋ adds a note to it.</div>
+<div id="wrap"></div><div id="hint">Tap a box to open it in the editor below · ＋ adds a note to it.</div>
 <script>
 // 🗺️ The roadmap flow chart, drawn with Graphviz (viz.js, MIT) and clickable: tapping a box sends its id back to
 // the app, which opens that block / stage / goal for editing right under the chart.
@@ -24,6 +26,9 @@ const send = (type, extra) => window.parent.postMessage(Object.assign({isStreaml
 let lastDot = null, lastSel = null, vizP = Viz.instance();
 const height = () => send("streamlit:setFrameHeight", {height: document.body.scrollHeight + 4});
 function mark(sel) {
+  sel = (sel || "").replace(/^add:/, "");
+  const svg = document.querySelector("#wrap svg");
+  if (svg) svg.classList.toggle("has-sel", !!sel);
   document.querySelectorAll("g.node").forEach(g => {
     const id = (g.querySelector("title") || {}).textContent;
     g.classList.toggle("sel", !!sel && id === sel);

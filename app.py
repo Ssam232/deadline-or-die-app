@@ -1706,7 +1706,7 @@ def car_svg(car: dict) -> str:
 # ─────────────────────────── UI pieces ───────────────────────────
 def timer_proof(t: dict) -> tuple[float, float]:
     """(minutes on the focus timer, minutes needed for the timer alone to count as proof: 80% of honest time)."""
-    return float(t.get("focus_min") or 0), float(max(10, round(0.8 * (t.get("minutes") or 30))))
+    return float(t.get("focus_min") or 0), float(max(PRORATE_MIN, round(0.8 * (t.get("minutes") or 30))))
 
 
 def pay_stages(state: dict) -> list[str]:
@@ -2780,7 +2780,7 @@ def _q_restore(state: dict) -> None:
     st.session_state["q_pending"] = [_qi(x) for x in st.session_state["q_pending"]]
 
 
-TIME_CHIPS = {"10m": 10, "15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
+TIME_CHIPS = {"5m": 5, "10m": 10, "15m": 15, "30m": 30, "45m": 45, "1h": 60, "2h": 120}
 
 
 def _q_put(txt: str, chip_min: int | None, state: dict | None) -> None:
@@ -4270,7 +4270,7 @@ def _pomo_pick(state: dict, where=None) -> tuple[int | None, int | None]:
 
 
 NEW_SESSION = "__new__"
-TIMER_LENGTHS = [25, 30, 45, 50, 60, 90, 120]
+TIMER_LENGTHS = [5, 10, 15, 25, 30, 45, 50, 60, 90, 120]
 FLOW_MODE = -1          # 🌊 Flow: count up, no breaks, check-ins instead of a finish line
 FLOW_CHECK = 90         # first check-in (a deep-work wave)…
 FLOW_AGAIN = 30         # …then every 30 min after a "keep going"
@@ -4314,6 +4314,7 @@ def render_timer(state: dict, big: bool = False) -> None:
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
             planned = c2.selectbox("Minutes", TIMER_LENGTHS + [0, FLOW_MODE], key="timer_len", label_visibility="collapsed",
+                                   index=TIMER_LENGTHS.index(25),
                                    format_func=lambda m: "🌊 Flow (count up)" if m == FLOW_MODE else
                                    f"{m} min" if m else "Custom…")
             flow = planned == FLOW_MODE
@@ -6770,7 +6771,7 @@ def render_add_work(state: dict, g: dict) -> None:
                                help="Read for 2 days → 2. One block per day, same time each day.")
         start = c3.time_input("Start", value=dtime(9, 0), step=900, key=f"aw_start_{gid}")
     c4, c5, c6 = st.columns(3)
-    mins = c4.selectbox("Length" if book else "Est. length", BLOCK_LENGTHS, index=3, format_func=min_label,
+    mins = c4.selectbox("Length" if book else "Est. length", BLOCK_LENGTHS, index=BLOCK_LENGTHS.index(60), format_func=min_label,
                         key=f"aw_len_{gid}")
     cat = c5.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"aw_cat_{gid}")
     if book and int(days) > 1:
@@ -7192,32 +7193,40 @@ def render_flow(state: dict, g: dict) -> None:
     if ev and ev.get("t") != st.session_state.get(f"flow_t_{gid}"):
         st.session_state[f"flow_t_{gid}"] = ev.get("t")
         sel = st.session_state[f"flow_sel_{gid}"] = ("add:" if ev.get("add") else "") + (ev.get("id") or "")
+        _flow_preselect(state, g, sel)
     if not sel:
-        return
+        return False
     with st.container(border=True, key=f"flow_ed_{gid}"):
         c1, c2 = st.columns([6, 1], vertical_alignment="center")
-        if c2.button("✕", key=f"flow_x_{gid}", help="Close"):
+        if c2.button("✕", key=f"flow_x_{gid}", help="Close the editor"):
             st.session_state.pop(f"flow_sel_{gid}", None)
             st.rerun()
-        if sel.startswith("add:"):
+        if sel.startswith("add:"):  # the ＋ badge: just a quick note, nothing else
             render_quick_note(state, g, sel[4:], c1)
-        elif sel == "goal":
-            c1.markdown("**✏️ The goal**")
-            render_goal_edit(state, g, "fg")
-        elif sel.startswith("s_"):
-            c1.markdown("**✏️ Stage**")
-            render_stage_editor(state, g, only=sel[2:], kp="fse")
-        elif sel.startswith("n_"):
-            c1.markdown("**📝 Note**")
+            return False
+        t = next((x for x in state["tasks"] if x["id"] == sel[2:]), None) if sel.startswith("t_") else None
+        n = next((x for x in R.stages(g) if x["id"] == sel[2:]), None) if sel.startswith("s_") else None
+        name = ("the goal" if sel == "goal" else t["title"] if t else n["title"] if n else
+                "a note" if sel.startswith("n_") else "the roadmap")
+        c1.markdown(f"**✏️ Editing {html.escape(name)}** <span style='color:#8b909c;font-size:.85em'>· "
+                    f"every roadmap tool is here</span>", unsafe_allow_html=True)
+        if sel.startswith("n_"):
             render_goal_notes(state, g, only=sel[2:])
-        elif sel.startswith("t_"):
-            t = next((x for x in state["tasks"] if x["id"] == sel[2:]), None)
-            c1.markdown(f"**✏️ {html.escape(t['title']) if t else 'Block'}**")
-            if t and t["status"] == "open":  # booked or deadline-only: the same block editor
-                render_block_play(state, t, kp="fbp")
-                render_block_editor(state, g, only=t["id"], kp="fbe")
-            else:
-                render_task_quick_edit(state, g, sel[2:])
+        if t and t["status"] == "open":
+            render_block_play(state, t, kp="fbp")
+        elif t:  # finished blocks can't be re-booked, but their name / stage / date can change
+            render_task_quick_edit(state, g, sel[2:])
+        render_roadmap_planner(state, g, sel=sel)
+    return True
+
+
+def _flow_preselect(state: dict, g: dict, sel: str) -> None:
+    """A fresh tap on the chart points the editor's pickers at what you tapped."""
+    gid = g["id"]
+    if sel.startswith("t_") and any(t["id"] == sel[2:] and t["status"] == "open" for t in R.goal_tasks(g, state["tasks"])):
+        st.session_state[f"be_pick_{gid}"] = sel[2:]
+    elif sel.startswith("s_") and any(n["id"] == sel[2:] for n in R.stages(g)):
+        st.session_state[f"se_pick_{gid}"] = sel[2:]
 
 
 def start_block(state: dict, t: dict, mins: int, every: int = FLOW_CHECK) -> None:
@@ -7237,13 +7246,14 @@ def render_block_play(state: dict, t: dict, kp: str = "bp") -> None:
     if t["status"] != "open":
         return
     running = state.get("timer")
-    with st.popover("▶", help="Start the focus timer on this block", use_container_width=True):
+    with st.popover("▶ Start a focus timer on it" if kp == "fbp" else "▶", help="Start the focus timer on this block",
+                    use_container_width=True):
         if running:
             cur = next((x["title"] for x in state["tasks"] if x["id"] == running.get("task_id")), "another task")
             st.warning(f"⏱️ A timer is already running on **{cur}**. Stop it first.")
             return
         own = int((t.get("block") or {}).get("minutes") or t.get("minutes") or 0)
-        lens = [FLOW_MODE] + sorted({*TIMER_LENGTHS[:5], *([own] if 5 <= own <= 240 else [])})
+        lens = [FLOW_MODE] + sorted({5, 10, 15, 25, 30, 45, 60, *([own] if 5 <= own <= 240 else [])})
         m = st.radio("How long?", lens, key=f"{kp}_len_{t['id']}", horizontal=True,
                      format_func=lambda x: "🌊 Flow" if x == FLOW_MODE else
                      f"{x} min" + (" (block)" if x == own else ""))
@@ -7319,15 +7329,26 @@ def _stage_opts(g: dict) -> dict[str, str]:
     return out
 
 
-BLOCK_LENGTHS = [15, 30, 45, 60, 90, 120, 180, 240]
+BLOCK_LENGTHS = [5, 10, 15, 30, 45, 60, 90, 120, 180, 240]
 
 
-def render_roadmap_planner(state: dict, g: dict) -> None:
-    """Stages (nestable) + scheduled work blocks for one goal."""
+def render_roadmap_planner(state: dict, g: dict, sel: str | None = None) -> None:
+    """Stages (nestable) + scheduled work blocks for one goal. sel = what was tapped on the flow chart: the pane
+    opens there on the matching tab (with a 🎯 Goal tab too), already pointed at it."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t0, t1, t4, t2, t3, t6 = st.tabs(["✨ Draft for me", "➕ Add work", "✏️ Edit blocks", "🧩 Add a stage",
-                                      "🧩 Edit stages", "📝 Notes"])
+    labels = ["✨ Draft for me", "➕ Add work", "✏️ Edit blocks", "🧩 Add a stage", "🧩 Edit stages", "📝 Notes"]
+    if sel is not None:
+        labels.append("🎯 Goal")
+        open_t = next((t for t in R.goal_tasks(g, state["tasks"]) if "t_" + t["id"] == sel), None)
+        default = ("✏️ Edit blocks" if open_t and open_t["status"] == "open" else "🧩 Edit stages" if sel.startswith("s_")
+                   else "📝 Notes" if sel.startswith("n_") else "🎯 Goal" if sel == "goal" else "➕ Add work")
+        tabs = st.tabs(labels, default=default, key=f"rmtabs_{gid}_{st.session_state.get(f'flow_t_{gid}') or 0}")
+        with tabs[6]:
+            render_goal_edit(state, g, "fg")
+    else:
+        tabs = st.tabs(labels)
+    t0, t1, t4, t2, t3, t6 = tabs[:6]
     with t6:
         render_goal_notes(state, g)
     with t0:
@@ -7389,10 +7410,11 @@ with tab_goals:
                              f"{target:%b %d, %Y} "
                              f"({(target - now().date()).days} days)")
             big = R.goal_bonus(g, state["tasks"])
+            flow_ed = False  # True when the editor is open under the flow chart (then it holds the planner)
             if gtasks or R.stages(g) or R.notes(g):  # any goal with something in it gets its chart
                 n_open = sum(1 for t in gtasks if t["status"] == "open")
                 with fold(f"flow_{g['id']}", f"🗺️ Flowchart · {len(R.stages(g))} stages · {n_open} open blocks"):
-                    render_flow(state, g)
+                    flow_ed = render_flow(state, g)
                 render_block_plays(state, g)
                 if st.toggle("↕ Drag to rearrange", key=f"rm_arr_{g['id']}",
                              help="Drag steps between stages, or up/down to change which comes first."):
@@ -7410,7 +7432,10 @@ with tab_goals:
                 render_goal_edit(state, g)
             with st.expander("🗺️ Plan the roadmap · stages + booked work time", key=f"exp_rm_{g['id']}",
                              expanded=(not gtasks and not R.stages(g)) or st.session_state.get("rm_open") == g["id"]):
-                render_roadmap_planner(state, g)
+                if flow_ed:
+                    st.caption("It's open under the flowchart ↑ right now (✕ there closes it and brings it back here).")
+                else:
+                    render_roadmap_planner(state, g)
 
             if gtasks and len(gtasks) >= 3 and n_done == len(gtasks) and not g.get("claimed"):
                 if st.button(f"🏆 Claim finish-line bonus (+{big} 🪙)", key=f"claim_{g['id']}",
