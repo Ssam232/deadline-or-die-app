@@ -2090,20 +2090,22 @@ def sandbag(state: dict, track: dict) -> float:
 
 
 def race_tickets(state: dict) -> tuple[int, str]:
-    """Races are earned: 1 ticket per proof-backed finish today + 1 per full focus session (25+ min) today."""
+    """Races are earned: 1 ticket per proof-backed finish today + 1 per 25 minutes of focus in today's timer sessions
+    (a long session earns several, even if you stopped before its planned end). Tickets are for the day they're earned."""
     today = now().date()
     iso = today.isoformat()
     finishes = sum(1 for t in daily.finished_on(state, today) if (t.get("minutes") or 0) >= TICKET_MIN_TASK)
-    sessions = sum(1 for x in state.get("focus_log", []) if x.get("date") == iso and x.get("full") and x["min"] >= 25)
+    sessions = sum(int(float(x.get("min", 0)) // 25) for x in state.get("focus_log", []) if x.get("date") == iso)
     raced = sum(1 for r in state.get("races", []) if r["ts"][:10] == iso)
     left = max(0, min(RACE_DAY_CAP, finishes + sessions) - raced)
     if raced >= RACE_DAY_CAP:
         why = f"That's {RACE_DAY_CAP} races today — the track's closed till tomorrow."
     elif not left:
-        why = ("No race tickets. Finish a 30+ min task with proof, or complete a 25+ min focus session, "
-               "to earn one.")
+        why = ("No race tickets. Finish a 30+ min task with proof, or log 25 min of focus on the timer, "
+               "to earn one. Tickets are earned and used the same day.")
     else:
-        why = f"🎟️ {left} race ticket{'s' if left > 1 else ''} · earned from {finishes} finish(es) + {sessions} session(s) today"
+        why = (f"🎟️ {left} race ticket{'s' if left > 1 else ''} · earned today from {finishes} finish(es) + "
+               f"{sessions} × 25 min of focus · they reset at midnight")
     return left, why
 
 
