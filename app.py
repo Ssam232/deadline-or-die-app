@@ -1490,7 +1490,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
     t["_guard"] = guard * dbl
     pm_ = prestige_mult(state)
     pr_ = float(t.get("prorate") or 1.0)  # timer under target as proof: pays its share
-    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl * pm_ * pr_))
+    am_ = float(t.get("time_mult") or 1.0)  # ⏳ the actual time you entered
+    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl * pm_ * pr_ * am_))
     parts = [f"base {base}"] + guard_why + (["×2 ⚡ token"] if used_token else ["×2 ⚡ double"] if dbl == 2 else [])
     if early:
         parts.append(f"+{int(early * 100)}% early")
@@ -1504,6 +1505,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
         parts.append(f"×{pm_:.2f} ⭐ prestige")
     if pr_ < 1:
         parts.append(f"×{pr_:.2f} timer pro-rated ({t.get('proof_timer', 0):.0f} min logged)")
+    if am_ != 1:
+        parts.append(f"×{am_:.2f} ⏳ took {t.get('actual_min')} of {t.get('minutes')} min")
     return total, ", ".join(parts)
 
 
@@ -1759,6 +1762,16 @@ def _when(d: datetime) -> str:
 
 OFFSCREEN_MAX_MIN, OFFSCREEN_PER_DAY = 45, 3  # calls, bookings, errands: short tasks, a few a day
 PRORATE_MIN, PRORATE_FLOOR = 5, 0.0  # 5+ min on the timer counts as proof, paying exactly its share of the target
+# ⏳ The actual time you type in scales the reward too: under your estimate pays its share (the proof shows it's done,
+# so never under ×0.5); over it pays extra at a quarter rate, capped (an hour-long "15-min" task pays ×1.75, not ×4).
+ACTUAL_FLOOR, ACTUAL_OVER_RATE, ACTUAL_CAP = 0.5, 0.25, 1.75
+
+
+def time_mult(actual: float | None, est: float | None) -> float:
+    if not actual or not est:
+        return 1.0
+    r = actual / est
+    return round(max(ACTUAL_FLOOR, r) if r < 1 else min(ACTUAL_CAP, 1 + ACTUAL_OVER_RATE * (r - 1)), 3)
 
 
 def offscreen_left(state: dict) -> int:
@@ -1812,8 +1825,11 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     if not timer_ok and not (partial and not up and not link.strip()):  # the timer isn't the proof: ask how long it took
         actual = st.number_input("Actual time taken (min, optional)", min_value=1, max_value=24 * 60, value=None, step=5,
                                  key=f"actual_{k}", placeholder=f"estimated {t.get('minutes') or '?'}",
-                                 help="Doesn't change your coins. It trains your estimates: Stats shows how long "
-                                      "your tasks really take vs what you planned.")
+                                 help=f"Scales the reward: under your estimate pays its share (never under "
+                                      f"×{ACTUAL_FLOOR}); over it pays {ACTUAL_OVER_RATE:.0%} extra per extra "
+                                      f"estimate, up to ×{ACTUAL_CAP}. Also trains your estimates on Stats.")
+        if actual and t.get("minutes"):
+            st.caption(f"⏳ {actual} of {t['minutes']} min planned → pays **×{time_mult(actual, t['minutes']):.2f}**")
     g_ = next((g for g in state.get("goals", []) if g["id"] == t.get("goal_id")), None)
     pin = bool(g_) and st.checkbox(f"📝 Also pin “What did you do?” to the {g_['title'][:40]} roadmap as a note",
                                    key=f"pin_{k}", **touch) if g_ else False
@@ -1894,8 +1910,11 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     t.pop("prorate", None)
     if use_pr:
         t.update(prorate=round(pr_, 3), proof_timer=round(fm, 1), proof_kind="timer_partial")
+    t.pop("time_mult", None)
     if actual:
         t["actual_min"] = int(actual)
+        if not use_pr:  # the timer already sets the pay when it's the proof
+            t["time_mult"] = time_mult(actual, t.get("minutes"))
     if pin and g_:  # the write-up becomes a sticky note on this block in the roadmap
         txt_ = re.sub(r"^⏱️ \d+ min on the focus timer\.\s*", "", note.strip()) or note.strip()
         g_.setdefault("notes", []).append({"id": uuid.uuid4().hex[:8], "text": txt_[:400], "on": "t_" + t["id"],
@@ -1905,7 +1924,8 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         bank(state, reward, f"🏁 Done: {t['title']}")
         shield_msgs = SH.on_finish(state, at, reward, bank)
         g_ = t.pop("_guard", 1.0)
-        xp_gain = max(1, round(t["xp"] * (min(1.0, g_) if g_ < 1.5 else 2) * float(t.get("prorate") or 1.0)))
+        xp_gain = max(1, round(t["xp"] * (min(1.0, g_) if g_ < 1.5 else 2) * float(t.get("prorate") or 1.0)
+                                     * float(t.get("time_mult") or 1.0)))
         state["xp"] += xp_gain
         state["streak"] += 1
         state["best_streak"] = max(state["best_streak"], state["streak"])
@@ -1931,7 +1951,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
             msg += f"\n\n❄️ You took speed back from the rivals (heat {state['rival_heat']})."
         sound = "jackpot" if ("JACKPOT" in crate or "RARE" in crate) else "win"
     else:
-        refund = int(round(t["penalty"] // 2 * float(t.get("prorate") or 1.0)))
+        refund = int(round(t["penalty"] // 2 * float(t.get("prorate") or 1.0) * float(t.get("time_mult") or 1.0)))
         bank(state, refund, f"🩹 Redeemed: {t['title']}")
         for m_ in SH.on_finish(state, at, refund, bank):
             st.session_state.setdefault("flash", []).append(("success", m_))
@@ -6721,75 +6741,110 @@ def render_new_goal(state: dict) -> None:
         st.rerun()
 
 
-def render_goal_task_form(state: dict, g: dict) -> None:
-    """📌 A deliverable for this goal with its own deadline (required). Optionally book time for it too: it then
-    sits on the calendar like a block, but only dies at its deadline, not at the end of the booked day."""
+def render_add_work(state: dict, g: dict) -> None:
+    """➕ One form for everything you add to a roadmap. Two checkboxes decide what it is:
+    🗓️ Book time  → it sits on a day and time (repeat it over several days). Alone, a block dies at the end of its day.
+    📌 Deadline   → it's due by a date. Alone, it's a deliverable with no slot; with booking, missing the slot
+                    isn't fatal: it only dies at its deadline."""
     gid, opts = g["id"], _stage_opts(g)
     target = date.fromisoformat(g["target"]) if g.get("target") else None
-    what = st.text_input("What", placeholder="A deliverable, e.g. Submit ethics amendment · Send draft to Walter",
-                         key=f"gt_what_{gid}")
-    under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"gt_under_{gid}")
-    rel = bool(target) and st.segmented_control(
-        "Deadline", ["Before the goal's due date", "Pick a date"], default="Before the goal's due date",
-        key=f"gt_mode_{gid}") != "Pick a date"
-    c1, c2, c3 = st.columns(3)
-    if rel:
-        span = max(0, (target - now().date()).days)
-        before = c1.number_input(f"Days before {target:%b} {target.day} · {R.days_to_go(target, now().date())} (required)",
-                                 0, span, value=None, step=1,
-                                 key=f"gt_before_{gid}", placeholder="e.g. 7",
-                                 help="0 = on the goal's due date. Counts back from it, so the plan moves with the goal.")
-        due_d = target - timedelta(days=int(before)) if before is not None else None
-    else:
-        _picked = st.session_state.get(f"gt_due_{gid}")
-        due_d = c1.date_input(("Deadline · " + R.days_to_go(_picked, now().date()) if _picked else "Deadline (required)")
-                              + (f" · goal {R.days_to_go(target, now().date())}" if target else ""),
-                              value=None, min_value=now().date(), key=f"gt_due_{gid}",
-                              help="Like every block, it needs a date it's due by.")
-    due_t = c2.time_input("Due at", value=dtime(23, 59), step=900, key=f"gt_due_t_{gid}")
-    mins = c3.selectbox("Est. length", BLOCK_LENGTHS, index=3, format_func=min_label, key=f"gt_len_{gid}")
-    if due_d:  # days to go stays in view whichever way you set it
-        gap = (target - due_d).days if target else None
-        st.caption(f"📅 Due **{due_d:%a %b} {due_d.day}** · **{R.days_to_go(due_d, now().date())}**"
-                   + ("" if gap is None else " · the goal's due date" if gap == 0 else
-                      f" · {gap} day{'s' * (gap != 1)} before the goal's" if gap > 0 else
-                      f" · {-gap} day{'s' * (gap != -1)} after the goal's"))
-    elif target:
-        st.caption(f"🏁 The goal is due **{target:%a %b} {target.day}** · **{R.days_to_go(target, now().date())}**")
-    cat = st.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"gt_cat_{gid}")
-    book = st.toggle("🗓️ Also book time for it", key=f"gt_book_{gid}",
-                     help="Puts it on a day and time like a block (calendar, phone heads-up, that day's mission). "
-                          "Miss the slot and it isn't dead: it's due at its deadline.")
+    today = now().date()
+    last = max((date.fromisoformat(t["block"]["date"]) for t in R.goal_tasks(g, state["tasks"]) if t.get("block")),
+               default=None)
+    first0 = max(today, last + timedelta(days=1)) if last else today
+    what = st.text_input("What", placeholder="Read · Meeting · Draft · Submit ethics amendment · Send draft to Walter",
+                         key=f"aw_what_{gid}")
+    under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"aw_under_{gid}")
+    k1, k2 = st.columns(2)
+    book = k1.checkbox("🗓️ Book time for it", value=True, key=f"aw_book_{gid}",
+                       help="Puts it on a day and time: calendar, phone heads-up, that day's mission.")
+    has_dl = k2.checkbox("📌 It has its own deadline", value=False, key=f"aw_dl_{gid}",
+                         help="A date it must be done by. With booked time too, missing the slot isn't fatal: "
+                              "it only dies at the deadline.")
+    days, skip, first, start = 1, False, None, None
     if book:
-        b1, b2 = st.columns(2)
-        bday = b1.date_input(togo_label("Work on it", f"gt_bday_{gid}", now().date()), value=now().date(), min_value=now().date(), key=f"gt_bday_{gid}")
-        bstart = b2.time_input("Start", value=dtime(9, 0), step=900, key=f"gt_bstart_{gid}")
-    if target and due_d and due_d > target:
-        st.caption(f"⚠️ That's after the goal's target ({target:%a %b} {target.day}).")
-    if st.button("📌 Add it", type="primary", key=f"gt_go_{gid}"):
-        if not (what or "").strip():
-            st.error("Name it first.")
-        elif not due_d:
-            st.error("Set a deadline: every task on a roadmap needs one.")
-        elif book and bday > due_d:
-            st.error("The booked day is after the deadline: move one of them.")
+        c1, c2, c3 = st.columns(3)
+        first = c1.date_input(togo_label("First day" if not has_dl else "Work on it", f"aw_first_{gid}", first0),
+                              value=first0, min_value=today, key=f"aw_first_{gid}")
+        days = c2.number_input("Days", 1, 21, 1, key=f"aw_days_{gid}",
+                               help="Read for 2 days → 2. One block per day, same time each day.")
+        start = c3.time_input("Start", value=dtime(9, 0), step=900, key=f"aw_start_{gid}")
+    c4, c5, c6 = st.columns(3)
+    mins = c4.selectbox("Length" if book else "Est. length", BLOCK_LENGTHS, index=3, format_func=min_label,
+                        key=f"aw_len_{gid}")
+    cat = c5.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"aw_cat_{gid}")
+    if book and int(days) > 1:
+        skip = c6.checkbox("Skip weekends", value=False, key=f"aw_skip_{gid}")
+    due_d, due_t, rel = None, dtime(23, 59), False
+    if has_dl:
+        rel = bool(target) and st.segmented_control(
+            "Deadline", ["Before the goal's due date", "Pick a date"], default="Before the goal's due date",
+            key=f"aw_mode_{gid}") != "Pick a date"
+        d1, d2 = st.columns(2)
+        if rel:
+            span = max(0, (target - today).days)
+            before = d1.number_input(f"Days before {target:%b} {target.day} · {R.days_to_go(target, today)} (required)",
+                                     0, span, value=None, step=1, key=f"aw_before_{gid}", placeholder="e.g. 7",
+                                     help="0 = on the goal's due date. Counts back from it, so the plan moves with the goal.")
+            due_d = target - timedelta(days=int(before)) if before is not None else None
         else:
-            due = datetime.combine(due_d, due_t, TZ)
-            t = make_task(what.strip(), f"🗺️ {g['title']}", due, None, "", gid,
+            _picked = st.session_state.get(f"aw_due_{gid}")
+            due_d = d1.date_input(("Deadline · " + R.days_to_go(_picked, today) if _picked else "Deadline (required)")
+                                  + (f" · goal {R.days_to_go(target, today)}" if target else ""),
+                                  value=None, min_value=today, key=f"aw_due_{gid}",
+                                  help="The date it must be done by.")
+        due_t = d2.time_input("Due at", value=dtime(23, 59), step=900, key=f"aw_due_t_{gid}")
+        if due_d:
+            gap = (target - due_d).days if target else None
+            st.caption(f"📅 Due **{due_d:%a %b} {due_d.day}** · **{R.days_to_go(due_d, today)}**"
+                       + ("" if gap is None else " · the goal's due date" if gap == 0 else
+                          f" · {gap} day{'s' * (gap != 1)} before the goal's" if gap > 0 else
+                          f" · {-gap} day{'s' * (gap != -1)} after the goal's"))
+            if target and due_d > target:
+                st.caption(f"⚠️ That's after the goal's target ({target:%a %b} {target.day}).")
+        elif target:
+            st.caption(f"🏁 The goal is due **{target:%a %b} {target.day}** · **{R.days_to_go(target, today)}**")
+    if not book and not has_dl:
+        st.caption("Tick at least one: book time for it, give it a deadline, or both.")
+    label = ("🗓️📌 Book it with a deadline" if book and has_dl else "🗓️ Book it" if book else "📌 Add it")
+    if not st.button(label, type="primary", key=f"aw_go_{gid}", disabled=not (book or has_dl)):
+        return
+    ds = R.block_days(first, int(days), skip) if book else []
+    if not (what or "").strip():
+        st.error("Name it first.")
+    elif has_dl and not due_d:
+        st.error("Set a deadline (or untick 📌).")
+    elif has_dl and book and ds and ds[-1] > due_d:
+        st.error("The booked day is after the deadline: move one of them.")
+    else:
+        due = datetime.combine(due_d, due_t, TZ) if has_dl else None
+        made = []
+        for i, d_ in enumerate(ds or [None], 1):
+            title = what.strip() + (f" · day {i}/{len(ds)}" if len(ds) > 1 else "")
+            t = make_task(title, f"🗺️ {g['title']}", due or now(), None, "", gid,
                           category=None if cat == "auto" else cat, minutes=int(mins))
             t["node"] = under or None
-            if rel:
-                t["due_before_goal"] = (target - due_d).days  # remembered: the plan is relative to the goal's date
-            if book:
-                t.update(R.block_fields(bday, bstart.strftime("%H:%M"), int(mins), TZ))
-                t["deadline"], t["own_deadline"] = due.isoformat(), due.isoformat()
+            if d_:
+                t.update(R.block_fields(d_, start.strftime("%H:%M"), int(mins), TZ))
+            if due:
+                t["deadline"] = due.isoformat()
+                if d_:
+                    t["own_deadline"] = due.isoformat()
+                if rel:
+                    t["due_before_goal"] = (target - due_d).days  # the plan stays relative to the goal's date
             state["tasks"].append(t)
-            save_state(state)
-            flash(f"📌 **{t['title']}** added · due {_when(due)}"
-                  + (f" · booked {_when(R.block_at(t, TZ))}" if book else "") + ".")
-            for k_ in (f"gt_what_{gid}", f"gt_due_{gid}", f"gt_before_{gid}"):
-                st.session_state.pop(k_, None)
-            st.rerun()
+            made.append(t)
+        save_state(state)
+        if book:
+            span = f"{ds[0]:%a %b} {ds[0].day}" + (f" → {ds[-1]:%a %b} {ds[-1].day}" if len(ds) > 1 else "")
+            msg = (f"🗓️ Booked **{what.strip()}** · {len(ds)} block{'s' if len(ds) > 1 else ''} · {span} at "
+                   f"{start:%I:%M %p}".replace(" 0", " ") + f" · +{made[0]['reward']} each")
+        else:
+            msg = f"📌 **{what.strip()}** added"
+        flash(msg + (f" · due {_when(due)}" if due else "") + ".")
+        for k_ in ("what", "due", "before", "days", "first", "under"):
+            st.session_state.pop(f"aw_{k_}_{gid}", None)
+        st.rerun()
 
 
 def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str = "be") -> None:
@@ -7271,51 +7326,16 @@ def render_roadmap_planner(state: dict, g: dict) -> None:
     """Stages (nestable) + scheduled work blocks for one goal."""
     gid = g["id"]
     opts = _stage_opts(g)
-    t0, t1, t5, t4, t2, t3, t6 = st.tabs(["✨ Draft for me", "🗓️ Schedule work", "📌 Add with a deadline",
-                                          "✏️ Edit blocks", "🧩 Add a stage", "🧩 Edit stages", "📝 Notes"])
+    t0, t1, t4, t2, t3, t6 = st.tabs(["✨ Draft for me", "➕ Add work", "✏️ Edit blocks", "🧩 Add a stage",
+                                      "🧩 Edit stages", "📝 Notes"])
     with t6:
         render_goal_notes(state, g)
     with t0:
         render_roadmap_draft(state, g)
-    with t5:
-        render_goal_task_form(state, g)
+    with t1:
+        render_add_work(state, g)
     with t4:
         render_block_editor(state, g)
-    with t1:
-        last = max((date.fromisoformat(t["block"]["date"]) for t in R.goal_tasks(g, state["tasks"]) if t.get("block")),
-                   default=None)
-        first0 = max(now().date(), last + timedelta(days=1)) if last else now().date()
-        with st.form(f"rb_form_{gid}", clear_on_submit=True, border=False):
-            what = st.text_input("What", placeholder="One piece of work, e.g. Read · Meeting · Draft")
-            under = st.selectbox("Part of", list(opts), format_func=opts.get, key=f"rb_under_{gid}")
-            c1, c2, c3 = st.columns(3)
-            first = c1.date_input(togo_label("First day", f"rb_first_{gid}", first0), value=first0, min_value=now().date(), key=f"rb_first_{gid}")
-            days = c2.number_input("Days", 1, 21, 1, key=f"rb_days_{gid}",
-                                   help="Read for 2 days → 2. One block per day, same time each day.")
-            start = c3.time_input("Start", value=dtime(9, 0), step=900, key=f"rb_start_{gid}")
-            c4, c5, c6 = st.columns(3)
-            mins = c4.selectbox("Length", BLOCK_LENGTHS, index=3, format_func=min_label, key=f"rb_len_{gid}")
-            cat = c5.selectbox("Type", ["auto"] + list(V.CATEGORIES), format_func=cat_label, key=f"rb_cat_{gid}")
-            skip = c6.checkbox("Skip weekends", value=False, key=f"rb_skip_{gid}")
-            go = st.form_submit_button("🗓️ Book it", type="primary")
-        if go:
-            if not (what or "").strip():
-                st.error("Name the block first.")
-            else:
-                ds = R.block_days(first, int(days), skip)
-                made = []
-                for i, d_ in enumerate(ds, 1):
-                    title = what.strip() + (f" · day {i}/{len(ds)}" if len(ds) > 1 else "")
-                    t = make_task(title, f"🗺️ {g['title']}", now(), None, "", gid,
-                                  category=None if cat == "auto" else cat, minutes=int(mins))
-                    t.update(R.block_fields(d_, start.strftime("%H:%M"), int(mins), TZ), node=under or None)
-                    state["tasks"].append(t)
-                    made.append(t)
-                save_state(state)
-                span = (f"{ds[0]:%a %b} {ds[0].day}" + (f" → {ds[-1]:%a %b} {ds[-1].day}" if len(ds) > 1 else ""))
-                flash(f"🗓️ Booked **{what.strip()}** · {len(ds)} block{'s' if len(ds) > 1 else ''} · {span} at "
-                      f"{start:%I:%M %p}".replace(" 0", " ") + f" · +{made[0]['reward']} each.")
-                st.rerun()
     with t2:
         with st.form(f"rs_form_{gid}", clear_on_submit=True, border=False):
             name = st.text_input("Stage", placeholder="e.g. Literature review · Data analysis · Write-up")
