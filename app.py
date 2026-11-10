@@ -1753,6 +1753,16 @@ def _when(d: datetime) -> str:
     return f"{day} {d:%I:%M %p}".replace(" 0", " ")
 
 
+OFFSCREEN_MAX_MIN, OFFSCREEN_PER_DAY = 45, 3  # calls, bookings, errands: short tasks, a few a day
+
+
+def offscreen_left(state: dict) -> int:
+    today = now().date()
+    used = sum(1 for x in state["tasks"] if x.get("proof_kind") == "offscreen" and x.get("completed_at")
+               and parse_dt(x["completed_at"]).astimezone(TZ).date() == today)
+    return max(0, OFFSCREEN_PER_DAY - used)
+
+
 def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     """mode: 'open' (normal completion) or 'redeem' (finishing a missed task for a partial refund)."""
     s = state["settings"]
@@ -1771,9 +1781,26 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
             st.session_state[f"note_{k}"] = f"⏱️ {fm:.0f} min on the focus timer. "
     touch = {"on_change": _proof_touch, "args": (k,)}
     note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.", **touch)
-    up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else ""),
-                          type=PROOF_TYPES, key=f"file_{k}", **touch)
-    link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}", **touch)
+    # 📞 real-world tasks (a call, a booking, an errand): no screenshot, but a detail you could only know by doing it
+    offs, detail = False, ""
+    if not timer_ok and (t.get("minutes") or 0) <= OFFSCREEN_MAX_MIN:
+        left_o = offscreen_left(state)
+        offs = st.toggle(f"📞 It happened off-screen: no screenshot ({left_o} of {OFFSCREEN_PER_DAY} left today)",
+                         key=f"offs_{k}", disabled=not left_o,
+                         help=f"For calls, bookings and errands up to {OFFSCREEN_MAX_MIN} min. Instead of a file, give "
+                              f"a detail you could only know by doing it. A confirmation email or text screenshot is "
+                              f"still the stronger proof if you have one.")
+    if offs:
+        detail = st.text_input("A detail you could only know by doing it", key=f"detail_{k}",
+                               placeholder="Confirmation #, who you spoke to, the time it's booked for…", **touch)
+        up, link = None, ""
+    else:
+        up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else ""),
+                              type=PROOF_TYPES, key=f"file_{k}", **touch)
+        link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}", **touch)
+    g_ = next((g for g in state.get("goals", []) if g["id"] == t.get("goal_id")), None)
+    pin = bool(g_) and st.checkbox(f"📝 Also pin “What did you do?” to the {g_['title'][:40]} roadmap as a note",
+                                   key=f"pin_{k}", **touch) if g_ else False
     honor = True
     if use_ai:
         st.caption("🧑‍⚖️ The AI race steward will review this proof.")
@@ -1787,12 +1814,17 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         errors.append("Write at least a real sentence about what you did.")
     if timer_ok:
         pass  # logged focus time is the proof: no file or link needed
+    elif offs:
+        if len(detail.strip()) < 4:
+            errors.append("Off-screen proof needs a checkable detail: a confirmation number, who you spoke to, or a time.")
+        if not offscreen_left(state):
+            errors.append(f"That's {OFFSCREEN_PER_DAY} off-screen proofs today. Attach a screenshot instead.")
     elif not up and (t.get("minutes") or 0) >= V.FILE_REQUIRED_FROM:
         errors.append(f"Tasks of {V.FILE_REQUIRED_FROM}+ min need a real file as proof (screenshot, doc, photo), "
                       f"or {need:.0f} min on the focus timer.")
     elif s["strict_proof"] and not up:
         errors.append(f"Strict mode: attach a file, or log {need:.0f} min on the focus timer.")
-    if not timer_ok and not up and not link.strip():
+    if not timer_ok and not offs and not up and not link.strip():
         errors.append(f"Attach a file or a link, or log {need:.0f} min on the focus timer.")
     if up:
         data = up.getvalue()
@@ -1811,6 +1843,8 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         with st.spinner("Race steward reviewing your proof…"):
             try:
                 stamp = f"\n[App-verified: {fm:.0f} min logged on the focus timer for this task]" if fm else ""
+                if offs:
+                    stamp += f"\n[Off-screen task, no file possible. Detail given: {detail.strip()}]"
                 verdict = ai_verify(state, t, note + stamp, link, data, up.name if up else "", up.type if up else "")
             except Exception as e:
                 st.error(f"Steward unreachable: {e}. Try again, or turn off the AI steward in Settings.")
@@ -1833,6 +1867,12 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     old_level = level_of(state["xp"])
     t.update({"completed_at": at.isoformat(), "proof_note": note.strip(), "proof_link": link.strip(),
               "proof_file": proof_path, "verdict": verdict, "proof_timer": round(fm, 1) if timer_ok else None})
+    if offs:
+        t.update(proof_kind="offscreen", proof_detail=detail.strip()[:200])
+    if pin and g_:  # the write-up becomes a sticky note on this block in the roadmap
+        txt_ = re.sub(r"^⏱️ \d+ min on the focus timer\.\s*", "", note.strip()) or note.strip()
+        g_.setdefault("notes", []).append({"id": uuid.uuid4().hex[:8], "text": txt_[:400], "on": "t_" + t["id"],
+                                           "color": "green", "created": at.isoformat()})
     if mode == "open":
         reward, why = compute_reward(state, t, at)
         bank(state, reward, f"🏁 Done: {t['title']}")
