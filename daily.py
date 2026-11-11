@@ -333,7 +333,7 @@ def make_good(save: dict, bank, DL) -> list[str]:
         msgs.append(f"🛠️ Sorry: a sync bug lost your {d:%A} ticks and then charged you for them. "
                     + ", ".join([f"+{back} refunded"] * bool(back) + notes + ([f"{', '.join(fixed)} marked done"]
                                                                               if fixed else []))
-                    + f". Your {d:%A} journal didn't survive: write it again in Stats → Journal (it pays in full).")
+                    + f". Your {d:%A} journal didn't survive: write it again in Log → Journal (it pays in full).")
     return msgs
 
 

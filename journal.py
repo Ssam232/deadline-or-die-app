@@ -188,7 +188,4 @@ def recap_text(r: dict) -> str:
     if r.get("grateful"):
         lines.append("\nGrateful for")
         lines += [f"• {d_:%a}: {g.replace(chr(10), ' · ')}" for d_, g in r["grateful"]]
-    if r["blockers"]:
-        lines.append("\nWhat got in the way")
-        lines += [f"• {d_:%a}: {b}" for d_, b in r["blockers"]]
     return "\n".join(lines)

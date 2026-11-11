@@ -217,7 +217,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
         rat = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=J.RECAP_HOUR)
         out.append(_alarm(("recap", d), rat, "🗓️ Your week",
                           f"{_hmin(r['focus_min'])} focused · {r['done']} done · mood {J.mood_face(r['mood_avg'])}. "
-                          "Stats → Journal for the full recap.", 3, ["calendar"], True))
+                          "Log → Journal for the full recap.", 3, ["calendar"], True))
     return out
 
 

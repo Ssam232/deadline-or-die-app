@@ -1827,7 +1827,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
                                  key=f"actual_{k}", placeholder=f"estimated {t.get('minutes') or '?'}",
                                  help=f"Scales the reward: under your estimate pays its share (never under "
                                       f"×{ACTUAL_FLOOR}); over it pays {ACTUAL_OVER_RATE:.0%} extra per extra "
-                                      f"estimate, up to ×{ACTUAL_CAP}. Also trains your estimates on Stats.")
+                                      f"estimate, up to ×{ACTUAL_CAP}. Also trains your estimates in Log → Stats.")
         if actual and t.get("minutes"):
             st.caption(f"⏳ {actual} of {t['minutes']} min planned → pays **×{time_mult(actual, t['minutes']):.2f}**")
     g_ = next((g for g in state.get("goals", []) if g["id"] == t.get("goal_id")), None)
@@ -3961,7 +3961,7 @@ def _journal_form(state: dict, d, key: str) -> None:
             state["draft"] = {"date": (d + timedelta(days=1)).isoformat(),
                               "items": [[tmr, p_["minutes"], p_["category"], False]]}
         save_state(state)
-        flash(f"📓 Day saved{f' · +{got}' if got else ''}. {J.MOODS[mood]} — see it any time in Stats → Journal.")
+        flash(f"📓 Day saved{f' · +{got}' if got else ''}. {J.MOODS[mood]} — see it any time in Log → Journal.")
         st.rerun()
 
 
@@ -3973,13 +3973,13 @@ def render_close_day(state: dict) -> None:
     pm = J.peek(state, d).get("pm")
     if pm:
         st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div>📓 Day journaled "
-                    f"{J.MOODS[pm['mood']]} <span class='m'>· +{pm.get('paid', 0)} · edit in Stats → Journal</span></div>"
+                    f"{J.MOODS[pm['mood']]} <span class='m'>· +{pm.get('paid', 0)} · edit in Log → Journal</span></div>"
                     "</div>", unsafe_allow_html=True)
         return
     late = d != now().date()
     with fold("closeday", "📓 **Close the day**" + (f" :gray[{d:%A} · open till {J.PM_CLOSES} AM]" if late else ""), card=True):
         st.caption(f"Two taps and a few lines. +{J.PM_BASE} for the taps, +{J.PM_PER_ANSWER} per real answer "
-                   f"(up to +{J.PM_MAX}). It all lands in Stats → Journal and your weekly recap.")
+                   f"(up to +{J.PM_MAX}). It all lands in Log → Journal and your weekly recap.")
         _journal_form(state, d, "cd")
 
 
@@ -4015,13 +4015,8 @@ def render_journal(state: dict) -> None:
     if r["focus_good_mood"] is not None and r["focus_low_mood"] is not None:
         st.caption(f"On 🙂/😄 days you focused {r['focus_good_mood']:.0f} min; on 😕/😫 days, "
                    f"{r['focus_low_mood']:.0f} min.")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown(f"<div class='dod-rc-h'>🏆 Wins <span>{len(r['wins'])}</span></div>"
-                    + _recap_cards(r["wins"], "win", "None written yet."), unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"<div class='dod-rc-h'>🧱 What got in the way <span>{len(r['blockers'])}</span></div>"
-                    + _recap_cards(r["blockers"], "block", "Nothing logged."), unsafe_allow_html=True)
+    st.markdown(f"<div class='dod-rc-h'>🏆 Wins <span>{len(r['wins'])}</span></div>"
+                + _recap_cards(r["wins"], "win", "None written yet."), unsafe_allow_html=True)
     with fold("jr_recap", "📋 Recap to paste", False):
         st.code(J.recap_text(r), language=None)
     if journal_cfg(state):
@@ -6588,7 +6583,7 @@ lvl = level_of(state["xp"])
 
 open_tasks = sorted([t for t in state["tasks"] if t["status"] == "open"], key=lambda t: t["deadline"])
 tab_today, tab_tasks, tab_reading, tab_goals, tab_stats, tab_garage, tab_race, tab_lounge, tab_set = st.tabs(
-    ["🏁 Today", "✅ Tasks", "📚 Reading list", "🎯 Goals", "📊 Stats", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"],
+    ["🏁 Today", "✅ Tasks", "📚 Reading list", "🎯 Goals", "📒 Log", "🔧 Garage", "🏎️ Race", "🎰 Lounge", "⚙️ Settings"],
     key="nav", on_change="ignore" if os.getenv("DOD_ALL_TABS") else "rerun")  # remembers the open tab; only it runs
 
 # ── Today: the cockpit. Do-now on the left, instruments on the right; stacks on a phone. ──
@@ -7750,13 +7745,13 @@ def _hlabel(h: int) -> str:
 
 with tab_stats:
   if tab_stats.open is not False:
-    stats_view = st.segmented_control("Stats view", ["📊 Numbers", "📸 Scrapbook", "📓 Journal"], default="📊 Numbers",
-                                      key="stats_view", label_visibility="collapsed") or "📊 Numbers"
+    stats_view = st.segmented_control("Log view", ["📊 Stats", "📸 Scrapbook", "📓 Journal"], default="📊 Stats",
+                                      key="stats_view", label_visibility="collapsed") or "📊 Stats"
     if stats_view == "📸 Scrapbook":
         render_scrapbook(state)
     elif stats_view == "📓 Journal":
         render_journal(state)
-  if tab_stats.open is not False and stats_view == "📊 Numbers":
+  if tab_stats.open is not False and stats_view == "📊 Stats":
     import altair as alt
     _acc = accent(state)[0]
     VIZ = {**VIZ, "normal": _acc, "light": _mix(_acc, "#ffffff", .55)}
