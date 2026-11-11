@@ -375,7 +375,7 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
             want = sorted(a["at"].strftime("%a %H:%M") for a in AL.plan(save, now, prof)
                           if "world_map" in a["tags"] and a["wanted"])
             nb = sum(1 for t in save.get("tasks", []) if t.get("block") and t.get("status") == "open")
-            print(f"::notice title=ntfy holds::{len(fut)} scheduled · journal: {', '.join(jr) or 'NONE'}"
+            print(f"::notice title=ntfy holds::{len(fut)} scheduled · journal: {f"{len(jr)} ({jr[0]} → {jr[-1]})" if jr else 'NONE'}"
                   f" · roadmap blocks: {', '.join(bl) or 'none'} (planned: {', '.join(want) or 'none'}; "
                   f"{nb} open blocks)")
         except Exception as e_:  # noqa: BLE001

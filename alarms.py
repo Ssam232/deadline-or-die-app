@@ -39,6 +39,11 @@ PRAYER_STAGES = [  # minutes before the window ends (None = when it opens), prio
     (0, 4, "🕌 {n} window closed"),
 ]
 QUIET = (23, 7)
+# 📓 Evening journal reminders, minutes after midnight of the day it's for (it locks at 4 AM the next morning):
+# hourly from 8 PM, every 30 min from 10 PM, then a last call at 3:45. Priority stays ≤ 4 so a sleep Focus still
+# silences the late ones.
+JOURNAL_LADDER = ([(h * 60, 3) for h in (20, 21)] + [(m, 3) for m in range(22 * 60, 24 * 60, 30)]
+                  + [(m, 4) for m in range(24 * 60, 28 * 60, 30)] + [(27 * 60 + 45, 4)])
 
 
 def _quiet(dt: datetime) -> bool:
@@ -206,11 +211,6 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
         out.append(_alarm(("dl", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
                           title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio,
                           ["repeat"], bool(stake) and not rest))
-    # 📓 evening journal reminder — cancelled once you've closed the day
-    jat = datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=23)
-    out.append(_alarm(("journal", d), jat, "📓 Close the day",
-                      f"Two taps, what you're grateful for, the win, tomorrow's one thing. Up to +{J.PM_MAX}.",
-                      3, ["notebook"], not J.peek(save, d).get("pm")))
     # 🗓️ Sunday-evening weekly recap
     if d.weekday() == J.RECAP_DAY:
         r = J.recap(save, J.week_start(d), now.tzinfo, through=now.date())
@@ -284,6 +284,30 @@ def _live(save: dict, now: datetime, prof: dict | None) -> list[dict]:
     return out
 
 
+def _journal(save: dict, d: date, now: datetime) -> list[dict]:
+    """📓 The evening journal for day d keeps nudging until it locks at 4 AM the next morning; every one is
+    cancelled once you've closed the day (yesterday's night is planned too, so a 1 AM entry cancels the rest)."""
+    out = []
+    # 📓 evening journal: keeps nudging until it closes at 4 AM; all of it cancelled once you've closed the day
+    open_ = not J.peek(save, d).get("pm")
+    base = datetime.combine(d, datetime.min.time(), now.tzinfo)
+    close = base + timedelta(days=1, hours=J.PM_CLOSES)
+    for off, prio in JOURNAL_LADDER:
+        jat = base + timedelta(minutes=off)
+        left = close - jat
+        if off < 23 * 60:
+            title, msg = "📓 Close the day", (f"Two taps, what you're grateful for, the win, tomorrow's one thing. "
+                                              f"Up to +{J.PM_MAX}.")
+        elif left > timedelta(minutes=30):
+            title, msg = "📓 Journal still open", f"Closes at {J.PM_CLOSES} AM ({_hmin(left.total_seconds() / 60)} left). " \
+                                                  f"Two minutes before bed, up to +{J.PM_MAX}."
+        else:
+            title, msg = "⏳ Journal closes soon", f"{_hmin(left.total_seconds() / 60)} until it locks for the day."
+        key = ("journal", d) if off == 23 * 60 else ("journal", d, off)  # 11 PM keeps its old slot
+        out.append(_alarm(key, jat, title, msg, prio, ["notebook"], open_))
+    return out
+
+
 def plan(save: dict, now: datetime, prof: dict | None = None) -> list[dict]:
     """Every alarm that could fire in the next ~2 days, wanted or not (unwanted ones get cancelled)."""
     if not save:
@@ -291,6 +315,8 @@ def plan(save: dict, now: datetime, prof: dict | None = None) -> list[dict]:
     out = _tasks(save, now) + NU.build(save, now, prof, _alarm) + _timer(save, now) + _live(save, now, prof)
     for d in (now.date(), now.date() + timedelta(days=1)):
         out += _prayers(save, d, now) + _day(save, d, now) + _daily_reminders(save, d, now)
+    for d in (now.date() - timedelta(days=1), now.date(), now.date() + timedelta(days=1)):
+        out += _journal(save, d, now)
     lo, hi = now + timedelta(seconds=MIN_LEAD), now + HORIZON
     return [a for a in out if lo <= a["at"] <= hi]
 
