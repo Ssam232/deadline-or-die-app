@@ -3647,41 +3647,76 @@ def render_boost_shop(state: dict, track: dict) -> None:
 
 
 def crew_ctx(state: dict) -> dict:
+    """What the crew knows about your day: they notice races, flakes, check-ins, streaks and long stints."""
     n_ = now()
     d = n_.date()
+    y = d - timedelta(days=1)
     stt = daily.status(state, n_)
     att = state.get("attendance", {})
-    flaked = any(r.get("status") == "flaked" and k.split("|")[1] >= (d - timedelta(days=1)).isoformat()
-                 for k, r in att.items())
-    won = any(r["ts"][:10] == d.isoformat() and r["pos"] == 1 for r in state.get("races", []))
-    short = n_.hour >= 17 and daily.slice_penalty(state, d)[0] > 0
+    recent = [(k, r) for k, r in att.items() if k.split("|")[1] >= y.isoformat()]
+    fl = [k for k, r in recent if r.get("status") == "flaked"]
+    ok_ = [k for k, r in recent if r.get("status") in ("attended", "late", "visit")]
+    cname = lambda k: (CM.get(state, k.split("|")[0]) or {}).get("name", "it")  # noqa: E731
+    today_r = [r for r in state.get("races", []) if r["ts"][:10] == d.isoformat()]
+    last_r = today_r[0] if today_r else None
     return {"name": state["settings"].get("player_name", "Driver"), "qualified": stt["qualified"],
             "focus": int(focus_today(state)), "done": len(daily.finished_on(state, d)),
-            "streak": int(state.get("day_streak", 0)), "flaked": flaked, "slices_short": short, "won": won,
-            "coins": f"{state['coins']:,}", "hour": n_.hour}
+            "streak": int(state.get("day_streak", 0)), "flaked": bool(fl), "flaked_what": cname(fl[0]) if fl else "",
+            "attended": cname(ok_[0]) if ok_ else "", "won": bool(last_r and last_r["pos"] == 1),
+            "raced": bool(last_r), "race_pos": last_r["pos"] if last_r else "", "race_track": last_r["track"] if last_r else "",
+            "slices_short": n_.hour >= 17 and daily.slice_penalty(state, d)[0] > 0,
+            "journaled": bool(J.peek(state, d).get("pm")), "coins": f"{state['coins']:,}", "coins_n": state["coins"],
+            "zero_yday": y.weekday() not in daily.WEEKEND and not daily.finished_on(state, y)
+                         and not any(x.get("date") == y.isoformat() for x in state.get("focus_log", [])),
+            "hour": n_.hour, "wd": n_.weekday()}
+
+
+def _crew_days(state: dict, k: str) -> int:
+    since = (state.get("crew_since") or {}).get(k)
+    return (now().date() - date.fromisoformat(since)).days if since else 0
 
 
 def render_crew_card(state: dict) -> None:
     hired = [k for k in CR.CREW if k in state.get("crew", [])]
-    q, who = CR.quote_of_day(now().date())
     with fold("crew", "🧑‍🔧 **Your crew**" + (f" :gray[{len(hired)}]" if hired else ""), True, card=True):
-        if hired:
-            ctx = crew_ctx(state)
-            mood = CR.mood(ctx)
-            for k in hired:
-                c = CR.CREW[k]
-                since = (state.get("crew_since") or {}).get(k)
-                days = (now().date() - date.fromisoformat(since)).days if since else 0
-                st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 52, mood)}</div><div>"
-                            f"<b>{c['name']}</b> <span class='r'>· {c['role']}{f' · {days} days with you' if days else ''}</span>"
-                            f"<div class='say'>“{html.escape(CR.line(k, ctx))}”</div></div></div>", unsafe_allow_html=True)
-        else:
+        if not hired:
             st.markdown("<div class='dod-crew'>" + "".join(f"<div class='av ghost'>{CR.avatar_svg(k, 40)}</div>"
                                                            for k in CR.CREW) + "</div>", unsafe_allow_html=True)
-            st.caption("Nobody in your garage yet. Hire a crew in 🔧 Garage: each one gives a permanent perk, "
-                       "and they'll be here every day.")
-        st.markdown(f"<div class='dod-quote'>“{html.escape(q)}”<span>— {html.escape(who)}</span></div>",
-                    unsafe_allow_html=True)
+            st.caption("Nobody in your garage yet. Hire a crew in 🔧 Garage: each brings a permanent perk, has "
+                       "opinions about your day, and tells you more about themselves the longer they're with you.")
+            return
+        ctx = crew_ctx(state)
+        mood = CR.mood(ctx)
+        salt = now().date().isoformat()
+        for k in hired:
+            c = CR.CREW[k]
+            days = _crew_days(state, k)
+            lvl, bname, nxt = CR.bond(days)
+            hearts = "❤️" * lvl if lvl else "🤍"
+            st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 52, mood)}</div><div>"
+                        f"<b>{c['name']}</b> <span class='r'>· {c['role']} · {hearts}</span>"
+                        f"<div class='say'>“{html.escape(CR.line(k, ctx, salt))}”</div></div></div>", unsafe_allow_html=True)
+        b_ = CR.banter(hired, ctx, salt + str(now().hour // 3))
+        if b_:
+            a, sa, b2, sb = b_
+            st.markdown(f"<div class='dod-banter'><b>{CR.CREW[a]['name']}:</b> {html.escape(sa)}<br>"
+                        f"<b>{CR.CREW[b2]['name']}:</b> {html.escape(sb)}</div>", unsafe_allow_html=True)
+        with fold("crew_know", "💬 Get to know your crew", False):
+            for k in hired:
+                c = CR.CREW[k]
+                days = _crew_days(state, k)
+                lvl, bname, nxt = CR.bond(days)
+                st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 44)}</div><div><b>{c['name']}</b> "
+                            f"<span class='r'>· {c['role']} · bond: <b>{bname}</b> ({days} day{'s' * (days != 1)})"
+                            + (f" · next in {nxt} days" if nxt else "") + "</span>"
+                            f"<div class='say'>{html.escape(c['bio'])}</div></div></div>", unsafe_allow_html=True)
+                st.caption(f"Quirk: {c['quirk']} · Likes: {c['likes']} · Always says: “{c['catch']}”")
+                told = CR.stories(k, days)
+                for t_ in told:
+                    st.markdown(f"<div class='dod-banter'>“{html.escape(t_)}”</div>", unsafe_allow_html=True)
+                if len(told) < len(CR.STORIES[k]):
+                    st.caption(f"🔒 {len(CR.STORIES[k]) - len(told)} more stor{'ies' if len(CR.STORIES[k]) - len(told) > 1 else 'y'} "
+                               f"as you two get closer.")
 
 
 def render_crew_hire(state: dict) -> None:
@@ -3693,7 +3728,8 @@ def render_crew_hire(state: dict) -> None:
             with cols[i % 2], st.container(border=True, key=f"crew_{k}"):
                 st.markdown(f"<div class='dod-crew'><div class='av{'' if k in crew else ' ghost'}'>{CR.avatar_svg(k, 56)}</div>"
                             f"<div><b>{c['name']}</b> <span class='r'>· {c['role']}</span>"
-                            f"<div class='say'>{c['perk']}</div></div></div>", unsafe_allow_html=True)
+                            f"<div class='say'><b>{c['perk']}</b></div></div></div>", unsafe_allow_html=True)
+                st.caption(c["bio"])
                 price = dealer_price(state, "crew", k, c["price"])
                 if k in crew:
                     st.caption("✅ On the team")
@@ -3945,6 +3981,7 @@ def render_commitments(state: dict) -> None:
 
 
 C_STAKE_DOT = {"red": "🔴", "yellow": "🟡", "green": "🟢"}
+CM_LENGTHS = [30, 45, 60, 90, 120, 180, 240, 300, 360, 480]
 
 
 def render_commitments_manage(state: dict) -> None:
@@ -3961,11 +3998,11 @@ def render_commitments_manage(state: dict) -> None:
         if kind == "weekly":
             days = st.pills("Days", CM.WD, selection_mode="multi", key="cm_days")
             t_ = c1.time_input("Starts", value=dtime(19, 0), step=900, key="cm_t")
-            mins = c2.selectbox("Length", [30, 45, 60, 90, 120, 180], index=3, format_func=min_label, key="cm_len")
+            mins = c2.selectbox("Length", CM_LENGTHS, index=3, format_func=min_label, key="cm_len")
         elif kind == "oneoff":
             on = c1.date_input("Date", value=n_.date(), min_value=n_.date(), key="cm_on")
             t_ = c2.time_input("Starts", value=dtime(19, 0), step=900, key="cm_t1")
-            mins = c3.selectbox("Length", [30, 45, 60, 90, 120, 180, 240], index=3, format_func=min_label, key="cm_len1")
+            mins = c3.selectbox("Length", CM_LENGTHS, index=3, format_func=min_label, key="cm_len1")
         else:
             per = c1.number_input("Times a week", 1, 7, 3, key="cm_per")
             stay = c2.selectbox("Stay at least", [0, 30, 60, 120, 180, 240], index=3,
@@ -6591,6 +6628,10 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 .dod-quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(--y);font-style:italic;
   color:#d6d8dd;font-size:.92rem;background:rgba(255,255,255,.03);border-radius:0 8px 8px 0}
 .dod-quote span{display:block;font-style:normal;color:#8b909c;font-size:.8rem;margin-top:4px}
+.dod-quote.top{margin:-.2rem 0 .9rem;padding:6px 12px;font-size:.9rem;background:none}
+.dod-quote.top span{display:block;margin-top:2px}
+.dod-banter{margin:4px 0 10px;padding:9px 12px;border-radius:10px;background:rgba(255,255,255,.04);font-size:.9rem;
+  line-height:1.45}
 .dod-mrow{display:flex;gap:10px;align-items:center;padding:9px 14px;margin:0 0 .5rem;border:1px solid var(--line);
   border-radius:12px;background:var(--card,#141821)}
 .dod-mrow .m{color:var(--muted);font-size:.85rem;margin-left:6px}
@@ -7103,6 +7144,9 @@ greet = "Late night" if hour < 5 else "Morning" if hour < 12 else "Afternoon" if
 st.markdown(f"<div class='dod-hero'><h1>Deadline or Die</h1><p>{greet}, {html.escape(PLAYER)}. Prove it or pay for it."
             + (" It's a danger day: no one's watching, so everything you finish pays +20%."
                if now().weekday() in DANGER_DAYS else "") + "</p></div>", unsafe_allow_html=True)
+_q, _who = CR.quote_of_day(now().date())
+st.markdown(f"<div class='dod-quote top'>“{html.escape(_q)}”<span>— {html.escape(_who)}</span></div>",
+            unsafe_allow_html=True)
 render_cluster(state)
 render_debt(state)
 if st.session_state.get("kit_preview") in KITS:
