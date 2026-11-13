@@ -2057,27 +2057,27 @@ def points_guide() -> None:
 
 def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
     fk = st.session_state.setdefault(f"_{key}_n", 0)
+    # what → when → how big → (the rest is optional and tucked away)
+    title = st.text_input("Task", placeholder="e.g. Draft the methods section", key=f"{key}_title{fk}")
     c1, c2 = st.columns(2)
     d = c1.date_input(togo_label("Due date", f"{key}_d{fk}", now().date() + timedelta(days=1)), value=now().date() + timedelta(days=1), min_value=now().date(), key=f"{key}_d{fk}")
     with c2:
         tm = time_wheel("Due time", dtime(23, 55), key=f"{key}_t{fk}")
     start_dt = start_picker(f"{key}_s{fk}", default=None, label="I'll start in (optional)")
-    with st.form(key, clear_on_submit=True):
-        title = st.text_input("Task", placeholder="e.g. Draft the methods section")
-        details = st.text_area("Details / what counts as done", height=70)
-        if goal_id is None and state["goals"]:
-            opts = ["(no goal)"] + [g["title"] for g in state["goals"]]
-            pick = st.selectbox("Part of goal", opts)
-            gid = None if pick == "(no goal)" else state["goals"][opts.index(pick) - 1]["id"]
-        else:
-            gid = goal_id
-        c3, c4 = st.columns(2)
-        cat = c3.selectbox("Category", CAT_OPTS, format_func=cat_label, key=f"{key}_cat")
-        mins = c4.select_slider("Honest time it'll take", V.MINUTES, value=60, format_func=min_label, key=f"{key}_min")
-        preset = st.selectbox("Real-world consequence if I miss it", CONSEQUENCE_PRESETS, index=1)
-        custom = st.text_input("…or write your own", placeholder="Overrides the preset if filled in")
+    with st.form(key, clear_on_submit=True, border=False):
+        mins = st.select_slider("Honest time it'll take", V.MINUTES, value=60, format_func=min_label, key=f"{key}_min")
+        gid = goal_id
+        with st.expander("More: details, goal, type, consequence"):
+            details = st.text_area("Details / what counts as done", height=70)
+            if goal_id is None and state["goals"]:
+                opts = ["(no goal)"] + [g["title"] for g in state["goals"]]
+                pick = st.selectbox("Part of goal", opts)
+                gid = None if pick == "(no goal)" else state["goals"][opts.index(pick) - 1]["id"]
+            cat = st.selectbox("Category", CAT_OPTS, format_func=cat_label, key=f"{key}_cat")
+            preset = st.selectbox("Real-world consequence if I miss it", CONSEQUENCE_PRESETS, index=1)
+            custom = st.text_input("…or write your own", placeholder="Overrides the preset if filled in")
         cons = custom.strip() or ("" if preset == CONSEQUENCE_PRESETS[0] else preset)
-        if st.form_submit_button("➕ Add task", type="primary"):
+        if st.form_submit_button("➕ Add task", type="primary", use_container_width=True):
             dl = datetime.combine(d, tm, TZ)
             if not title.strip():
                 st.error("Give it a name.")
@@ -3634,7 +3634,7 @@ def boost_price(k: str, track: dict) -> int:
 
 def render_boost_shop(state: dict, track: dict) -> None:
     have = state.setdefault("boosts", [])
-    c = st.columns(len(SHOP_BOOSTS))
+    c = st.container(key="boost_row").columns(len(SHOP_BOOSTS))
     for col, (k, b) in zip(c, SHOP_BOOSTS.items()):
         if k in have:
             col.caption(f"✅ {b['label']} loaded")
@@ -3948,6 +3948,8 @@ def render_commitments(state: dict) -> None:
             r = CM.rec(state, c["id"], n_.date()) or {}
             with st.container(border=True, key=f"cmq_{c['id']}"):
                 pace = ("✅ Week done" if not need else
+                        f"🌱 warm-up week: counts from {CM.counts_from(c):%a %b} {CM.counts_from(c).day}"
+                        if CM.warming_up(c, n_.date()) else
                         f"⚠️ {need} left, {left} day{'s' * (left != 1)} to go" if need >= left else
                         f"{need} left · {left} days to go")
                 st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {done}/{target} this week · {pace}"
@@ -3978,7 +3980,7 @@ def render_commitments(state: dict) -> None:
         if later:
             st.caption("Later this week: " + " · ".join(f"{c['name']} {t:%a %b} {t.day} {t:%I:%M %p}".replace(" 0", " ")
                                                          for c, t in later[:6]))
-        with fold("cm_manage", "⚙️ Add & manage commitments", not cs):
+        with fold("cm_manage", "➕ Add a commitment" if not cs else "⚙️ Add & manage commitments", False):
             render_commitments_manage(state)
 
 
@@ -4896,7 +4898,7 @@ def _pomo_pick(state: dict, where=None) -> tuple[int | None, int | None]:
     mode = where.selectbox("Breaks", keys, index=keys.index(cur) if cur in keys else 0, label_visibility="collapsed",
                            format_func=lambda k: "☕ " + PM.PRESETS[k][0], key="pomo_mode")
     if mode == "custom":
-        c2, c3 = st.columns(2)
+        c2, c3 = st.container(key="row_pomo").columns(2)
         work = c2.number_input("Break at (min)", 10, 120, int(cfg.get("pomo_work", 45)), 5, key="pomo_w")
         brk = c3.number_input("Break (min)", 2, 30, int(cfg.get("pomo_brk", 10)), 1, key="pomo_b")
     else:
@@ -4949,7 +4951,7 @@ def render_timer(state: dict, big: bool = False) -> None:
         if not tm:
             labels = {t["id"]: t["title"] for t in open_t}
             labels[NEW_SESSION] = "✏️ New task…"
-            c1, c2 = st.columns([1.6, 1])
+            c1, c2 = st.container(key="row_tm1").columns([1.6, 1])
             tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
                                label_visibility="collapsed")
             planned = c2.selectbox("Minutes", TIMER_LENGTHS + [0, FLOW_MODE], key="timer_len", label_visibility="collapsed",
@@ -4975,7 +4977,7 @@ def render_timer(state: dict, big: bool = False) -> None:
                                          placeholder="e.g. Poster figures · blank = just a focus session",
                                          label_visibility="collapsed")
                 st.caption("Becomes a task due tonight. Run the timer and it's your proof — finish it after.")
-            c3, c4 = st.columns([1.6, 1])
+            c3, c4 = st.container(key="row_tm2").columns([1.6, 1])
             work, brk = (None, None) if flow else _pomo_pick(state, c3)
             if c4.button("🎲 Pick for me", use_container_width=True, key="pick_next",
                          help="Picks your best next task and starts the timer"):
@@ -5737,7 +5739,7 @@ def render_race_status(state: dict) -> None:
                 st.rerun()
     with fold("contracts", "📜 This week's contracts", False):
         render_contracts(state)
-    with fold("ledger", "📜 Ledger", False):
+    with fold("ledger", "🧾 Coin ledger", False):
         if not state["ledger"]:
             st.caption("Nothing yet.")
         for e in state["ledger"][:15]:
@@ -6375,24 +6377,46 @@ CSS = """<style>
 /* Today on a phone: flatten the two columns into one list and put the sections in a phone-friendly order */
 @media (max-width:640px){
   .st-key-today_grid > [data-testid="stHorizontalBlock"],
-  .st-key-today_grid [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]{display:flex!important;flex-direction:column!important;gap:0!important}
-  .st-key-today_grid [data-testid="stColumn"],
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"]{display:contents!important}
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *{order:50;margin-bottom:1rem}
-  .st-key-today_grid .st-key-tg_checkin{order:1}.st-key-today_grid .st-key-tg_today{order:2}
-  .st-key-today_grid .st-key-tg_timer{order:3}.st-key-today_grid .st-key-tg_dailies{order:4}
-  .st-key-today_grid .st-key-tg_goals{order:5}.st-key-today_grid .st-key-tg_todo{order:5}.st-key-today_grid .st-key-tg_close{order:6}
-  .st-key-today_grid .st-key-tg_board{order:7}.st-key-today_grid .st-key-tg_status{order:8}
-  .st-key-today_grid .st-key-tg_car{order:9;display:none!important}
+  .st-key-today_grid > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]{display:flex!important;flex-direction:column!important;gap:0!important}
+  .st-key-today_grid > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  .st-key-today_grid > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  .st-key-today_grid > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] > [data-testid="stVerticalBlock"],
+  .st-key-today_grid > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] > [data-testid="stVerticalBlock"]{display:contents!important}
+  .st-key-today_grid > * > [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *,
+  .st-key-today_grid > * > * > [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *{order:50;margin-bottom:.8rem}
+  .st-key-today_grid .st-key-tg_checkin{order:1}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_checkin){order:1}
+  .st-key-today_grid .st-key-tg_today{order:2}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_today){order:2}
+  .st-key-today_grid .st-key-tg_timer{order:3}
   .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_timer){order:3}
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_dailies){order:4}
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_goals){order:5}
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_todo){order:5}
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_close){order:6}
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_board){order:7}
-  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_status){order:8}
+  .st-key-today_grid .st-key-tg_h_show{order:4}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_h_show){order:4}
+  .st-key-today_grid .st-key-tg_commit{order:5}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_commit){order:5}
+  .st-key-today_grid .st-key-tg_dailies{order:6}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_dailies){order:6}
+  .st-key-today_grid .st-key-tg_h_plan{order:7}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_h_plan){order:7}
+  .st-key-today_grid .st-key-tg_goals{order:8}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_goals){order:8}
+  .st-key-today_grid .st-key-tg_todo{order:9}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_todo){order:9}
+  .st-key-today_grid .st-key-tg_board{order:10}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_board){order:10}
+  .st-key-today_grid .st-key-tg_close{order:11}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_close){order:11}
+  .st-key-today_grid .st-key-tg_h_team{order:12}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_h_team){order:12}
+  .st-key-today_grid .st-key-tg_crew{order:13}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_crew){order:13}
+  .st-key-today_grid .st-key-tg_dealer{order:14}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_dealer){order:14}
+  .st-key-today_grid .st-key-tg_season{order:15}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_season){order:15}
+  .st-key-today_grid .st-key-tg_status{order:16}
+  .st-key-today_grid [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *:has(> .st-key-tg_status){order:16}
+  .st-key-today_grid .st-key-tg_car{order:40;display:none!important}
 }
 @media (max-width:640px){
   .st-key-fx_row [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.25rem}
@@ -6413,6 +6437,30 @@ CSS = """<style>
   .dod-mini-car{width:70%!important;top:4px!important;right:4px!important;opacity:.55}
   .dod-hero h1{font-size:1.6rem!important}
   .dod-next{padding:12px 14px 10px}.dod-next .t{font-size:1.25rem}
+}
+/* zone labels: quiet dividers that group Today (and long tabs) into a few named areas */
+.dod-zone{display:flex;align-items:baseline;gap:10px;margin:.9rem 2px .1rem;padding-top:.7rem;border-top:1px solid var(--line)}
+.dod-zone b{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:.82rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--y)}
+.dod-zone span{font-size:.8rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* one type scale inside cards: card headings never shout louder than the page */
+[data-testid="stVerticalBlockBorderWrapper"] h3,[data-testid="stExpander"] h3{font-size:1.2rem!important;line-height:1.3!important;
+  padding:.1rem 0 .25rem!important}
+[data-testid="stVerticalBlockBorderWrapper"] h4,[data-testid="stExpander"] h4{font-size:1.02rem!important;padding:.1rem 0 .2rem!important}
+/* stat tiles (race, shop): numbers you compare, laid out to be compared */
+.dod-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:.3rem 0 .6rem}
+.dod-tiles div{border:1px solid var(--line);border-radius:12px;padding:8px 10px;background:var(--card,#141821)}
+.dod-tiles small{display:block;color:var(--muted);font-size:.7rem;letter-spacing:.06em;text-transform:uppercase}
+.dod-tiles b{font-size:1rem;font-weight:700;white-space:nowrap}
+/* small control rows (key="row_…") stay side by side on a phone */
+[class*="st-key-row_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;flex-direction:row!important;gap:8px!important}
+[class*="st-key-row_"] [data-testid="stColumn"]{min-width:0!important;width:auto!important}
+/* button rows stay rows on a phone where they're a pair of choices */
+.st-key-boost_row [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:8px!important}
+.st-key-boost_row [data-testid="stColumn"]{min-width:0!important;flex:1 1 0!important;width:auto!important}
+@media (max-width:640px){
+  .dod-hero{margin-bottom:.3rem!important;gap:2px 12px!important}
+  .dod-quote.top{margin:.1rem 0 .7rem!important;font-size:.84rem!important}
 }
 .dod-sec{font-family:'Saira Semi Condensed',system-ui,sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 .4rem;
   display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:0}
@@ -7146,9 +7194,10 @@ greet = "Late night" if hour < 5 else "Morning" if hour < 12 else "Afternoon" if
 st.markdown(f"<div class='dod-hero'><h1>Deadline or Die</h1><p>{greet}, {html.escape(PLAYER)}. Prove it or pay for it."
             + (" It's a danger day: no one's watching, so everything you finish pays +20%."
                if now().weekday() in DANGER_DAYS else "") + "</p></div>", unsafe_allow_html=True)
-_q, _who = CR.quote_of_day(now().date())
-st.markdown(f"<div class='dod-quote top'>“{html.escape(_q)}”<span>— {html.escape(_who)}</span></div>",
-            unsafe_allow_html=True)
+if st.session_state.get("nav", "🏁 Today") == "🏁 Today" or os.getenv("DOD_ALL_TABS"):  # the words on the wall: Today only
+    _q, _who = CR.quote_of_day(now().date())
+    st.markdown(f"<div class='dod-quote top'>“{html.escape(_q)}”<span>— {html.escape(_who)}</span></div>",
+                unsafe_allow_html=True)
 render_cluster(state)
 render_debt(state)
 if st.session_state.get("kit_preview") in KITS:
@@ -7257,13 +7306,20 @@ with tab_today:
             render_timer(state, big=True)
     with st.container(key="today_grid"):
         c_main, c_rail = st.columns([1.55, 1], gap="large")
+
+        def _sec(key: str, title: str, sub: str = "") -> None:
+            with st.container(key=key):
+                st.markdown(f"<div class='dod-zone'><b>{title}</b><span>{sub}</span></div>", unsafe_allow_html=True)
+
         with c_main:
             with st.container(key="tg_checkin"):
                 render_checkin(state)
             with st.container(key="tg_today"):
                 render_today(state)
+            _sec("tg_h_show", "Show up", "the things you said you'd be at, and the daily basics")
             with st.container(key="tg_commit"):
                 render_commitments(state)
+            _sec("tg_h_plan", "Plan", "goals, loose ends, what's coming")
             with st.container(key="tg_goals"):
                 render_goals_today(state)
             with st.container(key="tg_todo"):
@@ -7273,6 +7329,12 @@ with tab_today:
             with st.container(key="tg_board"):
                 render_task_board(state, open_tasks)
         with c_rail:
+            if not state.get("timer"):
+                with st.container(key="tg_timer"):
+                    render_timer(state)
+            with st.container(key="tg_dailies"):
+                render_dailies(state)
+            _sec("tg_h_team", "Your team", "car, crew, season")
             with st.container(key="tg_car"):
                 render_car_card(state)
             with st.container(key="tg_crew"):
@@ -7282,11 +7344,6 @@ with tab_today:
                     render_dealer(state)
             with st.container(key="tg_season"):
                 render_season_card(state)
-            if not state.get("timer"):
-                with st.container(key="tg_timer"):
-                    render_timer(state)
-            with st.container(key="tg_dailies"):
-                render_dailies(state)
             with st.container(key="tg_status"):
                 render_race_status(state)
                 _stt = daily.status(state, now())
@@ -8694,8 +8751,11 @@ with tab_race:
                 st.caption(f"{g_['laps']} laps, double season points, and a 🏆 for the cabinet if you win. "
                            f"Needs a ticket; doesn't count toward today's {RACE_DAY_CAP} races.")
                 lo_, hi_ = ai_range(state, g_)
-                st.markdown(f"Your car **{track_rating(state, g_):.0f}** vs **{lo_}–{hi_}** · Entry **{g_['fee']}** + "
-                            f"⛽ {run_cost(state, g_)} · Purse 🥇{g_['prize'][0]} 🥈{g_['prize'][1]} 🥉{g_['prize'][2]}")
+                st.markdown(f"<div class='dod-tiles'><div><small>Your car</small><b>{track_rating(state, g_):.0f}</b></div>"
+                            f"<div><small>Rivals</small><b>{lo_}–{hi_}</b></div>"
+                            f"<div><small>Entry + ⛽</small><b>{g_['fee']} + {run_cost(state, g_)} 🪙</b></div>"
+                            f"<div><small>Purse</small><b>🥇{g_['prize'][0]} 🥈{g_['prize'][1]} 🥉{g_['prize'][2]}</b></div></div>",
+                            unsafe_allow_html=True)
                 cost_ = g_["fee"] + run_cost(state, g_)
                 if st.button(f"🏁 Start the Grand Prix · {cost_} 🪙", type="primary", key="gp_go",
                              disabled=racing or not left_t or state["coins"] < cost_ or lvl < 1):
@@ -8708,10 +8768,11 @@ with tab_race:
                 st.markdown(f"### 🎟️ You're invited · {inv_['name']}")
                 st.caption(f"You're sitting on {state['coins']:,} coins, so the Invitational called. A field built "
                            "around your pace: no easy wins, no sandbagging. Once a week, no ticket needed.")
-                st.markdown(f"Entry **{inv_['fee']}** + ⛽ {run_cost(state, inv_)} · Purse 🥇{inv_['prize'][0]} "
-                            f"🥈{inv_['prize'][1]} 🥉{inv_['prize'][2]} · 🏆 trophy for a win")
+                st.markdown(f"<div class='dod-tiles'><div><small>Entry + ⛽</small><b>{inv_['fee']} + {run_cost(state, inv_)} 🪙</b></div>"
+                            f"<div><small>Purse</small><b>🥇{inv_['prize'][0]} 🥈{inv_['prize'][1]} 🥉{inv_['prize'][2]}</b></div>"
+                            f"<div><small>Win</small><b>🏆 trophy</b></div></div>", unsafe_allow_html=True)
                 cost_ = inv_["fee"] + run_cost(state, inv_)
-                if st.button(f"🎟️ Accept · {cost_} 🪙", key="inv_go", disabled=racing):
+                if st.button(f"🎟️ Accept · {cost_} 🪙", key="inv_go", disabled=racing, use_container_width=True):
                     bank(state, -inv_["fee"], f"🎟️ Entry: Invitational at {inv_['name']}")
                     bank(state, -run_cost(state, inv_), f"⛽ Running costs: {inv_['name']}")
                     simulate_race(state, inv_, "inv")
@@ -8732,8 +8793,11 @@ with tab_race:
         m_ = sandbag(state, track)
         pz = [round(x * m_) for x in track["prize"]]
         rc = run_cost(state, track)
-        st.markdown(f"Your car **{rating:.0f}** here vs rivals **{lo}–{hi}** · Entry **{track['fee']}** + ⛽ **{rc}** "
-                    f"running costs · Prizes 🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}")
+        edge_ = "#2ec4b6" if rating >= hi else "#f5c518" if rating >= lo else "#e10600"
+        st.markdown(f"<div class='dod-tiles'><div><small>Your car</small><b style='color:{edge_}'>{rating:.0f}</b></div>"
+                    f"<div><small>Rivals</small><b>{lo}–{hi}</b></div>"
+                    f"<div><small>Entry + ⛽ running</small><b>{track['fee']} + {rc} 🪙</b></div>"
+                    f"<div><small>Prizes</small><b>🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}</b></div></div>", unsafe_allow_html=True)
         ff = field_form(state, track["name"])
         if ff:
             st.caption(f"📈 This grid has learned you: rivals **+{ff * 3.5:.0f}%** from your recent results here. "
@@ -8753,7 +8817,8 @@ with tab_race:
                 st.info("Can't cover the entry fee and running costs.")
             elif racing:
                 st.button("🏎️ Race in progress…", disabled=True)
-            elif st.button(f"🚦 Lights out · {track['fee'] + rc} 🪙", type="primary", disabled=not left_t):
+            elif st.button(f"🚦 Lights out · {track['fee'] + rc} 🪙", type="primary", disabled=not left_t,
+                           use_container_width=True):
                 bank(state, -track["fee"], f"🎟️ Entry: {track['name']}")
                 bank(state, -rc, f"⛽ Running costs: {track['name']}")
                 simulate_race(state, track)
