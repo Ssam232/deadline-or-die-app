@@ -304,7 +304,7 @@ def _commitments(save: dict, now: datetime) -> list[dict]:
                 open_ = not r.get("status")
                 t12 = f"{st_:%I:%M %p}".lstrip("0")
                 stakes = c["stakes"]
-                lose = ("" if stakes == "green" else
+                lose = ("" if stakes == "green" or C.warming_up(c, d) else
                         f" No check-in, no notice = flake (−{round(C.STAKES[stakes]['flake'] * daily.level_factor(save))}).")
                 out.append(_alarm(("cm", c["id"], d, "pack"), st_ - timedelta(hours=2), f"🎒 {c['name']} at {t12}",
                                   f"Two hours out. Get your stuff together.{lose}", 3, ["round_pushpin"], open_))

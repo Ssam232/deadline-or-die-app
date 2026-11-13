@@ -91,6 +91,17 @@ def window(c: dict, start: datetime) -> tuple[datetime, datetime, datetime]:
     return start - timedelta(minutes=EARLY_MIN), start + timedelta(minutes=ON_TIME_MIN), max(end, start + timedelta(minutes=ON_TIME_MIN))
 
 
+def counts_from(c: dict) -> date:
+    """🌱 Warm-up: a commitment's stakes start the Monday after you add it (added on a Monday: that day).
+    Before that, check-ins still pay and build the streak, but a miss costs nothing."""
+    d = datetime.fromisoformat(c["created"]).date()
+    return d + timedelta(days=(7 - d.weekday()) % 7)
+
+
+def warming_up(c: dict, d: date) -> bool:
+    return d < counts_from(c)
+
+
 def created_before(c: dict, when: datetime) -> bool:
     return datetime.fromisoformat(c["created"]) <= when
 
@@ -199,7 +210,7 @@ def cancel(save: dict, c: dict, d: date, now: datetime, reason: str, bank, lf: f
     used = sum(1 for k, r in save.get("attendance", {}).items()
                if r.get("status") == "cancelled" and r.get("free") and (r.get("at") or "")[:7] == month)
     ahead = (start - now).total_seconds() / 3600
-    free = ahead >= CANCEL_AHEAD_H and used < FREE_CANCELS_PER_MONTH
+    free = (ahead >= CANCEL_AHEAD_H and used < FREE_CANCELS_PER_MONTH) or warming_up(c, d)
     cost = 0 if free else round(STAKES[c["stakes"]]["flake"] * lf * 0.5)
     _set(save, c["id"], d, status="cancelled", at=now.isoformat(), reason=reason.strip()[:120], free=free, cost=cost)
     if cost:
@@ -244,7 +255,9 @@ def settle(save: dict, now: datetime, bank, lf: float) -> list[str]:
                 st_ = start_on(c, d, now.tzinfo)
                 if st_ and st_ >= made:
                     _, _, end = window(c, st_)
-                    if last < end <= now and not (rec(save, c["id"], d) or {}).get("status"):
+                    if last < end <= now and not (rec(save, c["id"], d) or {}).get("status") and warming_up(c, d):
+                        _set(save, c["id"], d, status="warmup", at=end.isoformat())  # 🌱 doesn't count yet
+                    elif last < end <= now and not (rec(save, c["id"], d) or {}).get("status"):
                         cost = round(STAKES[c["stakes"]]["flake"] * lf)
                         _set(save, c["id"], d, status="flaked", at=end.isoformat(), cost=cost)
                         _streak_after(c, "flaked", end)
@@ -267,7 +280,7 @@ def settle(save: dict, now: datetime, bank, lf: float) -> list[str]:
                 if last < end and end > made:
                     done, target, _, _ = quota_week(save, c, s)
                     miss = max(0, target - done)
-                    first_week = made > datetime.combine(s, datetime.min.time(), now.tzinfo)
+                    first_week = counts_from(c) > s  # 🌱 the week it was added in doesn't count
                     if miss and not first_week:
                         cost = round(STAKES[c["stakes"]]["flake"] * lf * 0.5 * miss)
                         c["streak"] = 0

@@ -3931,7 +3931,9 @@ def render_commitments(state: dict) -> None:
                 else:
                     pen = round(CM.STAKES[c["stakes"]]["flake"] * lf)
                     st.caption(f"Check-in opens {opens:%I:%M %p}".replace(" 0", " ")
-                               + (f" · no-show without notice: −{pen}" if pen else " · bonus only"))
+                               + (f" · 🌱 warm-up: counts from {CM.counts_from(c):%a %b} {CM.counts_from(c).day}"
+                                  if CM.warming_up(c, t.date()) else
+                                  f" · no-show without notice: −{pen}" if pen else " · bonus only"))
                     if True:  # cancelling is always possible (and free 3+ h ahead with a reason)
                         with st.popover("🚫 Can't make it", use_container_width=False):
                             free_ = (t - n_).total_seconds() / 3600 >= CM.CANCEL_AHEAD_H
