@@ -11,6 +11,7 @@ Run:  streamlit run app.py
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import html
 import zlib
@@ -333,6 +334,58 @@ def notion_cfg() -> tuple[str, str] | None:
     return (token, parent) if token and parent else None
 
 
+@st.cache_resource
+def _swr_store() -> dict:
+    return {"data": {}, "busy": set(), "lock": threading.Lock()}  # process-wide: every session shares it
+
+
+def swr(ttl: int):
+    """⚡ Stale-while-revalidate for slow lookups (Notion boards, Zotero). A fresh answer is returned as is; an
+    old one is returned straight away while a background thread fetches the new one for the next run. Only a
+    first-ever call waits. So the page never stalls for seconds just because a 5-minute cache ran out."""
+    def deco(fn):
+        name = fn.__name__
+
+        def fetch(key, args):
+            S = _swr_store()
+            try:
+                val = fn(*args)
+                with S["lock"]:
+                    S["data"][key] = (time.time(), val)
+            except Exception:  # noqa: BLE001 — keep serving the old answer; try again in 30 s
+                with S["lock"]:
+                    if key in S["data"]:
+                        S["data"][key] = (time.time() - ttl + 30, S["data"][key][1])
+            finally:
+                S["busy"].discard(key)
+
+        def wrapper(*args):
+            S, key = _swr_store(), (name,) + args
+            hit = S["data"].get(key)
+            if hit is None:
+                val = fn(*args)  # first time: nothing to show yet, so wait for it
+                with S["lock"]:
+                    S["data"][key] = (time.time(), val)
+                    if len(S["data"]) > 300:  # old days' entries
+                        for k_ in sorted(S["data"], key=lambda k_: S["data"][k_][0])[:100]:
+                            S["data"].pop(k_, None)
+                return copy.deepcopy(val)
+            if time.time() - hit[0] > ttl and key not in S["busy"]:
+                S["busy"].add(key)
+                threading.Thread(target=fetch, args=(key, args), daemon=True).start()
+            return copy.deepcopy(hit[1])
+
+        def clear():
+            S = _swr_store()
+            with S["lock"]:
+                for k_ in [k_ for k_ in S["data"] if k_[0] == name]:
+                    S["data"].pop(k_, None)
+        wrapper.clear = clear
+        wrapper.__name__, wrapper.__doc__ = name, fn.__doc__
+        return wrapper
+    return deco
+
+
 @st.cache_resource(show_spinner="Setting up your Notion workspace…")
 def _workspace(token: str, parent: str) -> dict:
     return ensure_workspace(Notion(token), parent)
@@ -349,18 +402,18 @@ def _proof_url(token: str, page_id: str) -> str | None:
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@swr(3600)
 def _board_map(token: str, db: str) -> dict:
     return B.detect(Notion(token), db)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@swr(300)
 def _board_today(token: str, db: str, day_iso: str) -> list[dict]:
     m = _board_map(token, db)
     return B.pull_day(Notion(token), m, date.fromisoformat(day_iso))
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@swr(300)
 def _board_range(token: str, db: str, start_iso: str, days: int) -> list[dict]:
     m = _board_map(token, db)
     return B.pull_range(Notion(token), m, date.fromisoformat(start_iso), days, tz=TZ)
@@ -371,7 +424,7 @@ def _zotero_seen() -> dict:
     return {"v": None}  # process-wide, like the caches it guards (app.py's own globals reset on every rerun)
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+@swr(20)
 def _zotero_version(user: str, key: str) -> str:
     try:
         return Z.library_version(user, key)
@@ -394,12 +447,12 @@ def zotero_fresh(zc: tuple | None) -> None:
         seen["v"] = v
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@swr(600)
 def _zotero_list(user: str, key: str, coll: str) -> list[dict]:
     return Z.to_read(user, key, coll)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@swr(600)
 def _zotero_reading(user: str, key: str, coll: str) -> list[dict]:
     return Z.reading_list(user, key, coll)
 
@@ -420,7 +473,7 @@ def journal_cfg(state: dict) -> tuple[str, str] | None:
     return (token, db) if db and token else None
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@swr(600)
 def _journal_map(token: str, db: str) -> dict:
     return JN.detect(Notion(token), db)
 
@@ -1748,6 +1801,11 @@ def fold(k: str, label: str, default: bool = True, card: bool = False):
     return st.expander(label, expanded=folds.get(k, default), key=wk, on_change="rerun")
 
 
+def _open(e) -> bool:
+    """Is this fold open? Collapsed sections aren't built at all: opening one reruns and fills it in."""
+    return bool(os.getenv("DOD_ALL_TABS")) or getattr(e, "open", None) is not False
+
+
 def togo_label(label: str, key: str, default) -> str:
     """A date box's label with its days to go, so the count stays in view while the calendar is open."""
     d_ = st.session_state.get(key, default)
@@ -2051,8 +2109,9 @@ def hmin(minutes: float) -> str:
 
 
 def points_guide() -> None:
-    with fold("points", "💰 What's it worth? (points guide)", False):
-        st.markdown(V.guide_markdown())
+    with fold("points", "💰 What's it worth? (points guide)", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.markdown(V.guide_markdown())
 
 
 def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
@@ -2704,68 +2763,70 @@ def render_dailies(state: dict) -> None:
     rows = DL.today_status(state, today)
     _dn = sum(r["done"] for r in rows)
     bail_ = bool(daily.peek_day(state, today).get("bailout"))
-    with fold("dailies", "🔁 **Dailies**" + (f" :gray[{_dn}/{len(rows)}]" if rows else ""), card=True):
-        if rows:
-            done = _dn
-            stake, _ = DL.at_stake(state, today)
-            if done == len(rows):
-                note = "<div style='color:#2ec4b6;font-size:.88rem'>All done today ✅</div>"
-            elif bail_:
-                left_ = (DL.closes_at(today, TZ, _bailed(state)) - now()).total_seconds() / 60
-                note = (f"<div style='color:#8ab4ff;font-size:.88rem'>🪂 Bailout day"
-                        + (f" ({today:%A})" if today != now().date() else "")
-                        + f": open till 4 AM · <b>{hmin(max(0, left_))}</b> left. Misses cost nothing and keep "
-                          "your streaks; anything you finish still counts.</div>")
-            elif daily.is_rest(state, today):
-                note = ("<div style='color:#8ab4ff;font-size:.88rem'>🛌 Rest day: misses cost nothing and keep your "
-                        "streaks</div>")
-            elif stake:
-                note = (f"<div style='color:#ff6a5c;font-size:.88rem'>−{stake} 🪙 at midnight if "
-                        "these aren't done</div>")
-            else:
-                note = ("<div style='color:#8b909c;font-size:.88rem'>Day one is free: misses start "
-                        "costing tomorrow</div>")
-            st.markdown(note, unsafe_allow_html=True)
-            for r in rows:
-                h = r["h"]
-                c1, c2, c3 = st.container(key=f"dlrow_{h['id']}").columns([5, 1, 2], vertical_alignment="center")
-                dots = "●" * min(r["count"], h["target"]) + "○" * max(0, h["target"] - r["count"])
-                c1.markdown(f"**{h['name']}** &nbsp;<span style='letter-spacing:2px;color:{'#199e70' if r['done'] else '#9aa0ad'}'>"
-                            f"{dots}</span> <small>{r['count']}/{h['target']}"
-                            + (f" · 🔥{h['streak']}" if h.get("streak") else "") + "</small>"
-                            + (_prayer_line(state, r["count"]) if PR.is_prayer_daily(h) else ""),
-                            unsafe_allow_html=True)
-                c2.button("↩", key=f"dl_undo_{h['id']}", help="Undo one", disabled=r["count"] == 0,
-                          on_click=_dl_tap, args=(state, h, today, -1))
-                if r["done"] and not r["claimed"]:
-                    if c3.button(f"🏆 Claim +{DL.reward(h)}", key=f"dl_claim_{h['id']}", type="primary",
-                                 use_container_width=True):
-                        DL.claim(state, h["id"], today, bank)
-                        save_state(state)
-                        flash(f"🔁 **{h['name']}** done for today — +{DL.reward(h)} 🪙 · streak {h['streak']} 🔥",
-                              sound="win")
-                        st.rerun(scope="app")
-                elif r["claimed"]:
-                    c3.markdown("✅ claimed")
+    with fold("dailies", "🔁 **Dailies**" + (f" :gray[{_dn}/{len(rows)}]" if rows else ""), card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            if rows:
+                done = _dn
+                stake, _ = DL.at_stake(state, today)
+                if done == len(rows):
+                    note = "<div style='color:#2ec4b6;font-size:.88rem'>All done today ✅</div>"
+                elif bail_:
+                    left_ = (DL.closes_at(today, TZ, _bailed(state)) - now()).total_seconds() / 60
+                    note = (f"<div style='color:#8ab4ff;font-size:.88rem'>🪂 Bailout day"
+                            + (f" ({today:%A})" if today != now().date() else "")
+                            + f": open till 4 AM · <b>{hmin(max(0, left_))}</b> left. Misses cost nothing and keep "
+                              "your streaks; anything you finish still counts.</div>")
+                elif daily.is_rest(state, today):
+                    note = ("<div style='color:#8ab4ff;font-size:.88rem'>🛌 Rest day: misses cost nothing and keep your "
+                            "streaks</div>")
+                elif stake:
+                    note = (f"<div style='color:#ff6a5c;font-size:.88rem'>−{stake} 🪙 at midnight if "
+                            "these aren't done</div>")
                 else:
-                    c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True,
-                              on_click=_dl_tap, args=(state, h, today, 1))
-        with fold("dl_manage", "⚙️ Manage dailies" if rows else
-                  "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)", False):
-            live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
-            views = ["Your dailies", "＋ Add new"]
-            if "_dl_view_next" in st.session_state:
-                st.session_state["dl_view"] = st.session_state.pop("_dl_view_next")
-            view = st.segmented_control("View", views, default=views[0] if live else views[1], key="dl_view",
-                                        label_visibility="collapsed") or (views[0] if live else views[1])
-            if view == views[1]:
-                _daily_add_form(state, today)
-            elif not live:
-                st.caption("No dailies yet — add one.")
-            else:
-                for h in live:
-                    _daily_card(state, h, today)
-                st.caption("Removing a daily takes effect tomorrow, so today still counts.")
+                    note = ("<div style='color:#8b909c;font-size:.88rem'>Day one is free: misses start "
+                            "costing tomorrow</div>")
+                st.markdown(note, unsafe_allow_html=True)
+                for r in rows:
+                    h = r["h"]
+                    c1, c2, c3 = st.container(key=f"dlrow_{h['id']}").columns([5, 1, 2], vertical_alignment="center")
+                    dots = "●" * min(r["count"], h["target"]) + "○" * max(0, h["target"] - r["count"])
+                    c1.markdown(f"**{h['name']}** &nbsp;<span style='letter-spacing:2px;color:{'#199e70' if r['done'] else '#9aa0ad'}'>"
+                                f"{dots}</span> <small>{r['count']}/{h['target']}"
+                                + (f" · 🔥{h['streak']}" if h.get("streak") else "") + "</small>"
+                                + (_prayer_line(state, r["count"]) if PR.is_prayer_daily(h) else ""),
+                                unsafe_allow_html=True)
+                    c2.button("↩", key=f"dl_undo_{h['id']}", help="Undo one", disabled=r["count"] == 0,
+                              on_click=_dl_tap, args=(state, h, today, -1))
+                    if r["done"] and not r["claimed"]:
+                        if c3.button(f"🏆 Claim +{DL.reward(h)}", key=f"dl_claim_{h['id']}", type="primary",
+                                     use_container_width=True):
+                            DL.claim(state, h["id"], today, bank)
+                            save_state(state)
+                            flash(f"🔁 **{h['name']}** done for today — +{DL.reward(h)} 🪙 · streak {h['streak']} 🔥",
+                                  sound="win")
+                            st.rerun(scope="app")
+                    elif r["claimed"]:
+                        c3.markdown("✅ claimed")
+                    else:
+                        c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True,
+                                  on_click=_dl_tap, args=(state, h, today, 1))
+            with fold("dl_manage", "⚙️ Manage dailies" if rows else
+                      "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)", False) as _fo:
+                if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                    live = [h for h in DL.habits(state) if not h.get("end") or h["end"] >= today.isoformat()]
+                    views = ["Your dailies", "＋ Add new"]
+                    if "_dl_view_next" in st.session_state:
+                        st.session_state["dl_view"] = st.session_state.pop("_dl_view_next")
+                    view = st.segmented_control("View", views, default=views[0] if live else views[1], key="dl_view",
+                                                label_visibility="collapsed") or (views[0] if live else views[1])
+                    if view == views[1]:
+                        _daily_add_form(state, today)
+                    elif not live:
+                        st.caption("No dailies yet — add one.")
+                    else:
+                        for h in live:
+                            _daily_card(state, h, today)
+                        st.caption("Removing a daily takes effect tomorrow, so today still counts.")
 
 
 def _daily_card(state: dict, h: dict, today) -> None:
@@ -2915,31 +2976,32 @@ def _slice_picker(state: dict, today, picked: list, opts: dict, fk) -> list:
     st.session_state["q_slices"] = q
     by = {t["id"]: t for t in cands}
     with fold("q_slice", "⏱️ Or put time into something bigger · its deadline stays" + (f" ({len(q)})" if q else ""),
-              bool(q)):
-        st.caption("A slice counts toward the hour like a task, but it's done when the **focus timer** logs that much "
-                   "on it today. Once locked in it can't shrink: minutes you don't log cost "
-                   f"{daily.SLICE_PEN_PER_HOUR}/h (× your level) at midnight. Any real time on it saves the day from "
-                   "being a zero.")
-        if cands:
-            c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="bottom")
-            tid = c1.selectbox("Task", [t["id"] for t in cands], index=None, key=f"q_sl_t{fk}",
-                               format_func=lambda i: by[i]["title"] + f" · due {_rel_day(parse_dt(by[i]['deadline']), today)}"
-                               + (f" · ⏱️ {have[i]} min already" if i in have else ""),
-                               placeholder="Pick a task…", label_visibility="collapsed")
-            mins = c2.segmented_control("Slice", daily.SLICE_LENGTHS, default=45, format_func=min_label,
-                                        key=f"q_sl_m{fk}", label_visibility="collapsed")
-            if c3.button("＋ Slice", key=f"q_sl_add{fk}", use_container_width=True, disabled=not (tid and mins)):
-                q = [x for x in q if x[0] != tid] + [(tid, int(mins))]
-                st.session_state["q_slices"] = q
-                st.rerun()
-        else:
-            st.caption("No open tasks to slice yet.")
-        for i, (tid_, m_) in enumerate(q):
-            c1, c2 = st.columns([6, 1], vertical_alignment="center")
-            c1.markdown(f"⏱️ **{min_label(m_)}** on {html.escape(by[tid_]['title'])}")
-            if c2.button("✕", key=f"q_sl_x{fk}_{i}", help="Not committed yet: remove it"):
-                st.session_state["q_slices"] = [x for x in q if x[0] != tid_]
-                st.rerun()
+              bool(q)) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.caption("A slice counts toward the hour like a task, but it's done when the **focus timer** logs that much "
+                       "on it today. Once locked in it can't shrink: minutes you don't log cost "
+                       f"{daily.SLICE_PEN_PER_HOUR}/h (× your level) at midnight. Any real time on it saves the day from "
+                       "being a zero.")
+            if cands:
+                c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="bottom")
+                tid = c1.selectbox("Task", [t["id"] for t in cands], index=None, key=f"q_sl_t{fk}",
+                                   format_func=lambda i: by[i]["title"] + f" · due {_rel_day(parse_dt(by[i]['deadline']), today)}"
+                                   + (f" · ⏱️ {have[i]} min already" if i in have else ""),
+                                   placeholder="Pick a task…", label_visibility="collapsed")
+                mins = c2.segmented_control("Slice", daily.SLICE_LENGTHS, default=45, format_func=min_label,
+                                            key=f"q_sl_m{fk}", label_visibility="collapsed")
+                if c3.button("＋ Slice", key=f"q_sl_add{fk}", use_container_width=True, disabled=not (tid and mins)):
+                    q = [x for x in q if x[0] != tid] + [(tid, int(mins))]
+                    st.session_state["q_slices"] = q
+                    st.rerun()
+            else:
+                st.caption("No open tasks to slice yet.")
+            for i, (tid_, m_) in enumerate(q):
+                c1, c2 = st.columns([6, 1], vertical_alignment="center")
+                c1.markdown(f"⏱️ **{min_label(m_)}** on {html.escape(by[tid_]['title'])}")
+                if c2.button("✕", key=f"q_sl_x{fk}_{i}", help="Not committed yet: remove it"):
+                    st.session_state["q_slices"] = [x for x in q if x[0] != tid_]
+                    st.rerun()
     return [(by[t_], m_) for t_, m_ in q]
 
 
@@ -3481,142 +3543,144 @@ def render_today(state: dict) -> None:
         _sl = daily.slices(state, n_.date())
         _lab = (f"🏁 **Today's mission** :gray[{len(stt['mission_done']) + sum(daily.slice_done(state, x, n_.date()) for x in _sl)}"
                 f"/{len(_m) + len(_sl)}]")
-    with fold("live_card", _lab, card=True):
-        render_coming_up(state)
-        _shield_strip(state, n_)
-        if stt["bailout"]:
-            b_ = stt["bailout"]
-            st.markdown("### 🪂 Bailed out")
-            st.caption(f"{b_['reason']} · {b_['why']}")
-            st.markdown("<div class='dod-pills'><span>No zero-day</span><span>Dailies free till 4 AM</span>"
-                        "<span>Streak frozen</span>" + (f"<span>{len(b_['moved'])} moved to tomorrow</span>"
-                                                        if b_.get("moved") else "") + "</div>", unsafe_allow_html=True)
-            st.caption("Rest, reset. Prayer reminders keep going; everything else is quiet until tomorrow.")
-            return
-        if stt["rest"]:
-            st.markdown("### 🛌 Pit stop day")
-            st.caption("Recharge. Nothing counts against you today. Back on the grid tomorrow.")
-            return
-        if not stt["qualified"] and stt["optional"]:
-            st.markdown("### 🚦 Weekend: qualifying is optional")
-            st.caption(f"Sleep in. Lock in a mission any time today for +{c['qualify_fuel']} fuel. Not locking in "
-                       "costs nothing.")
-            render_qualify_form(state)
-            _bail_button(state, stt)
-            return
-        if not stt["qualified"]:
-            left = stt["deadline"] - n_
-            if left.total_seconds() > 0:
-                mins_left = int(left.total_seconds() // 60)
-                urgent = mins_left <= 30
-                st.markdown(
-                    f"<div class='dod-mh'><div class='dod-mt'>🚦 Qualify by {stt['deadline']:%I:%M %p}</div>".replace("by 0", "by ")
-                    + f"<div class='dod-mb' style='color:{'#ff6a5c' if urgent else 'var(--muted)'}'>{fmt_left(left)} left</div></div>"
-                    f"<div class='dod-pills'><span>⛽ <b>+{c['qualify_fuel']}</b> fuel</span>"
-                    f"<span>Miss it: the safety car picks (−{c['qualify_penalty']})</span></div>", unsafe_allow_html=True)
-            else:
-                if daily.peek_day(state, n_.date()).get("excused"):
-                    st.markdown("### 🚦 Lock in today's mission")
-                    st.caption(f"Qualifying was excused (the app was down at the deadline). Locking in still pays "
-                               f"+{c['qualify_fuel']}.")
-                else:
-                    st.markdown("### 🚦 Qualifying missed")
-                    st.caption("The safety car is out. You can still lock in your own mission.")
-            render_qualify_form(state)
-            if stt["pit_stops_left"] and left.total_seconds() > 0:
-                if st.checkbox("Pull out before qualifying (sick / too tired to start)", key="pit_chk") and \
-                        st.button(f"🛌 Take a pit stop ({stt['pit_stops_left']} left this week)"):
-                    daily.pit_stop(state, n_)
-                    save_state(state)
-                    flash("🛌 Pit stop. Rest properly — the grid forms again tomorrow.", "info")
-                    st.rerun()
-            else:
+    with fold("live_card", _lab, card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            render_coming_up(state)
+            _shield_strip(state, n_)
+            if stt["bailout"]:
+                b_ = stt["bailout"]
+                st.markdown("### 🪂 Bailed out")
+                st.caption(f"{b_['reason']} · {b_['why']}")
+                st.markdown("<div class='dod-pills'><span>No zero-day</span><span>Dailies free till 4 AM</span>"
+                            "<span>Streak frozen</span>" + (f"<span>{len(b_['moved'])} moved to tomorrow</span>"
+                                                            if b_.get("moved") else "") + "</div>", unsafe_allow_html=True)
+                st.caption("Rest, reset. Prayer reminders keep going; everything else is quiet until tomorrow.")
+                return
+            if stt["rest"]:
+                st.markdown("### 🛌 Pit stop day")
+                st.caption("Recharge. Nothing counts against you today. Back on the grid tomorrow.")
+                return
+            if not stt["qualified"] and stt["optional"]:
+                st.markdown("### 🚦 Weekend: qualifying is optional")
+                st.caption(f"Sleep in. Lock in a mission any time today for +{c['qualify_fuel']} fuel. Not locking in "
+                           "costs nothing.")
+                render_qualify_form(state)
                 _bail_button(state, stt)
-            return
-        m, done = stt["mission"], stt["mission_done"]
-        m = mission_sorted(state, m)
-        open_m = [t for t in m if t["status"] == "open"]
-        sl_ = daily.slices(state, n_.date())
-        sl_ok = [x for x in sl_ if daily.slice_done(state, x, n_.date())]
-        left_min = sum(t.get("minutes") or 30 for t in open_m) + sum(
-            max(0, x["min"] - daily.slice_logged(state, x["tid"], n_.date())) for x in sl_ if x not in sl_ok)
-        segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
-                       "</i>" for t in m) + "".join(f"<i class='{'ok' if x in sl_ok else ''}'></i>" for x in sl_)
-        pills = [f"🔥 <b>{stt['day_streak']}</b>-day streak" + ("" if stt["done_today"] else " · +1 on your first finish")]
-        if stt["start_at"]:
-            pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
-        pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
-        st.markdown(
-            f"<div class='dod-mh'><div class='dod-mb'>{len(done) + len(sl_ok)}/{len(m) + len(sl_)} done"
-            + (f" · {_hm_left(left_min)} to go" if left_min > 0 else "") + "</div></div>"
-            f"<div class='dod-seg'>{segs}</div>"
-            "<div class='dod-pills'>" + "".join(f"<span>{x}</span>" for x in pills) + "</div>", unsafe_allow_html=True)
-        tm = state.get("timer")
-        if st.toggle("↕ Arrange & set start times", key="arrange_on"):
-            render_arrange(state, stt)
-        for t in m:
-            if t["status"] in ("done", "redeemed"):
-                st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>{html.escape(t['title'])}</s>"
-                            f" <span class='m'>+{t.get('reward', 0)} earned</span></div></div>", unsafe_allow_html=True)
-            elif t["status"] == "cancelled":
-                continue
-            elif t["status"] == "open":
-                dl = parse_dt(t["deadline"])
-                fm_ = t.get("focus_min") or 0
-                c1, c2 = st.container(key=f"mrow_{t['id']}").columns([6, 1], vertical_alignment="top")
-                _bk = t.get("block")
-                _lbl = (f"⏰ {datetime.strptime(_bk['start'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
-                        + f" · {t['title']} · {min_label(t.get('minutes') or 30)} · 🗺️ {goal_title(state, t.get('goal_id'))[:28]}"
-                        if _bk else (f"⏰ {datetime.strptime(t['start_set'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
-                                     + f" · {t['title']} · {min_label(t.get('minutes') or 30)}") if t.get("start_set")
-                        else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
-                with c1.expander(_lbl + f" · +{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
-                                 expanded=proof_open(f"today_open_{t['id']}")):
-                    render_paper_pair(state, t, "today_")
-                    render_proof_form(state, t, "open", scope="today_")
-                running = bool(tm) and tm.get("task_id") == t["id"]
-                if c2.button("⏱️" if running else "▶", key=f"mgo_{t['id']}", use_container_width=True,
-                             disabled=bool(tm), help="Running" if running else "Start a focus timer on this"):
-                    mins = Q.session_length(t)
-                    _start_timer(state, t, mins)
-                    flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
+                return
+            if not stt["qualified"]:
+                left = stt["deadline"] - n_
+                if left.total_seconds() > 0:
+                    mins_left = int(left.total_seconds() // 60)
+                    urgent = mins_left <= 30
+                    st.markdown(
+                        f"<div class='dod-mh'><div class='dod-mt'>🚦 Qualify by {stt['deadline']:%I:%M %p}</div>".replace("by 0", "by ")
+                        + f"<div class='dod-mb' style='color:{'#ff6a5c' if urgent else 'var(--muted)'}'>{fmt_left(left)} left</div></div>"
+                        f"<div class='dod-pills'><span>⛽ <b>+{c['qualify_fuel']}</b> fuel</span>"
+                        f"<span>Miss it: the safety car picks (−{c['qualify_penalty']})</span></div>", unsafe_allow_html=True)
+                else:
+                    if daily.peek_day(state, n_.date()).get("excused"):
+                        st.markdown("### 🚦 Lock in today's mission")
+                        st.caption(f"Qualifying was excused (the app was down at the deadline). Locking in still pays "
+                                   f"+{c['qualify_fuel']}.")
+                    else:
+                        st.markdown("### 🚦 Qualifying missed")
+                        st.caption("The safety car is out. You can still lock in your own mission.")
+                render_qualify_form(state)
+                if stt["pit_stops_left"] and left.total_seconds() > 0:
+                    if st.checkbox("Pull out before qualifying (sick / too tired to start)", key="pit_chk") and \
+                            st.button(f"🛌 Take a pit stop ({stt['pit_stops_left']} left this week)"):
+                        daily.pit_stop(state, n_)
+                        save_state(state)
+                        flash("🛌 Pit stop. Rest properly — the grid forms again tomorrow.", "info")
+                        st.rerun()
+                else:
+                    _bail_button(state, stt)
+                return
+            m, done = stt["mission"], stt["mission_done"]
+            m = mission_sorted(state, m)
+            open_m = [t for t in m if t["status"] == "open"]
+            sl_ = daily.slices(state, n_.date())
+            sl_ok = [x for x in sl_ if daily.slice_done(state, x, n_.date())]
+            left_min = sum(t.get("minutes") or 30 for t in open_m) + sum(
+                max(0, x["min"] - daily.slice_logged(state, x["tid"], n_.date())) for x in sl_ if x not in sl_ok)
+            segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
+                           "</i>" for t in m) + "".join(f"<i class='{'ok' if x in sl_ok else ''}'></i>" for x in sl_)
+            pills = [f"🔥 <b>{stt['day_streak']}</b>-day streak" + ("" if stt["done_today"] else " · +1 on your first finish")]
+            if stt["start_at"]:
+                pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
+            pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
+            st.markdown(
+                f"<div class='dod-mh'><div class='dod-mb'>{len(done) + len(sl_ok)}/{len(m) + len(sl_)} done"
+                + (f" · {_hm_left(left_min)} to go" if left_min > 0 else "") + "</div></div>"
+                f"<div class='dod-seg'>{segs}</div>"
+                "<div class='dod-pills'>" + "".join(f"<span>{x}</span>" for x in pills) + "</div>", unsafe_allow_html=True)
+            tm = state.get("timer")
+            if st.toggle("↕ Arrange & set start times", key="arrange_on"):
+                render_arrange(state, stt)
+            for t in m:
+                if t["status"] in ("done", "redeemed"):
+                    st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>{html.escape(t['title'])}</s>"
+                                f" <span class='m'>+{t.get('reward', 0)} earned</span></div></div>", unsafe_allow_html=True)
+                elif t["status"] == "cancelled":
+                    continue
+                elif t["status"] == "open":
+                    dl = parse_dt(t["deadline"])
+                    fm_ = t.get("focus_min") or 0
+                    c1, c2 = st.container(key=f"mrow_{t['id']}").columns([6, 1], vertical_alignment="top")
+                    _bk = t.get("block")
+                    _lbl = (f"⏰ {datetime.strptime(_bk['start'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
+                            + f" · {t['title']} · {min_label(t.get('minutes') or 30)} · 🗺️ {goal_title(state, t.get('goal_id'))[:28]}"
+                            if _bk else (f"⏰ {datetime.strptime(t['start_set'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
+                                         + f" · {t['title']} · {min_label(t.get('minutes') or 30)}") if t.get("start_set")
+                            else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
+                    with c1.expander(_lbl + f" · +{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
+                                     expanded=proof_open(f"today_open_{t['id']}")):
+                        render_paper_pair(state, t, "today_")
+                        render_proof_form(state, t, "open", scope="today_")
+                    running = bool(tm) and tm.get("task_id") == t["id"]
+                    if c2.button("⏱️" if running else "▶", key=f"mgo_{t['id']}", use_container_width=True,
+                                 disabled=bool(tm), help="Running" if running else "Start a focus timer on this"):
+                        mins = Q.session_length(t)
+                        _start_timer(state, t, mins)
+                        flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
+                        st.rerun()
+                else:
+                    st.markdown(f"<div class='dod-mrow bad'><span class='dod-dot'></span><div>{html.escape(t['title'])}"
+                                f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
+            for x in sl_:  # ⏱️ slices: locked in, finished by the timer
+                lg_ = daily.slice_logged(state, x["tid"], n_.date())
+                t_ = next((t for t in state["tasks"] if t["id"] == x["tid"]), None)
+                if x in sl_ok:
+                    st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>⏱️ {min_label(x['min'])} on "
+                                f"{html.escape(x['title'])}</s> <span class='m'>slice done</span></div></div>",
+                                unsafe_allow_html=True)
+                    continue
+                c1, c2 = st.container(key=f"msl_{x['tid']}").columns([6, 1], vertical_alignment="center")
+                pen_ = round(daily.SLICE_PEN_PER_HOUR * daily.level_factor(state) * (x["min"] - lg_) / 60)
+                c1.markdown(f"⏱️ **{min_label(x['min'])}** on {html.escape(x['title'])} "
+                            f"<span class='m'>· {hmin(lg_)} logged · −{pen_} if it's short at midnight</span>"
+                            f"<div class='dod-seg'><i class='ok' style='flex:{max(lg_, 0.01):.2f}'></i>"
+                            f"<i style='flex:{max(x['min'] - lg_, 0.01):.2f}'></i></div>", unsafe_allow_html=True)
+                running = bool(tm) and tm.get("task_id") == x["tid"]
+                if t_ and t_["status"] == "open" and c2.button(
+                        "⏱️" if running else "▶", key=f"mslgo_{x['tid']}", use_container_width=True, disabled=bool(tm),
+                        help="Running" if running else "Start the timer for the rest of this slice"):
+                    mins = max(5, int(round(x["min"] - lg_)))
+                    _start_timer(state, t_, mins)
+                    flash(f"▶️ **{t_['title']}** — {mins} min to finish the slice. Phone face-down.", sound="win")
                     st.rerun()
-            else:
-                st.markdown(f"<div class='dod-mrow bad'><span class='dod-dot'></span><div>{html.escape(t['title'])}"
-                            f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
-        for x in sl_:  # ⏱️ slices: locked in, finished by the timer
-            lg_ = daily.slice_logged(state, x["tid"], n_.date())
-            t_ = next((t for t in state["tasks"] if t["id"] == x["tid"]), None)
-            if x in sl_ok:
-                st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>⏱️ {min_label(x['min'])} on "
-                            f"{html.escape(x['title'])}</s> <span class='m'>slice done</span></div></div>",
-                            unsafe_allow_html=True)
-                continue
-            c1, c2 = st.container(key=f"msl_{x['tid']}").columns([6, 1], vertical_alignment="center")
-            pen_ = round(daily.SLICE_PEN_PER_HOUR * daily.level_factor(state) * (x["min"] - lg_) / 60)
-            c1.markdown(f"⏱️ **{min_label(x['min'])}** on {html.escape(x['title'])} "
-                        f"<span class='m'>· {hmin(lg_)} logged · −{pen_} if it's short at midnight</span>"
-                        f"<div class='dod-seg'><i class='ok' style='flex:{max(lg_, 0.01):.2f}'></i>"
-                        f"<i style='flex:{max(x['min'] - lg_, 0.01):.2f}'></i></div>", unsafe_allow_html=True)
-            running = bool(tm) and tm.get("task_id") == x["tid"]
-            if t_ and t_["status"] == "open" and c2.button(
-                    "⏱️" if running else "▶", key=f"mslgo_{x['tid']}", use_container_width=True, disabled=bool(tm),
-                    help="Running" if running else "Start the timer for the rest of this slice"):
-                mins = max(5, int(round(x["min"] - lg_)))
-                _start_timer(state, t_, mins)
-                flash(f"▶️ **{t_['title']}** — {mins} min to finish the slice. Phone face-down.", sound="win")
-                st.rerun()
-        if (m or sl_) and len(done) == len(m) and len(sl_ok) == len(sl_):
-            st.success("Mission complete. Anything else today is pure bonus. 🏆")
-        elif not stt["done_today"] and not daily.slice_worked(state, n_.date()) and n_.hour >= 18 \
-                and n_.weekday() not in daily.WEEKEND:
-            st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
-                       "Do the smallest one now.")
-        _only_booked = bool(m) and all(t.get("block") for t in m)
-        if _only_booked:
-            st.caption("🗺️ Your booked blocks got you qualified. Anything else today? Add it below.")
-        with fold("add_mission", "➕ Add to today's mission", _only_booked and n_ < stt["deadline"]):
-            render_qualify_form(state)
+            if (m or sl_) and len(done) == len(m) and len(sl_ok) == len(sl_):
+                st.success("Mission complete. Anything else today is pure bonus. 🏆")
+            elif not stt["done_today"] and not daily.slice_worked(state, n_.date()) and n_.hour >= 18 \
+                    and n_.weekday() not in daily.WEEKEND:
+                st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
+                           "Do the smallest one now.")
+            _only_booked = bool(m) and all(t.get("block") for t in m)
+            if _only_booked:
+                st.caption("🗺️ Your booked blocks got you qualified. Anything else today? Add it below.")
+            with fold("add_mission", "➕ Add to today's mission", _only_booked and n_ < stt["deadline"]) as _fo:
+                if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                    render_qualify_form(state)
 
 
 # ── 🪙 Coin sinks: race boosts · crew · dealer · turbo ──
@@ -3678,70 +3742,73 @@ def _crew_days(state: dict, k: str) -> int:
 
 def render_crew_card(state: dict) -> None:
     hired = [k for k in CR.CREW if k in state.get("crew", [])]
-    with fold("crew", "🧑‍🔧 **Your crew**" + (f" :gray[{len(hired)}]" if hired else ""), True, card=True):
-        if not hired:
-            st.markdown("<div class='dod-crew'>" + "".join(f"<div class='av ghost'>{CR.avatar_svg(k, 40)}</div>"
-                                                           for k in CR.CREW) + "</div>", unsafe_allow_html=True)
-            st.caption("Nobody in your garage yet. Hire a crew in 🔧 Garage: each brings a permanent perk, has "
-                       "opinions about your day, and tells you more about themselves the longer they're with you.")
-            return
-        ctx = crew_ctx(state)
-        mood = CR.mood(ctx)
-        salt = now().date().isoformat()
-        for k in hired:
-            c = CR.CREW[k]
-            days = _crew_days(state, k)
-            lvl, bname, nxt = CR.bond(days)
-            hearts = "❤️" * lvl if lvl else "🤍"
-            st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 52, mood)}</div><div>"
-                        f"<b>{c['name']}</b> <span class='r'>· {c['role']} · {hearts}</span>"
-                        f"<div class='say'>“{html.escape(CR.line(k, ctx, salt))}”</div></div></div>", unsafe_allow_html=True)
-        b_ = CR.banter(hired, ctx, salt + str(now().hour // 3))
-        if b_:
-            a, sa, b2, sb = b_
-            st.markdown(f"<div class='dod-banter'><b>{CR.CREW[a]['name']}:</b> {html.escape(sa)}<br>"
-                        f"<b>{CR.CREW[b2]['name']}:</b> {html.escape(sb)}</div>", unsafe_allow_html=True)
-        with fold("crew_know", "💬 Get to know your crew", False):
+    with fold("crew", "🧑‍🔧 **Your crew**" + (f" :gray[{len(hired)}]" if hired else ""), True, card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            if not hired:
+                st.markdown("<div class='dod-crew'>" + "".join(f"<div class='av ghost'>{CR.avatar_svg(k, 40)}</div>"
+                                                               for k in CR.CREW) + "</div>", unsafe_allow_html=True)
+                st.caption("Nobody in your garage yet. Hire a crew in 🔧 Garage: each brings a permanent perk, has "
+                           "opinions about your day, and tells you more about themselves the longer they're with you.")
+                return
+            ctx = crew_ctx(state)
+            mood = CR.mood(ctx)
+            salt = now().date().isoformat()
             for k in hired:
                 c = CR.CREW[k]
                 days = _crew_days(state, k)
                 lvl, bname, nxt = CR.bond(days)
-                st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 44)}</div><div><b>{c['name']}</b> "
-                            f"<span class='r'>· {c['role']} · bond: <b>{bname}</b> ({days} day{'s' * (days != 1)})"
-                            + (f" · next in {nxt} days" if nxt else "") + "</span>"
-                            f"<div class='say'>{html.escape(c['bio'])}</div></div></div>", unsafe_allow_html=True)
-                st.caption(f"Quirk: {c['quirk']} · Likes: {c['likes']} · Always says: “{c['catch']}”")
-                told = CR.stories(k, days)
-                for t_ in told:
-                    st.markdown(f"<div class='dod-banter'>“{html.escape(t_)}”</div>", unsafe_allow_html=True)
-                if len(told) < len(CR.STORIES[k]):
-                    st.caption(f"🔒 {len(CR.STORIES[k]) - len(told)} more stor{'ies' if len(CR.STORIES[k]) - len(told) > 1 else 'y'} "
-                               f"as you two get closer.")
+                hearts = "❤️" * lvl if lvl else "🤍"
+                st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 52, mood)}</div><div>"
+                            f"<b>{c['name']}</b> <span class='r'>· {c['role']} · {hearts}</span>"
+                            f"<div class='say'>“{html.escape(CR.line(k, ctx, salt))}”</div></div></div>", unsafe_allow_html=True)
+            b_ = CR.banter(hired, ctx, salt + str(now().hour // 3))
+            if b_:
+                a, sa, b2, sb = b_
+                st.markdown(f"<div class='dod-banter'><b>{CR.CREW[a]['name']}:</b> {html.escape(sa)}<br>"
+                            f"<b>{CR.CREW[b2]['name']}:</b> {html.escape(sb)}</div>", unsafe_allow_html=True)
+            with fold("crew_know", "💬 Get to know your crew", False) as _fo:
+                if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                    for k in hired:
+                        c = CR.CREW[k]
+                        days = _crew_days(state, k)
+                        lvl, bname, nxt = CR.bond(days)
+                        st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 44)}</div><div><b>{c['name']}</b> "
+                                    f"<span class='r'>· {c['role']} · bond: <b>{bname}</b> ({days} day{'s' * (days != 1)})"
+                                    + (f" · next in {nxt} days" if nxt else "") + "</span>"
+                                    f"<div class='say'>{html.escape(c['bio'])}</div></div></div>", unsafe_allow_html=True)
+                        st.caption(f"Quirk: {c['quirk']} · Likes: {c['likes']} · Always says: “{c['catch']}”")
+                        told = CR.stories(k, days)
+                        for t_ in told:
+                            st.markdown(f"<div class='dod-banter'>“{html.escape(t_)}”</div>", unsafe_allow_html=True)
+                        if len(told) < len(CR.STORIES[k]):
+                            st.caption(f"🔒 {len(CR.STORIES[k]) - len(told)} more stor{'ies' if len(CR.STORIES[k]) - len(told) > 1 else 'y'} "
+                                       f"as you two get closer.")
 
 
 def render_crew_hire(state: dict) -> None:
     crew = state.setdefault("crew", [])
-    with fold("crew_hire", f"🧑‍🔧 Crew — {len(crew)}/{len(CR.CREW)} hired", len(crew) < len(CR.CREW)):
-        st.caption("Hire once, keep forever. Each brings a permanent perk and shows up on Today.")
-        cols = st.columns(2)
-        for i, (k, c) in enumerate(CR.CREW.items()):
-            with cols[i % 2], st.container(border=True, key=f"crew_{k}"):
-                st.markdown(f"<div class='dod-crew'><div class='av{'' if k in crew else ' ghost'}'>{CR.avatar_svg(k, 56)}</div>"
-                            f"<div><b>{c['name']}</b> <span class='r'>· {c['role']}</span>"
-                            f"<div class='say'><b>{c['perk']}</b></div></div></div>", unsafe_allow_html=True)
-                st.caption(c["bio"])
-                price = dealer_price(state, "crew", k, c["price"])
-                if k in crew:
-                    st.caption("✅ On the team")
-                elif st.button(f"Hire · {price:,} 🪙", key=f"hire_{k}", use_container_width=True,
-                               disabled=state["coins"] < price, type="primary"):
-                    bank(state, -price, f"🧑‍🔧 Hired {c['name']} ({c['role']})")
-                    crew.append(k)
-                    state.setdefault("crew_since", {})[k] = now().date().isoformat()
-                    _dealer_sold(state, "crew", k)
-                    save_state(state)
-                    flash(f"🧑‍🔧 **{c['name']}** joined the crew: {c['perk']}.", celebrate=True, sound="jackpot")
-                    st.rerun()
+    with fold("crew_hire", f"🧑‍🔧 Crew — {len(crew)}/{len(CR.CREW)} hired", len(crew) < len(CR.CREW)) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.caption("Hire once, keep forever. Each brings a permanent perk and shows up on Today.")
+            cols = st.columns(2)
+            for i, (k, c) in enumerate(CR.CREW.items()):
+                with cols[i % 2], st.container(border=True, key=f"crew_{k}"):
+                    st.markdown(f"<div class='dod-crew'><div class='av{'' if k in crew else ' ghost'}'>{CR.avatar_svg(k, 56)}</div>"
+                                f"<div><b>{c['name']}</b> <span class='r'>· {c['role']}</span>"
+                                f"<div class='say'><b>{c['perk']}</b></div></div></div>", unsafe_allow_html=True)
+                    st.caption(c["bio"])
+                    price = dealer_price(state, "crew", k, c["price"])
+                    if k in crew:
+                        st.caption("✅ On the team")
+                    elif st.button(f"Hire · {price:,} 🪙", key=f"hire_{k}", use_container_width=True,
+                                   disabled=state["coins"] < price, type="primary"):
+                        bank(state, -price, f"🧑‍🔧 Hired {c['name']} ({c['role']})")
+                        crew.append(k)
+                        state.setdefault("crew_since", {})[k] = now().date().isoformat()
+                        _dealer_sold(state, "crew", k)
+                        save_state(state)
+                        flash(f"🧑‍🔧 **{c['name']}** joined the crew: {c['perk']}.", celebrate=True, sound="jackpot")
+                        st.rerun()
 
 
 def _dealer_window() -> int:
@@ -3895,93 +3962,95 @@ def render_commitments(state: dict) -> None:
     done_today = sum(1 for c in cs if (CM.rec(state, c["id"], n_.date()) or {}).get("status") in ("attended", "late", "visit"))
     label = "📍 **Commitments**" + (f" :gray[{done_today}/{len(today_) + sum(1 for q in quotas if not q.get('days') or n_.weekday() in q['days'])} today]"
                                      if today_ or quotas else "")
-    with fold("commitments", label, True, card=True):
-        if not cs:
-            st.caption("Things you've said you'll show up for: classes, coaching, volunteering, the office 3× a week, "
-                       "a club event. Check in when you get there; a no-show without notice costs.")
-        for c, t in shown:
-            r = CM.rec(state, c["id"], t.date()) or {}
-            opens, on_time, end = CM.window(c, t)
-            fire = f" · 🔥 {c['streak']}" if c.get("streak") else ""
-            head = f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {_cm_when(c, t)}{fire}"
-            with st.container(border=True, key=f"cm_{c['id']}_{t.date()}"):
-                stt_ = r.get("status")
-                if stt_ in ("attended", "late"):
-                    st.markdown(head + f"  \n✅ {'On time' if stt_ == 'attended' else 'Late'} · +{r.get('paid', 0)}"
-                                + (" · 📷" if r.get("how") == "photo" else f" · 📍 {r['dist']} m" if r.get("dist") is not None else ""))
-                    continue
-                if stt_ == "cancelled":
-                    st.markdown(head + f"  \n🚫 Cancelled: {html.escape(r.get('reason', ''))}"
-                                + (f" · −{r['cost']}" if r.get("cost") else " · free"))
-                    continue
-                st.markdown(head)
-                if t.date() == n_.date() and opens <= n_ <= end:
-                    late = n_ > on_time
-                    st.caption(("⏰ Late now: half pay." if late else
-                                f"Check-in is open · on time until {on_time:%I:%M %p}".replace(" 0", " ")))
-                    fix = _geo("📍 I'm here" + (" (late)" if late else ""), f"cmgeo_{c['id']}_{t.date()}")
-                    if fix:
-                        ok, how, dist = CM.verify(c, fix if not fix.get("err") else None, False)
-                        if ok:
-                            _cm_done(*CM.check_in(state, c, n_, how, dist, bank, lf))
-                        else:
-                            st.warning(f"Not verified: {how}.")
-                    if _cm_photo(state, c, f"cmph_{c['id']}_{t.date()}"):
-                        _cm_done(*CM.check_in(state, c, n_, "photo", None, bank, lf))
-                else:
-                    pen = round(CM.STAKES[c["stakes"]]["flake"] * lf)
-                    st.caption(f"Check-in opens {opens:%I:%M %p}".replace(" 0", " ")
-                               + (f" · 🌱 warm-up: counts from {CM.counts_from(c):%a %b} {CM.counts_from(c).day}"
-                                  if CM.warming_up(c, t.date()) else
-                                  f" · no-show without notice: −{pen}" if pen else " · bonus only"))
-                    if True:  # cancelling is always possible (and free 3+ h ahead with a reason)
-                        with st.popover("🚫 Can't make it", use_container_width=False):
-                            free_ = (t - n_).total_seconds() / 3600 >= CM.CANCEL_AHEAD_H
-                            st.caption("Free with a reason (3 a month)." if free_ else
-                                       f"Under {CM.CANCEL_AHEAD_H} h out: costs half a flake. Still better than a no-show.")
-                            why = st.text_input("Why", key=f"cmwhy_{c['id']}_{t.date()}", placeholder="Class cancelled · sick · …")
-                            if st.button("Cancel this one", key=f"cmcx_{c['id']}_{t.date()}"):
-                                _cm_done(*CM.cancel(state, c, t.date(), n_, why, bank, lf))
-        for c in quotas:
-            done, target, ws, we = CM.quota_week(state, c, n_.date())
-            need, left = CM.quota_pace(state, c, n_.date())
-            r = CM.rec(state, c["id"], n_.date()) or {}
-            with st.container(border=True, key=f"cmq_{c['id']}"):
-                pace = ("✅ Week done" if not need else
-                        f"🌱 warm-up week: counts from {CM.counts_from(c):%a %b} {CM.counts_from(c).day}"
-                        if CM.warming_up(c, n_.date()) else
-                        f"⚠️ {need} left, {left} day{'s' * (left != 1)} to go" if need >= left else
-                        f"{need} left · {left} days to go")
-                st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {done}/{target} this week · {pace}"
-                            + (f" · 🔥 {c['streak']} wk" if c.get("streak") else "")
-                            + f"<div class='dod-seg'>" + "".join(f"<i class='{'ok' if i < done else ''}'></i>" for i in range(target))
-                            + "</div>", unsafe_allow_html=True)
-                today_ok = not c.get("days") or n_.weekday() in c["days"]
-                if r.get("status") == "visit":
-                    st.caption(f"✅ Today counted · {r.get('stay', 0)} min")
-                elif r.get("status") == "in":
-                    stayed = (n_ - datetime.fromisoformat(r["at"])).total_seconds() / 60
-                    st.caption(f"📍 In since {datetime.fromisoformat(r['at']):%I:%M %p}".replace(" 0", " ")
-                               + f" · {hmin(stayed)} of {hmin(c['stay'])}")
-                    if st.button("👋 Tap out", key=f"cmout_{c['id']}", disabled=stayed < c["stay"],
-                                 help=None if stayed >= c["stay"] else f"Counts after {hmin(c['stay'])}"):
-                        _cm_done(*CM.check_out(state, c, n_, bank, lf))
-                elif today_ok and need:
-                    fix = _geo("📍 I'm here", f"cmqgeo_{c['id']}_{n_.date()}")
-                    if fix:
-                        ok, how, dist = CM.verify(c, fix if not fix.get("err") else None, False)
-                        if ok:
-                            _cm_done(*CM.check_in(state, c, n_, how, dist, bank, lf))
-                        else:
-                            st.warning(f"Not verified: {how}.")
-                    if _cm_photo(state, c, f"cmqph_{c['id']}_{n_.date()}"):
-                        _cm_done(*CM.check_in(state, c, n_, "photo", None, bank, lf))
-        later = [(c, t) for c, t in soon if t.date() > n_.date() + timedelta(days=1)]
-        if later:
-            st.caption("Later this week: " + " · ".join(f"{c['name']} {t:%a %b} {t.day} {t:%I:%M %p}".replace(" 0", " ")
-                                                         for c, t in later[:6]))
-        with fold("cm_manage", "➕ Add a commitment" if not cs else "⚙️ Add & manage commitments", False):
-            render_commitments_manage(state)
+    with fold("commitments", label, True, card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            if not cs:
+                st.caption("Things you've said you'll show up for: classes, coaching, volunteering, the office 3× a week, "
+                           "a club event. Check in when you get there; a no-show without notice costs.")
+            for c, t in shown:
+                r = CM.rec(state, c["id"], t.date()) or {}
+                opens, on_time, end = CM.window(c, t)
+                fire = f" · 🔥 {c['streak']}" if c.get("streak") else ""
+                head = f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {_cm_when(c, t)}{fire}"
+                with st.container(border=True, key=f"cm_{c['id']}_{t.date()}"):
+                    stt_ = r.get("status")
+                    if stt_ in ("attended", "late"):
+                        st.markdown(head + f"  \n✅ {'On time' if stt_ == 'attended' else 'Late'} · +{r.get('paid', 0)}"
+                                    + (" · 📷" if r.get("how") == "photo" else f" · 📍 {r['dist']} m" if r.get("dist") is not None else ""))
+                        continue
+                    if stt_ == "cancelled":
+                        st.markdown(head + f"  \n🚫 Cancelled: {html.escape(r.get('reason', ''))}"
+                                    + (f" · −{r['cost']}" if r.get("cost") else " · free"))
+                        continue
+                    st.markdown(head)
+                    if t.date() == n_.date() and opens <= n_ <= end:
+                        late = n_ > on_time
+                        st.caption(("⏰ Late now: half pay." if late else
+                                    f"Check-in is open · on time until {on_time:%I:%M %p}".replace(" 0", " ")))
+                        fix = _geo("📍 I'm here" + (" (late)" if late else ""), f"cmgeo_{c['id']}_{t.date()}")
+                        if fix:
+                            ok, how, dist = CM.verify(c, fix if not fix.get("err") else None, False)
+                            if ok:
+                                _cm_done(*CM.check_in(state, c, n_, how, dist, bank, lf))
+                            else:
+                                st.warning(f"Not verified: {how}.")
+                        if _cm_photo(state, c, f"cmph_{c['id']}_{t.date()}"):
+                            _cm_done(*CM.check_in(state, c, n_, "photo", None, bank, lf))
+                    else:
+                        pen = round(CM.STAKES[c["stakes"]]["flake"] * lf)
+                        st.caption(f"Check-in opens {opens:%I:%M %p}".replace(" 0", " ")
+                                   + (f" · 🌱 warm-up: counts from {CM.counts_from(c):%a %b} {CM.counts_from(c).day}"
+                                      if CM.warming_up(c, t.date()) else
+                                      f" · no-show without notice: −{pen}" if pen else " · bonus only"))
+                        if True:  # cancelling is always possible (and free 3+ h ahead with a reason)
+                            with st.popover("🚫 Can't make it", use_container_width=False):
+                                free_ = (t - n_).total_seconds() / 3600 >= CM.CANCEL_AHEAD_H
+                                st.caption("Free with a reason (3 a month)." if free_ else
+                                           f"Under {CM.CANCEL_AHEAD_H} h out: costs half a flake. Still better than a no-show.")
+                                why = st.text_input("Why", key=f"cmwhy_{c['id']}_{t.date()}", placeholder="Class cancelled · sick · …")
+                                if st.button("Cancel this one", key=f"cmcx_{c['id']}_{t.date()}"):
+                                    _cm_done(*CM.cancel(state, c, t.date(), n_, why, bank, lf))
+            for c in quotas:
+                done, target, ws, we = CM.quota_week(state, c, n_.date())
+                need, left = CM.quota_pace(state, c, n_.date())
+                r = CM.rec(state, c["id"], n_.date()) or {}
+                with st.container(border=True, key=f"cmq_{c['id']}"):
+                    pace = ("✅ Week done" if not need else
+                            f"🌱 warm-up week: counts from {CM.counts_from(c):%a %b} {CM.counts_from(c).day}"
+                            if CM.warming_up(c, n_.date()) else
+                            f"⚠️ {need} left, {left} day{'s' * (left != 1)} to go" if need >= left else
+                            f"{need} left · {left} days to go")
+                    st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {done}/{target} this week · {pace}"
+                                + (f" · 🔥 {c['streak']} wk" if c.get("streak") else "")
+                                + f"<div class='dod-seg'>" + "".join(f"<i class='{'ok' if i < done else ''}'></i>" for i in range(target))
+                                + "</div>", unsafe_allow_html=True)
+                    today_ok = not c.get("days") or n_.weekday() in c["days"]
+                    if r.get("status") == "visit":
+                        st.caption(f"✅ Today counted · {r.get('stay', 0)} min")
+                    elif r.get("status") == "in":
+                        stayed = (n_ - datetime.fromisoformat(r["at"])).total_seconds() / 60
+                        st.caption(f"📍 In since {datetime.fromisoformat(r['at']):%I:%M %p}".replace(" 0", " ")
+                                   + f" · {hmin(stayed)} of {hmin(c['stay'])}")
+                        if st.button("👋 Tap out", key=f"cmout_{c['id']}", disabled=stayed < c["stay"],
+                                     help=None if stayed >= c["stay"] else f"Counts after {hmin(c['stay'])}"):
+                            _cm_done(*CM.check_out(state, c, n_, bank, lf))
+                    elif today_ok and need:
+                        fix = _geo("📍 I'm here", f"cmqgeo_{c['id']}_{n_.date()}")
+                        if fix:
+                            ok, how, dist = CM.verify(c, fix if not fix.get("err") else None, False)
+                            if ok:
+                                _cm_done(*CM.check_in(state, c, n_, how, dist, bank, lf))
+                            else:
+                                st.warning(f"Not verified: {how}.")
+                        if _cm_photo(state, c, f"cmqph_{c['id']}_{n_.date()}"):
+                            _cm_done(*CM.check_in(state, c, n_, "photo", None, bank, lf))
+            later = [(c, t) for c, t in soon if t.date() > n_.date() + timedelta(days=1)]
+            if later:
+                st.caption("Later this week: " + " · ".join(f"{c['name']} {t:%a %b} {t.day} {t:%I:%M %p}".replace(" 0", " ")
+                                                             for c, t in later[:6]))
+            with fold("cm_manage", "➕ Add a commitment" if not cs else "⚙️ Add & manage commitments", False) as _fo:
+                if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                    render_commitments_manage(state)
 
 
 C_STAKE_DOT = {"red": "🔴", "yellow": "🟡", "green": "🟢"}
@@ -4236,21 +4305,22 @@ def render_arrange(state: dict, stt: dict) -> None:
         daily.day(state, now().date())["order"] = got["m"]
         save_state(state)
         st.rerun()
-    with fold("start_times", "⏰ Start times (optional)", any(t.get("start_set") for t in m)):
-        st.caption("Leave a start on “any” and the day's plan decides. A set time gets a phone heads-up and a ▶ Start. "
-                   "The second box is when it's due: set today, it can move to any time today; otherwise only earlier.")
-        for t in m:
-            st.markdown(f"<div class='dod-arr'>{html.escape(t['title'])}</div>", unsafe_allow_html=True)
-            with st.container(key=f"arrrow_{t['id']}"):
-                c3, c4 = st.columns(2, vertical_alignment="center")
-            _due_box(state, t, c4)
-            cur = t.get("start_set") or ((t.get("block") or {}).get("start"))
-            k = f"arr_t_{t['id']}"
-            opts_ = ARR_TIMES if not cur or cur in ARR_TIMES else sorted(ARR_TIMES + [cur])
-            c3.selectbox("Start", ["—"] + opts_, index=(["—"] + opts_).index(cur) if cur else 0, key=k,
-                         format_func=lambda v: "start: any" if v == "—" else
-                         datetime.strptime(v, "%H:%M").strftime("%I:%M %p").lstrip("0"),
-                         label_visibility="collapsed", on_change=_set_start, args=(state, t["id"], k))
+    with fold("start_times", "⏰ Start times (optional)", any(t.get("start_set") for t in m)) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.caption("Leave a start on “any” and the day's plan decides. A set time gets a phone heads-up and a ▶ Start. "
+                       "The second box is when it's due: set today, it can move to any time today; otherwise only earlier.")
+            for t in m:
+                st.markdown(f"<div class='dod-arr'>{html.escape(t['title'])}</div>", unsafe_allow_html=True)
+                with st.container(key=f"arrrow_{t['id']}"):
+                    c3, c4 = st.columns(2, vertical_alignment="center")
+                _due_box(state, t, c4)
+                cur = t.get("start_set") or ((t.get("block") or {}).get("start"))
+                k = f"arr_t_{t['id']}"
+                opts_ = ARR_TIMES if not cur or cur in ARR_TIMES else sorted(ARR_TIMES + [cur])
+                c3.selectbox("Start", ["—"] + opts_, index=(["—"] + opts_).index(cur) if cur else 0, key=k,
+                             format_func=lambda v: "start: any" if v == "—" else
+                             datetime.strptime(v, "%H:%M").strftime("%I:%M %p").lstrip("0"),
+                             label_visibility="collapsed", on_change=_set_start, args=(state, t["id"], k))
 
 
 def render_up_next(state: dict) -> None:
@@ -4334,42 +4404,43 @@ def render_todo(state: dict) -> None:
     real task due tonight). They also show up as picks when you qualify."""
     todos = state.setdefault("todos", [])
     open_ = [x for x in todos if not x.get("done")]
-    with fold("todo", f"📝 **To-do** :gray[{len(open_)} · no due dates]", default=True, card=True):
-        with st.form("todo_add", clear_on_submit=True, border=False):
-            c1, c2 = st.columns([5, 1.2], vertical_alignment="bottom")
-            txt = c1.text_input("Add a to-do", placeholder="Something to do some time… (add “45m” for a length)",
-                                label_visibility="collapsed", key="todo_txt")
-            if c2.form_submit_button("Add", use_container_width=True, key="todo_add_go") and (txt or "").strip():
-                p_ = Q.parse(txt.strip(), now())
-                todos.append({"id": uuid.uuid4().hex[:8], "title": (p_.get("title") or txt).strip(),
-                              "minutes": p_.get("minutes") if re.search(r"\d\s*(m|min|h|hr)", txt, re.I) else None,
-                              "created": now().isoformat()})
-                save_state(state)
-                st.rerun()
-        if not open_:
-            st.caption("Nothing here. Park anything without a deadline: it'll be offered when you plan your day.")
-        qual = daily.peek_day(state, now().date()).get("qualified")
-        for d_ in open_:
-            c1, c2, c3 = st.columns([6, 1.6, .8], vertical_alignment="center")
-            if c1.checkbox(d_["title"] + (f" · {min_label(d_['minutes'])}" if d_.get("minutes") else ""),
-                           key=f"todo_ck_{d_['id']}"):
-                d_.update(done=True, done_at=now().isoformat())
-                state["todos"] = [x for x in todos if not x.get("done")] + [x for x in todos if x.get("done")][-20:]
-                save_state(state)
-                flash(f"📝 Ticked off **{d_['title'][:60]}**.")
-                st.rerun()
-            if c2.button("➕ Today", key=f"todo_today_{d_['id']}", use_container_width=True,
-                         help="Make it a real task due tonight" + (" and add it to today's mission." if qual else ".")):
-                t = todo_to_task(state, d_, datetime.combine(now().date(), dtime(23, 59), TZ))
-                if qual:
-                    t["mission_day"] = now().date().isoformat()
-                save_state(state)
-                flash(f"➕ **{t['title']}** is a task now, due tonight" + (" · in today's mission." if qual else "."))
-                st.rerun()
-            if c3.button("✕", key=f"todo_x_{d_['id']}", help="Remove (no penalty)"):
-                state["todos"] = [x for x in todos if x["id"] != d_["id"]]
-                save_state(state)
-                st.rerun()
+    with fold("todo", f"📝 **To-do** :gray[{len(open_)} · no due dates]", default=True, card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            with st.form("todo_add", clear_on_submit=True, border=False):
+                c1, c2 = st.columns([5, 1.2], vertical_alignment="bottom")
+                txt = c1.text_input("Add a to-do", placeholder="Something to do some time… (add “45m” for a length)",
+                                    label_visibility="collapsed", key="todo_txt")
+                if c2.form_submit_button("Add", use_container_width=True, key="todo_add_go") and (txt or "").strip():
+                    p_ = Q.parse(txt.strip(), now())
+                    todos.append({"id": uuid.uuid4().hex[:8], "title": (p_.get("title") or txt).strip(),
+                                  "minutes": p_.get("minutes") if re.search(r"\d\s*(m|min|h|hr)", txt, re.I) else None,
+                                  "created": now().isoformat()})
+                    save_state(state)
+                    st.rerun()
+            if not open_:
+                st.caption("Nothing here. Park anything without a deadline: it'll be offered when you plan your day.")
+            qual = daily.peek_day(state, now().date()).get("qualified")
+            for d_ in open_:
+                c1, c2, c3 = st.columns([6, 1.6, .8], vertical_alignment="center")
+                if c1.checkbox(d_["title"] + (f" · {min_label(d_['minutes'])}" if d_.get("minutes") else ""),
+                               key=f"todo_ck_{d_['id']}"):
+                    d_.update(done=True, done_at=now().isoformat())
+                    state["todos"] = [x for x in todos if not x.get("done")] + [x for x in todos if x.get("done")][-20:]
+                    save_state(state)
+                    flash(f"📝 Ticked off **{d_['title'][:60]}**.")
+                    st.rerun()
+                if c2.button("➕ Today", key=f"todo_today_{d_['id']}", use_container_width=True,
+                             help="Make it a real task due tonight" + (" and add it to today's mission." if qual else ".")):
+                    t = todo_to_task(state, d_, datetime.combine(now().date(), dtime(23, 59), TZ))
+                    if qual:
+                        t["mission_day"] = now().date().isoformat()
+                    save_state(state)
+                    flash(f"➕ **{t['title']}** is a task now, due tonight" + (" · in today's mission." if qual else "."))
+                    st.rerun()
+                if c3.button("✕", key=f"todo_x_{d_['id']}", help="Remove (no penalty)"):
+                    state["todos"] = [x for x in todos if x["id"] != d_["id"]]
+                    save_state(state)
+                    st.rerun()
 
 
 def render_goals_today(state: dict) -> None:
@@ -4379,38 +4450,39 @@ def render_goals_today(state: dict) -> None:
     live = [g for g in state["goals"] if not g.get("claimed") and date.fromisoformat(g["target"]) >= today]
     if not live:
         return
-    with fold("goals_today", f"🗺️ **Your goals** :gray[{len(live)}]", card=True):
-        for g in sorted(live, key=lambda g: g["target"])[:4]:
-            gt = R.goal_tasks(g, state["tasks"])
-            d_, n_all = R.progress(gt)
-            days = (date.fromisoformat(g["target"]) - today).days
-            nxt = min((t for t in gt if t["status"] == "open"),
-                      key=lambda t: t.get("scheduled") or t["deadline"], default=None)
-            if nxt and R.block_at(nxt, TZ):
-                nx = f"next: {html.escape(nxt['title'])} · {_when(R.block_at(nxt, TZ))}"
-            elif nxt:
-                nx = f"next: {html.escape(nxt['title'])} · due {_when(parse_dt(nxt['deadline']))}"
-            else:
-                nx = "nothing booked yet"
-            pct = int(100 * d_ / n_all) if n_all else 0
-            today_bl = [t for t in gt if (t.get("block") or {}).get("date") == today.isoformat()]
-            c1, c2 = st.columns([5, 2], vertical_alignment="center")
-            c1.markdown(f"<div class='dod-goal'><div class='h'><b>{html.escape(g['title'])}</b>"
-                        f"<span>{'today' if days == 0 else f'{days} d'}</span></div>"
-                        f"<div class='bar'><i style='width:{pct}%'></i></div>"
-                        f"<div class='m'>{d_}/{n_all} done · {nx}</div></div>", unsafe_allow_html=True)
-            if today_bl:
-                c2.markdown(f"<div class='dod-goal-tag'>✅ {len(today_bl)} booked today</div>", unsafe_allow_html=True)
-            elif c2.button("🗓️ Book 45 min", key=f"gbook_{g['id']}", use_container_width=True,
-                           help="Books the next half hour for this goal: it joins today's mission and Fortuna."):
-                t = _book_now(state, g)
-                if t:
-                    save_state(state)
-                    flash(f"🗓️ Booked **{t['title']}** at {R.block_at(t, TZ):%I:%M %p}. It's in today's mission.")
-                    st.rerun()
+    with fold("goals_today", f"🗺️ **Your goals** :gray[{len(live)}]", card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            for g in sorted(live, key=lambda g: g["target"])[:4]:
+                gt = R.goal_tasks(g, state["tasks"])
+                d_, n_all = R.progress(gt)
+                days = (date.fromisoformat(g["target"]) - today).days
+                nxt = min((t for t in gt if t["status"] == "open"),
+                          key=lambda t: t.get("scheduled") or t["deadline"], default=None)
+                if nxt and R.block_at(nxt, TZ):
+                    nx = f"next: {html.escape(nxt['title'])} · {_when(R.block_at(nxt, TZ))}"
+                elif nxt:
+                    nx = f"next: {html.escape(nxt['title'])} · due {_when(parse_dt(nxt['deadline']))}"
                 else:
-                    st.toast("Too late to book today. Plan tomorrow in the Goals tab.")
-        st.button("Open the roadmaps →", key="goals_open", type="tertiary", on_click=_go_tab, args=("🎯 Goals",))
+                    nx = "nothing booked yet"
+                pct = int(100 * d_ / n_all) if n_all else 0
+                today_bl = [t for t in gt if (t.get("block") or {}).get("date") == today.isoformat()]
+                c1, c2 = st.columns([5, 2], vertical_alignment="center")
+                c1.markdown(f"<div class='dod-goal'><div class='h'><b>{html.escape(g['title'])}</b>"
+                            f"<span>{'today' if days == 0 else f'{days} d'}</span></div>"
+                            f"<div class='bar'><i style='width:{pct}%'></i></div>"
+                            f"<div class='m'>{d_}/{n_all} done · {nx}</div></div>", unsafe_allow_html=True)
+                if today_bl:
+                    c2.markdown(f"<div class='dod-goal-tag'>✅ {len(today_bl)} booked today</div>", unsafe_allow_html=True)
+                elif c2.button("🗓️ Book 45 min", key=f"gbook_{g['id']}", use_container_width=True,
+                               help="Books the next half hour for this goal: it joins today's mission and Fortuna."):
+                    t = _book_now(state, g)
+                    if t:
+                        save_state(state)
+                        flash(f"🗓️ Booked **{t['title']}** at {R.block_at(t, TZ):%I:%M %p}. It's in today's mission.")
+                        st.rerun()
+                    else:
+                        st.toast("Too late to book today. Plan tomorrow in the Goals tab.")
+            st.button("Open the roadmaps →", key="goals_open", type="tertiary", on_click=_go_tab, args=("🎯 Goals",))
 
 
 def render_car_card(state: dict) -> None:
@@ -4627,18 +4699,19 @@ def render_checkin(state: dict) -> None:
     d = now().date()
     if J.peek(state, d).get("am") or now().hour >= 15 or now().hour < J.NEW_DAY_AT:
         return
-    with fold("checkin", "☀️ **How are you starting today?** :gray[+2 · one tap each]", card=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            mood = _scale_pills("Mood", J.MOODS, "ci_mood")
-        with c2:
-            energy = _scale_pills("Energy", J.ENERGY, "ci_energy")
-        if mood and energy:
-            got = J.check_in(state, d, mood, energy, now(), bank)
-            save_state(state)
-            flash(f"☀️ Logged: {J.MOODS[mood]} {J.MOOD_WORDS[mood]}, energy {J.ENERGY[energy]}"
-                  + (f" · +{got}" if got else ""))
-            st.rerun()
+    with fold("checkin", "☀️ **How are you starting today?** :gray[+2 · one tap each]", card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            c1, c2 = st.columns(2)
+            with c1:
+                mood = _scale_pills("Mood", J.MOODS, "ci_mood")
+            with c2:
+                energy = _scale_pills("Energy", J.ENERGY, "ci_energy")
+            if mood and energy:
+                got = J.check_in(state, d, mood, energy, now(), bank)
+                save_state(state)
+                flash(f"☀️ Logged: {J.MOODS[mood]} {J.MOOD_WORDS[mood]}, energy {J.ENERGY[energy]}"
+                      + (f" · +{got}" if got else ""))
+                st.rerun()
 
 
 def _journal_form(state: dict, d, key: str) -> None:
@@ -4688,10 +4761,11 @@ def render_close_day(state: dict) -> None:
                     "</div>", unsafe_allow_html=True)
         return
     late = d != now().date()
-    with fold("closeday", "📓 **Close the day**" + (f" :gray[{d:%A} · open till {J.PM_CLOSES} AM]" if late else ""), card=True):
-        st.caption(f"Two taps and a few lines. +{J.PM_BASE} for the taps, +{J.PM_PER_ANSWER} per real answer "
-                   f"(up to +{J.PM_MAX}). It all lands in Log → Journal and your weekly recap.")
-        _journal_form(state, d, "cd")
+    with fold("closeday", "📓 **Close the day**" + (f" :gray[{d:%A} · open till {J.PM_CLOSES} AM]" if late else ""), card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.caption(f"Two taps and a few lines. +{J.PM_BASE} for the taps, +{J.PM_PER_ANSWER} per real answer "
+                       f"(up to +{J.PM_MAX}). It all lands in Log → Journal and your weekly recap.")
+            _journal_form(state, d, "cd")
 
 
 def render_journal(state: dict) -> None:
@@ -4728,8 +4802,9 @@ def render_journal(state: dict) -> None:
                    f"{r['focus_low_mood']:.0f} min.")
     st.markdown(f"<div class='dod-rc-h'>🏆 Wins <span>{len(r['wins'])}</span></div>"
                 + _recap_cards(r["wins"], "win", "None written yet."), unsafe_allow_html=True)
-    with fold("jr_recap", "📋 Recap to paste", False):
-        st.code(J.recap_text(r), language=None)
+    with fold("jr_recap", "📋 Recap to paste", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.code(J.recap_text(r), language=None)
     if journal_cfg(state):
         if st.button("🔄 Pull entries I wrote in Notion", key="jr_pull", help="Brings in the last 7 days of entries you "
                      "wrote straight into your Notion journal (this also runs by itself when you open the app)."):
@@ -4748,8 +4823,9 @@ def render_journal(state: dict) -> None:
         st.caption(f"🌙 The journal reopens at {J.NEW_DAY_AT} AM for the new day.")
     elif not J.peek(state, jd).get("pm"):
         with fold("jr_today", ("✏️ Today" if jd == today else f"✏️ {jd:%A} (open till {J.PM_CLOSES} AM)")
-                  + f", {jd:%a %b} {jd.day} · not journaled yet", False):
-            _journal_form(state, jd, "jt")
+                  + f", {jd:%a %b} {jd.day} · not journaled yet", False) as _fo:
+            if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                _journal_form(state, jd, "jt")
     ents = J.entries(state)
     if not ents:
         st.caption("Your check-ins and evening entries land here, one card per day.")
@@ -4821,8 +4897,9 @@ def render_scrapbook(state: dict) -> None:
     st.markdown(f"<div class='dod-pills'><span>✅ <b>{len(ts)}</b> done</span><span>🕒 <b>{hmin(mins)}</b> of work"
                 f"</span><span>⏱️ <b>{hmin(timed)}</b> on the timer</span><span>🪙 <b>+{sum(t.get('reward', 0) for t in ts)}"
                 f"</b></span></div>", unsafe_allow_html=True)
-    with fold("stats_recap", "📋 Recap to paste (supervisor meeting, journal, thesis log)", False):
-        st.code(_recap_text(ts, per), language=None)
+    with fold("stats_recap", "📋 Recap to paste (supervisor meeting, journal, thesis log)", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.code(_recap_text(ts, per), language=None)
     cfg = notion_cfg()
     cols = st.columns(3)
     fetched = 0
@@ -5012,94 +5089,95 @@ def render_timer(state: dict, big: bool = False) -> None:
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
                     key=lambda t: (t.get("mission_day") != now().date().isoformat(), t["deadline"]))
     with fold("timer", "⏱️ **Focus timer**" + (" :red[● running]" if tm and not tm.get("paused") else
-                                              " :orange[❚❚ paused]" if tm else ""), card=True):
-        if not tm:
-            labels = {t["id"]: t["title"] for t in open_t}
-            labels[NEW_SESSION] = "✏️ New task…"
-            c1, c2 = st.container(key="row_tm1").columns([1.6, 1])
-            tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
-                               label_visibility="collapsed")
-            planned = c2.selectbox("Minutes", TIMER_LENGTHS + [0, FLOW_MODE], key="timer_len", label_visibility="collapsed",
-                                   index=TIMER_LENGTHS.index(25),
-                                   format_func=lambda m: "🌊 Flow (count up)" if m == FLOW_MODE else
-                                   f"{m} min" if m else "Custom…")
-            flow = planned == FLOW_MODE
-            every = FLOW_CHECK
-            if flow:
-                planned = FLOW_CAP
-                every = _flow_every_pick(state, "timer_every")
-                st.caption(f"🌊 **Flow:** counts up, no breaks. Every {every} min it checks you're still going (one tap); "
-                           f"no answer in {FLOW_GRACE} min and it logs up to the check-in. You bank one free pause per stretch; "
-                           f"unused ones carry over. Loot rolls every 25 min.")
-            elif not planned:
-                planned = int(c2.number_input("Custom minutes", 5, 240, int(state["settings"].get("timer_custom", 40)),
-                                              5, key="timer_custom", label_visibility="collapsed"))
-                if planned != state["settings"].get("timer_custom"):
-                    state["settings"]["timer_custom"] = planned
-            new_name = ""
-            if tid == NEW_SESSION:
-                new_name = st.text_input("What are you working on?", key="timer_new", max_chars=120,
-                                         placeholder="e.g. Poster figures · blank = just a focus session",
-                                         label_visibility="collapsed")
-                st.caption("Becomes a task due tonight. Run the timer and it's your proof — finish it after.")
-            c3, c4 = st.container(key="row_tm2").columns([1.6, 1])
-            work, brk = (None, None) if flow else _pomo_pick(state, c3)
-            if c4.button("🎲 Pick for me", use_container_width=True, key="pick_next",
-                         help="Picks your best next task and starts the timer"):
-                pick = Q.pick_next(state["tasks"], now(), deep_hour=I.in_peak(PROFILE, now().hour))
-                if pick:
-                    plen = Q.session_length(pick)
-                    state["timer"] = {"pins": 0, "pouts": 0, "task_id": pick["id"], "start": now().isoformat(), "planned": plen,
-                                      "work": work, "brk": brk}
-                    _mark_started(pick)
-                    save_state(state)
-                    flash(f"🎲 **Do this now: {pick['title']}** — {plen}-min focus timer started. Nothing else exists.",
-                          sound="win")
-                    st.rerun()
-            wall = PM.wall_minutes(planned, work, brk)
-            if st.button("▶️ Start flow · open-ended" if flow else
-                         f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
-                         type="primary", use_container_width=True):
-                if tid == NEW_SESSION:
-                    tid = _timer_task(state, new_name, 60 if flow else planned, 60 if flow else wall)["id"]
-                state["timer"] = {"pins": 0, "pouts": 0, "task_id": tid, "start": now().isoformat(), "planned": planned,
-                                  "work": work, "brk": brk}
+                                              " :orange[❚❚ paused]" if tm else ""), card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            if not tm:
+                labels = {t["id"]: t["title"] for t in open_t}
+                labels[NEW_SESSION] = "✏️ New task…"
+                c1, c2 = st.container(key="row_tm1").columns([1.6, 1])
+                tid = c1.selectbox("Working on", list(labels), format_func=labels.get, key="timer_task",
+                                   label_visibility="collapsed")
+                planned = c2.selectbox("Minutes", TIMER_LENGTHS + [0, FLOW_MODE], key="timer_len", label_visibility="collapsed",
+                                       index=TIMER_LENGTHS.index(25),
+                                       format_func=lambda m: "🌊 Flow (count up)" if m == FLOW_MODE else
+                                       f"{m} min" if m else "Custom…")
+                flow = planned == FLOW_MODE
+                every = FLOW_CHECK
                 if flow:
-                    state["timer"].update(flow=True, check=every, every=every)
-                _mark_started(next(x for x in state["tasks"] if x["id"] == tid))
-                save_state(state)
+                    planned = FLOW_CAP
+                    every = _flow_every_pick(state, "timer_every")
+                    st.caption(f"🌊 **Flow:** counts up, no breaks. Every {every} min it checks you're still going (one tap); "
+                               f"no answer in {FLOW_GRACE} min and it logs up to the check-in. You bank one free pause per stretch; "
+                               f"unused ones carry over. Loot rolls every 25 min.")
+                elif not planned:
+                    planned = int(c2.number_input("Custom minutes", 5, 240, int(state["settings"].get("timer_custom", 40)),
+                                                  5, key="timer_custom", label_visibility="collapsed"))
+                    if planned != state["settings"].get("timer_custom"):
+                        state["settings"]["timer_custom"] = planned
+                new_name = ""
+                if tid == NEW_SESSION:
+                    new_name = st.text_input("What are you working on?", key="timer_new", max_chars=120,
+                                             placeholder="e.g. Poster figures · blank = just a focus session",
+                                             label_visibility="collapsed")
+                    st.caption("Becomes a task due tonight. Run the timer and it's your proof — finish it after.")
+                c3, c4 = st.container(key="row_tm2").columns([1.6, 1])
+                work, brk = (None, None) if flow else _pomo_pick(state, c3)
+                if c4.button("🎲 Pick for me", use_container_width=True, key="pick_next",
+                             help="Picks your best next task and starts the timer"):
+                    pick = Q.pick_next(state["tasks"], now(), deep_hour=I.in_peak(PROFILE, now().hour))
+                    if pick:
+                        plen = Q.session_length(pick)
+                        state["timer"] = {"pins": 0, "pouts": 0, "task_id": pick["id"], "start": now().isoformat(), "planned": plen,
+                                          "work": work, "brk": brk}
+                        _mark_started(pick)
+                        save_state(state)
+                        flash(f"🎲 **Do this now: {pick['title']}** — {plen}-min focus timer started. Nothing else exists.",
+                              sound="win")
+                        st.rerun()
+                wall = PM.wall_minutes(planned, work, brk)
+                if st.button("▶️ Start flow · open-ended" if flow else
+                             f"▶️ Start focus · {planned} min work" + (f" · done in {wall} min with breaks" if wall > planned else ""),
+                             type="primary", use_container_width=True):
+                    if tid == NEW_SESSION:
+                        tid = _timer_task(state, new_name, 60 if flow else planned, 60 if flow else wall)["id"]
+                    state["timer"] = {"pins": 0, "pouts": 0, "task_id": tid, "start": now().isoformat(), "planned": planned,
+                                      "work": work, "brk": brk}
+                    if flow:
+                        state["timer"].update(flow=True, check=every, every=every)
+                    _mark_started(next(x for x in state["tasks"] if x["id"] == tid))
+                    save_state(state)
+                    st.rerun()
+                tok = state.get("tokens", {})
+                claimed = state.get("challenge_claims", [])
+                for ch in EV.focus_challenges(now().date(), TZ):
+                    if ch["id"] in claimed:
+                        st.markdown(f"✅ ~~{ch['label']}~~")
+                    elif ch["start"] <= now() < ch["end"]:
+                        st.markdown(f"🔥 **LIVE CHALLENGE:** {ch['label']} — {fmt_left(ch['end'] - now())} left to start")
+                drops_left = EV.DROPS_PER_DAY - sum(x.get("drops", 1) for x in state.get("focus_log", [])
+                                                     if x["date"] == now().date().isoformat() and x.get("drop"))
+                st.caption(f"Today **{focus_today(state)} min** · timer-verified tasks pay +{int(V.TIMER_BONUS * 100)}% · "
+                           f"25+ min sessions drop loot ({max(0, drops_left)} left) · surprise challenges buzz your phone"
+                           + (f" Tokens: ⚡×{tok.get('double', 0)} 🔧×{tok.get('upgrade', 0)}"
+                              if tok.get("double") or tok.get("upgrade") else ""))
+                return
+            t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
+            start = parse_dt(tm["start"])
+            work, brk = tm.get("work"), tm.get("brk")
+            now_ts = now().timestamp()
+            if tm.get("paused_at") and PM.paused_for(tm, now_ts) > PM.PAUSE_LIMIT_MIN:
+                mins = min(PM.credited(tm, PM.effective_elapsed(tm, now_ts)), tm["planned"] + 15 + tm.get("over_total", 0.0))
+                state.pop("timer", None)
+                if mins >= 1 and t:
+                    _log_session(state, t, start, mins, tm)
+                else:
+                    save_state(state)
+                flash(f"⏸️ Paused for over {PM.PAUSE_LIMIT_MIN} min, so the session ended.", "warning")
                 st.rerun()
-            tok = state.get("tokens", {})
-            claimed = state.get("challenge_claims", [])
-            for ch in EV.focus_challenges(now().date(), TZ):
-                if ch["id"] in claimed:
-                    st.markdown(f"✅ ~~{ch['label']}~~")
-                elif ch["start"] <= now() < ch["end"]:
-                    st.markdown(f"🔥 **LIVE CHALLENGE:** {ch['label']} — {fmt_left(ch['end'] - now())} left to start")
-            drops_left = EV.DROPS_PER_DAY - sum(x.get("drops", 1) for x in state.get("focus_log", [])
-                                                 if x["date"] == now().date().isoformat() and x.get("drop"))
-            st.caption(f"Today **{focus_today(state)} min** · timer-verified tasks pay +{int(V.TIMER_BONUS * 100)}% · "
-                       f"25+ min sessions drop loot ({max(0, drops_left)} left) · surprise challenges buzz your phone"
-                       + (f" Tokens: ⚡×{tok.get('double', 0)} 🔧×{tok.get('upgrade', 0)}"
-                          if tok.get("double") or tok.get("upgrade") else ""))
-            return
-        t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
-        start = parse_dt(tm["start"])
-        work, brk = tm.get("work"), tm.get("brk")
-        now_ts = now().timestamp()
-        if tm.get("paused_at") and PM.paused_for(tm, now_ts) > PM.PAUSE_LIMIT_MIN:
-            mins = min(PM.credited(tm, PM.effective_elapsed(tm, now_ts)), tm["planned"] + 15 + tm.get("over_total", 0.0))
-            state.pop("timer", None)
-            if mins >= 1 and t:
-                _log_session(state, t, start, mins, tm)
-            else:
-                save_state(state)
-            flash(f"⏸️ Paused for over {PM.PAUSE_LIMIT_MIN} min, so the session ended.", "warning")
-            st.rerun()
-        title = (t["title"] if t else "—")
-        st.markdown(f"#### ⏱️ {html.escape(title[:42] + ('…' if len(title) > 42 else ''))}")
-        _timer_ring(state, tm, big=big)
-        _timer_controls(state)
+            title = (t["title"] if t else "—")
+            st.markdown(f"#### ⏱️ {html.escape(title[:42] + ('…' if len(title) > 42 else ''))}")
+            _timer_ring(state, tm, big=big)
+            _timer_controls(state)
 
 
 def _skip_break(state: dict) -> None:
@@ -5790,26 +5868,29 @@ def render_race_status(state: dict) -> None:
     left = max(0, PITY_AFTER - state["since_rare"])
     unserved = [p for p in state["penalty_box"] if not p["served"]]
     if unserved:
-      with fold("penalty", f"🚨 **Penalty box** :gray[{len(unserved)}]", card=True):
-        for p in unserved:
-            st.markdown(f"🚨 **{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
-                        unsafe_allow_html=True)
-            if p.get("enforced"):
-                st.caption(f"🔒 Enforced on PC + phone. Lifts when you redeem *{p['task']}* or after {LK.LOCK_HOURS}h.")
-            elif st.checkbox("I actually served this", key=f"served_chk_{p['id']}") and \
-                    st.button("Release me", key=f"served_{p['id']}"):
-                p["served"], p["served_at"] = True, now().isoformat()
-                save_state(state)
-                flash("Penalty served. Back on track.")
-                st.rerun()
-    with fold("contracts", "📜 This week's contracts", False):
-        render_contracts(state)
-    with fold("ledger", "🧾 Coin ledger", False):
-        if not state["ledger"]:
-            st.caption("Nothing yet.")
-        for e in state["ledger"][:15]:
-            st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
-                        f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
+      with fold("penalty", f"🚨 **Penalty box** :gray[{len(unserved)}]", card=True) as _fo:
+          if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            for p in unserved:
+                st.markdown(f"🚨 **{p['consequence']}**  \n<small>for missing *{html.escape(p['task'])}*</small>",
+                            unsafe_allow_html=True)
+                if p.get("enforced"):
+                    st.caption(f"🔒 Enforced on PC + phone. Lifts when you redeem *{p['task']}* or after {LK.LOCK_HOURS}h.")
+                elif st.checkbox("I actually served this", key=f"served_chk_{p['id']}") and \
+                        st.button("Release me", key=f"served_{p['id']}"):
+                    p["served"], p["served_at"] = True, now().isoformat()
+                    save_state(state)
+                    flash("Penalty served. Back on track.")
+                    st.rerun()
+    with fold("contracts", "📜 This week's contracts", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            render_contracts(state)
+    with fold("ledger", "🧾 Coin ledger", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            if not state["ledger"]:
+                st.caption("Nothing yet.")
+            for e in state["ledger"][:15]:
+                st.markdown(f"`{'+' if e['delta'] >= 0 else ''}{e['delta']:>5}` {e['reason']} "
+                            f"<small>· {parse_dt(e['ts']):%b %d %I:%M %p}</small>", unsafe_allow_html=True)
     with fold("rules", "📖 Rules", False):
         st.markdown(f"""
 - **Every task** has a deadline, a reward and a penalty (set by its size).
@@ -5839,26 +5920,27 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
     _rd = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
            and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
     with fold("task_board", f"📋 **Everything else** :gray[{len(rest)} open"
-              + (f" · {len(_rd)} to redeem" if _rd else "") + "]", card=True):
-        render_quick_add(state, "qa_top", boxed=False)
-        if rest and (parse_dt(rest[0]["deadline"]) - now()) < timedelta(hours=6):
-            st.warning(f"⏱️ **{rest[0]['title']}** dies in {fmt_left(parse_dt(rest[0]['deadline']) - now())} — "
-                       f"−{rest[0]['penalty']} and {MISS_DAMAGE}% of your car. Start for 10 minutes.")
-        for t in rest:
-            render_task_row(state, t, "tb_")
-        if not open_tasks:
-            st.caption("Nothing open. Type one above, or tap a one-tap task.")
-        redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
-                      and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
-        if redeemable:
-            with st.container(border=True, key="tb_redeem_box"):
-                st.markdown(f"<div class='dod-sub red'>🩹 Missed · redeem for half back <span>{len(redeemable)}</span></div>",
-                            unsafe_allow_html=True)
-                for t in redeemable:
-                    left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-                    with st.expander(f"💀 {t['title']} · by {_when(now() + left)}", key=f"exp_tb_{t['id']}",
-                                     expanded=proof_open(f"tb_redeem_{t['id']}")):
-                        render_proof_form(state, t, "redeem", scope="tb_")
+              + (f" · {len(_rd)} to redeem" if _rd else "") + "]", card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            render_quick_add(state, "qa_top", boxed=False)
+            if rest and (parse_dt(rest[0]["deadline"]) - now()) < timedelta(hours=6):
+                st.warning(f"⏱️ **{rest[0]['title']}** dies in {fmt_left(parse_dt(rest[0]['deadline']) - now())} — "
+                           f"−{rest[0]['penalty']} and {MISS_DAMAGE}% of your car. Start for 10 minutes.")
+            for t in rest:
+                render_task_row(state, t, "tb_")
+            if not open_tasks:
+                st.caption("Nothing open. Type one above, or tap a one-tap task.")
+            redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
+                          and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
+            if redeemable:
+                with st.container(border=True, key="tb_redeem_box"):
+                    st.markdown(f"<div class='dod-sub red'>🩹 Missed · redeem for half back <span>{len(redeemable)}</span></div>",
+                                unsafe_allow_html=True)
+                    for t in redeemable:
+                        left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
+                        with st.expander(f"💀 {t['title']} · by {_when(now() + left)}", key=f"exp_tb_{t['id']}",
+                                         expanded=proof_open(f"tb_redeem_{t['id']}")):
+                            render_proof_form(state, t, "redeem", scope="tb_")
 
 
 READING_LABELS = {"unread": "To read", "reading": "Reading", "read": "Read", "dropped": "Dropped"}
@@ -5914,7 +5996,7 @@ def _set_paper_status(zc: tuple, p: dict, widget: str) -> None:
         flash(f"📄 Marked **{READING_LABELS[new].lower()}**. Its task is still open on your list.", "warning")
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@swr(600)
 def _zotero_inbox(user: str, key: str, coll: str) -> tuple[str | None, list[dict]]:
     box = Z.inbox_folder(user, key, coll, create=True)
     return box, (Z.inbox_items(user, key, box) if box else [])
@@ -6025,7 +6107,7 @@ def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
                    "They're all tagged “manual entry”.")
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@swr(600)
 def _zotero_topics(user: str, key: str, coll: str) -> list[str]:
     return Z.search_topics(user, key, coll)
 
@@ -6037,33 +6119,34 @@ def render_search_topics(zc: tuple) -> None:
     except Exception as e:  # noqa: BLE001
         st.caption(f"(Couldn't read the search topics: {e})")
         return
-    with fold("search_topics", f"🔎 Sunday search topics ({len(topics)})", False):
-        st.caption("The Sunday run searches these on top of your guiding questions. Papers it finds for them join the "
-                   "reading list like any other; no tag is added for a topic. They're kept as folders under "
-                   "LCR HCR CVxR → Search topics in Zotero, so you can add one there too.")
+    with fold("search_topics", f"🔎 Sunday search topics ({len(topics)})", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.caption("The Sunday run searches these on top of your guiding questions. Papers it finds for them join the "
+                       "reading list like any other; no tag is added for a topic. They're kept as folders under "
+                       "LCR HCR CVxR → Search topics in Zotero, so you can add one there too.")
 
-        def _save(fn, topic: str, msg: str) -> None:
-            try:
-                fn(zc[0], zc[1], topic, zc[2])
-                _zotero_topics.clear()
-                flash(msg)
-            except Exception as e:  # noqa: BLE001
-                flash(f"Couldn't save that: {e}", "error")
-            st.rerun()
+            def _save(fn, topic: str, msg: str) -> None:
+                try:
+                    fn(zc[0], zc[1], topic, zc[2])
+                    _zotero_topics.clear()
+                    flash(msg)
+                except Exception as e:  # noqa: BLE001
+                    flash(f"Couldn't save that: {e}", "error")
+                st.rerun()
 
-        for i, t_ in enumerate(topics):
-            c1, c2 = st.columns([6, 1], vertical_alignment="center")
-            c1.markdown(f"• {html.escape(t_)}")
-            if c2.button("✕", key=f"topic_rm_{i}", help="Stop searching for this", use_container_width=True):
-                _save(Z.remove_search_topic, t_, f"🔎 Removed **{t_}**.")
-        with st.form("topic_add", clear_on_submit=True, border=False):
-            c1, c2 = st.columns([6, 1], vertical_alignment="bottom")
-            new_ = c1.text_input("New topic", placeholder="e.g. Diaphragm anatomy and remodelling")
-            if c2.form_submit_button("Add", use_container_width=True) and new_.strip():
-                if new_.strip().casefold() in {x.casefold() for x in topics}:
-                    flash("That topic is already on the list.", "warning")
-                    st.rerun()
-                _save(Z.add_search_topic, new_.strip(), f"🔎 Added **{new_.strip()}**. The next Sunday run searches for it.")
+            for i, t_ in enumerate(topics):
+                c1, c2 = st.columns([6, 1], vertical_alignment="center")
+                c1.markdown(f"• {html.escape(t_)}")
+                if c2.button("✕", key=f"topic_rm_{i}", help="Stop searching for this", use_container_width=True):
+                    _save(Z.remove_search_topic, t_, f"🔎 Removed **{t_}**.")
+            with st.form("topic_add", clear_on_submit=True, border=False):
+                c1, c2 = st.columns([6, 1], vertical_alignment="bottom")
+                new_ = c1.text_input("New topic", placeholder="e.g. Diaphragm anatomy and remodelling")
+                if c2.form_submit_button("Add", use_container_width=True) and new_.strip():
+                    if new_.strip().casefold() in {x.casefold() for x in topics}:
+                        flash("That topic is already on the list.", "warning")
+                        st.rerun()
+                    _save(Z.add_search_topic, new_.strip(), f"🔎 Added **{new_.strip()}**. The next Sunday run searches for it.")
 
 
 def render_reading_list(state: dict) -> None:
@@ -6090,16 +6173,17 @@ def render_reading_list(state: dict) -> None:
              "All": ("unread", "reading", "read", "dropped")}
     view = st.segmented_control("Show", list(views), default="To read", key="reading_view",
                                 label_visibility="collapsed") or "To read"
-    with fold("reading_filter", "🔎 Sort and filter", False):
-        c1, c2 = st.columns(2)
-        sort = c1.selectbox("Sort by", list(READING_SORTS), key="reading_sort")
-        search = c2.text_input("Search", placeholder="Title, author or journal", key="reading_search").strip().casefold()
-        options = {f: sorted({v for p in papers for v in p["facets"].get(f, [])}) for f in READING_FILTERS}
-        years = sorted({p["year"] for p in papers if p["year"]}, reverse=True)
-        cols = st.columns(2)
-        picked = {f: cols[i % 2].multiselect(READING_FILTERS[f], options[f], key=f"reading_f_{f}")
-                  for i, f in enumerate(READING_FILTERS) if options[f]}
-        picked_years = cols[len(picked) % 2].multiselect("Year", years, key="reading_f_year")
+    with fold("reading_filter", "🔎 Sort and filter", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            c1, c2 = st.columns(2)
+            sort = c1.selectbox("Sort by", list(READING_SORTS), key="reading_sort")
+            search = c2.text_input("Search", placeholder="Title, author or journal", key="reading_search").strip().casefold()
+            options = {f: sorted({v for p in papers for v in p["facets"].get(f, [])}) for f in READING_FILTERS}
+            years = sorted({p["year"] for p in papers if p["year"]}, reverse=True)
+            cols = st.columns(2)
+            picked = {f: cols[i % 2].multiselect(READING_FILTERS[f], options[f], key=f"reading_f_{f}")
+                      for i, f in enumerate(READING_FILTERS) if options[f]}
+            picked_years = cols[len(picked) % 2].multiselect("Year", years, key="reading_f_year")
     filtered = bool(search or picked_years or any(picked.values()))
     shown = [p for p in papers if p["status"] in views[view]
              and (not picked_years or p["year"] in picked_years)
@@ -6179,9 +6263,10 @@ def render_reading_list(state: dict) -> None:
     for p in shown[:first]:
         _row(p)
     if len(shown) > first:
-        with fold("reading_more", f"Show {len(shown) - first} more", False):
-            for p in shown[first:]:
-                _row(p)
+        with fold("reading_more", f"Show {len(shown) - first} more", False) as _fo:
+            if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                for p in shown[first:]:
+                    _row(p)
     st.caption("Ticking a paper here only tracks it. Coins come from finishing its task with proof.")
     render_search_topics(zc)
 
@@ -6947,49 +7032,50 @@ def render_kits(state: dict) -> None:
     cur = state.get("ui_kit", "stock")
     prev = st.session_state.get("kit_preview")
     lvl_now = level_of(state["xp"])
-    with fold("kits", "🏁 Kits — restyle the whole app", False):
-        st.caption("A kit changes everything: background, cards, borders, fonts, corners and effects. "
-                   "Try any of them free before you buy.")
-        st.markdown("<style>@import url('" + _F + "&family=".join(k["fonts"] for k in KITS.values() if k.get("fonts"))
-                    + "&display=swap');</style>", unsafe_allow_html=True)
-        items = list(KITS.items())
-        for i in range(0, len(items), 3):
-            cols = st.columns(3)
-            for col, (k, kit) in zip(cols, items[i:i + 3]):
-                with col:
-                    st.markdown(_kit_swatch(k, kit) + f"<div style='margin-top:6px'><b>{kit['name']}</b></div>"
-                                f"<div style='color:var(--muted);font-size:.82rem;min-height:2.6em'>{kit['blurb']}</div>",
-                                unsafe_allow_html=True)
-                    c1, c2 = st.columns(2)
-                    if k == cur and not prev:
-                        c1.caption("✅ Fitted")
-                    elif k in owned:
-                        if c1.button("Fit", key=f"kit_fit_{k}", use_container_width=True):
+    with fold("kits", "🏁 Kits — restyle the whole app", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.caption("A kit changes everything: background, cards, borders, fonts, corners and effects. "
+                       "Try any of them free before you buy.")
+            st.markdown("<style>@import url('" + _F + "&family=".join(k["fonts"] for k in KITS.values() if k.get("fonts"))
+                        + "&display=swap');</style>", unsafe_allow_html=True)
+            items = list(KITS.items())
+            for i in range(0, len(items), 3):
+                cols = st.columns(3)
+                for col, (k, kit) in zip(cols, items[i:i + 3]):
+                    with col:
+                        st.markdown(_kit_swatch(k, kit) + f"<div style='margin-top:6px'><b>{kit['name']}</b></div>"
+                                    f"<div style='color:var(--muted);font-size:.82rem;min-height:2.6em'>{kit['blurb']}</div>",
+                                    unsafe_allow_html=True)
+                        c1, c2 = st.columns(2)
+                        if k == cur and not prev:
+                            c1.caption("✅ Fitted")
+                        elif k in owned:
+                            if c1.button("Fit", key=f"kit_fit_{k}", use_container_width=True):
+                                state["ui_kit"] = k
+                                st.session_state.pop("kit_preview", None)
+                                save_state(state)
+                                flash(f"🏁 {kit['name']} fitted.")
+                                st.rerun()
+                        elif lvl_now < kit["level"]:
+                            c1.caption(f"🔒 Level {kit['level']}")
+                        elif c1.button(f"{kit['cost']:,} 🪙", key=f"kit_buy_{k}", use_container_width=True,
+                                       disabled=state["coins"] < kit["cost"], help="Buy it and fit it"):
+                            bank(state, -kit["cost"], f"🏁 Kit: {kit['name']}")
+                            owned.append(k)
                             state["ui_kit"] = k
                             st.session_state.pop("kit_preview", None)
                             save_state(state)
-                            flash(f"🏁 {kit['name']} fitted.")
+                            flash(f"🏁 **{kit['name']}** bought and fitted.", celebrate=True, sound="jackpot")
                             st.rerun()
-                    elif lvl_now < kit["level"]:
-                        c1.caption(f"🔒 Level {kit['level']}")
-                    elif c1.button(f"{kit['cost']:,} 🪙", key=f"kit_buy_{k}", use_container_width=True,
-                                   disabled=state["coins"] < kit["cost"], help="Buy it and fit it"):
-                        bank(state, -kit["cost"], f"🏁 Kit: {kit['name']}")
-                        owned.append(k)
-                        state["ui_kit"] = k
-                        st.session_state.pop("kit_preview", None)
-                        save_state(state)
-                        flash(f"🏁 **{kit['name']}** bought and fitted.", celebrate=True, sound="jackpot")
-                        st.rerun()
-                    if k != "stock" and k not in owned:
-                        if prev == k:
-                            if c2.button("Stop", key=f"kit_stop_{k}", use_container_width=True):
-                                st.session_state.pop("kit_preview", None)
+                        if k != "stock" and k not in owned:
+                            if prev == k:
+                                if c2.button("Stop", key=f"kit_stop_{k}", use_container_width=True):
+                                    st.session_state.pop("kit_preview", None)
+                                    st.rerun()
+                            elif c2.button("👀 Try it", key=f"kit_try_{k}", use_container_width=True,
+                                           help="Preview it on the whole app (just this visit)"):
+                                st.session_state["kit_preview"] = k
                                 st.rerun()
-                        elif c2.button("👀 Try it", key=f"kit_try_{k}", use_container_width=True,
-                                       help="Preview it on the whole app (just this visit)"):
-                            st.session_state["kit_preview"] = k
-                            st.rerun()
 
 
 def kit_css(kit: dict) -> str:
@@ -7425,21 +7511,23 @@ with tab_today:
 # ── Tasks ──
 with tab_tasks:
   if tab_tasks.open is not False:
-    with fold("tasks_open", f"📋 **Open tasks** :gray[{len(open_tasks)}]", card=True):
-        if not open_tasks:
-            st.caption("Nothing open. Add one below.")
-        for t in open_tasks:
-            render_task_row(state, t, "tt_")
+    with fold("tasks_open", f"📋 **Open tasks** :gray[{len(open_tasks)}]", card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            if not open_tasks:
+                st.caption("Nothing open. Add one below.")
+            for t in open_tasks:
+                render_task_row(state, t, "tt_")
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                   and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
     if redeemable:
-        with fold("tasks_redeem", f"🩹 **Redeemable** :gray[{len(redeemable)}]", card=True):
-            st.caption(f"Missed — finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
-            for t in redeemable:
-                left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
-                with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
-                                 expanded=proof_open(f"redeem_{t['id']}")):
-                    render_proof_form(state, t, "redeem")
+        with fold("tasks_redeem", f"🩹 **Redeemable** :gray[{len(redeemable)}]", card=True) as _fo:
+            if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                st.caption(f"Missed — finish within {REDEEM_WINDOW_H}h of the miss for half the penalty back.")
+                for t in redeemable:
+                    left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
+                    with st.expander(f"💀 {t['title']} · redeem by {_when(now() + left)}", key=f"exp_rd_{t['id']}",
+                                     expanded=proof_open(f"redeem_{t['id']}")):
+                        render_proof_form(state, t, "redeem")
 
     done = [t for t in state["tasks"] if t["status"] in ("done", "redeemed")]
     recents, seen_ = [], {t["title"].strip().lower() for t in open_tasks}
@@ -7466,27 +7554,32 @@ with tab_tasks:
             st.rerun()
 
     if recents:
-        with fold("tasks_recent", f"🕘 **Recent · do it again** :gray[{len(recents)}]", card=True):
-            st.caption("Done before, not open now. One tap brings it back for today.")
-            for t in recents[:4]:
-                _again_row(t)
-            if len(recents) > 4:
-                with fold("recent_more", f"More ({len(recents) - 4})", False):
-                    for t in recents[4:]:
-                        _again_row(t)
+        with fold("tasks_recent", f"🕘 **Recent · do it again** :gray[{len(recents)}]", card=True) as _fo:
+            if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                st.caption("Done before, not open now. One tap brings it back for today.")
+                for t in recents[:4]:
+                    _again_row(t)
+                if len(recents) > 4:
+                    with fold("recent_more", f"More ({len(recents) - 4})", False) as _fo:
+                        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                            for t in recents[4:]:
+                                _again_row(t)
 
     st.markdown("<div class='dod-sec' style='margin-top:1.2rem'>🧰 Add &amp; manage</div>", unsafe_allow_html=True)
-    with fold("new_task", "➕ New task", not open_tasks):
-        task_form(state, "new_task_form")
-    with fold("import", "📥 Import from Notion", False):
-        notion_import(state)
+    with fold("new_task", "➕ New task", not open_tasks) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            task_form(state, "new_task_form")
+    with fold("import", "📥 Import from Notion", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            notion_import(state)
     points_guide()
     if done:
-        with fold("completed", f"🏆 Completed ({len(done)})", False):
-            for t in sorted(done, key=lambda t: t["completed_at"], reverse=True)[:30]:
-                icon = "🏁" if t["status"] == "done" else "🩹"
-                st.markdown(f"{icon} **{t['title']}** · +{t.get('earned', 0)} 🪙 "
-                            f"<small>· {parse_dt(t['completed_at']):%b %d}</small>", unsafe_allow_html=True)
+        with fold("completed", f"🏆 Completed ({len(done)})", False) as _fo:
+            if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                for t in sorted(done, key=lambda t: t["completed_at"], reverse=True)[:30]:
+                    icon = "🏁" if t["status"] == "done" else "🩹"
+                    st.markdown(f"{icon} **{t['title']}** · +{t.get('earned', 0)} 🪙 "
+                                f"<small>· {parse_dt(t['completed_at']):%b %d}</small>", unsafe_allow_html=True)
 
 def render_new_goal(state: dict) -> None:
     """A big goal, typed or picked from your Assignments board (read-only: the app never writes to it)."""
@@ -8170,8 +8263,9 @@ with tab_reading:
 
 with tab_goals:
   if tab_goals.open is not False:
-    with fold("new_goal", "🗺️ New goal", not state["goals"]):
-        render_new_goal(state)
+    with fold("new_goal", "🗺️ New goal", not state["goals"]) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            render_new_goal(state)
 
 
     has_key = bool(get_secret("ANTHROPIC_API_KEY"))
@@ -8205,8 +8299,9 @@ with tab_goals:
             flow_ed = False  # True when the editor is open under the flow chart (then it holds the planner)
             if gtasks or R.stages(g) or R.notes(g):  # any goal with something in it gets its chart
                 n_open = sum(1 for t in gtasks if t["status"] == "open")
-                with fold(f"flow_{g['id']}", f"🗺️ Flowchart · {len(R.stages(g))} stages · {n_open} open blocks"):
-                    flow_ed = render_flow(state, g)
+                with fold(f"flow_{g['id']}", f"🗺️ Flowchart · {len(R.stages(g))} stages · {n_open} open blocks") as _fo:
+                    if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                        flow_ed = render_flow(state, g)
                 render_block_plays(state, g)
                 if st.toggle("↕ Drag to rearrange", key=f"rm_arr_{g['id']}",
                              help="Drag steps between stages, or up/down to change which comes first."):
@@ -8552,8 +8647,9 @@ with tab_stats:
     import altair as alt
     _acc = accent(state)[0]
     VIZ = {**VIZ, "normal": _acc, "light": _mix(_acc, "#ffffff", .55)}
-    with fold("stats_today", f"🏁 Today · {now():%a %b} {now().day}", card=True):
-        render_today_recap(state)
+    with fold("stats_today", f"🏁 Today · {now():%a %b} {now().day}", card=True) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            render_today_recap(state)
     full = I.history(state, now().date() + timedelta(days=1), TZ)  # last 28 days, today included
     k = st.container(key="stat_kpis").columns(4)
     k[0].metric("Finished · 28 days", full["done"],
@@ -8630,9 +8726,10 @@ with tab_stats:
               "and ⚡ live events are up to **4×** likelier to land here, and 💡 phone suggestions aim here too."
             + f"\n- ☀️ **Morning briefing** lands at {_hlabel(I.brief_hour(PROFILE, 8))} (an hour before you usually start)."
             + "\n\nBuilt from history up to yesterday, so today's surprises stay put while you work.")
-    with fold("table_view", "📋 Table view", False):
-        st.dataframe(pd.DataFrame({"Hour": [_hlabel(h_) for h_ in range(24)],
-                                   "Minutes (28d)": [round(x) for x in full["hour_min"]]}), hide_index=True)
+    with fold("table_view", "📋 Table view", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.dataframe(pd.DataFrame({"Hour": [_hlabel(h_) for h_ in range(24)],
+                                       "Minutes (28d)": [round(x) for x in full["hour_min"]]}), hide_index=True)
 
 # ── Garage ──
 with tab_garage:
@@ -8661,97 +8758,100 @@ with tab_garage:
 
     render_crew_hire(state)
     render_kits(state)
-    with fold("paint", "🎨 Paint shop — colour the whole app", False):
-        _kit_on = active_kit(state)
-        st.caption(f"Your **{_kit_on['name']}** kit sets its own colours: switch to Stock (above) to use these."
-                   if _kit_on else "Unlock Honda colours for the app itself: buttons, timer, instrument cluster, everything.")
-        owned_t = state.setdefault("themes_owned", ["phoenix"])
-        cur_t = state.get("ui_theme", "phoenix")
-        lvl_now = level_of(state["xp"])
-        cols = st.columns(len(THEMES))
-        for col, (k, (name, acc, on, cost, need, blurb)) in zip(cols, THEMES.items()):
-            with col:
-                st.markdown(f"<div style='height:54px;border-radius:10px;background:linear-gradient(135deg,{acc},"
-                            f"{acc}cc);border:1px solid #2c313c;margin-bottom:6px'></div><b>{name}</b>"
-                            f"<div style='color:#8b909c;font-size:.82rem;min-height:2.6em'>{blurb}</div>",
-                            unsafe_allow_html=True)
-                if k == cur_t:
-                    st.caption("✅ In use")
-                elif k in owned_t:
-                    if st.button("Use", key=f"theme_use_{k}", use_container_width=True):
+    with fold("paint", "🎨 Paint shop — colour the whole app", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            _kit_on = active_kit(state)
+            st.caption(f"Your **{_kit_on['name']}** kit sets its own colours: switch to Stock (above) to use these."
+                       if _kit_on else "Unlock Honda colours for the app itself: buttons, timer, instrument cluster, everything.")
+            owned_t = state.setdefault("themes_owned", ["phoenix"])
+            cur_t = state.get("ui_theme", "phoenix")
+            lvl_now = level_of(state["xp"])
+            cols = st.columns(len(THEMES))
+            for col, (k, (name, acc, on, cost, need, blurb)) in zip(cols, THEMES.items()):
+                with col:
+                    st.markdown(f"<div style='height:54px;border-radius:10px;background:linear-gradient(135deg,{acc},"
+                                f"{acc}cc);border:1px solid #2c313c;margin-bottom:6px'></div><b>{name}</b>"
+                                f"<div style='color:#8b909c;font-size:.82rem;min-height:2.6em'>{blurb}</div>",
+                                unsafe_allow_html=True)
+                    if k == cur_t:
+                        st.caption("✅ In use")
+                    elif k in owned_t:
+                        if st.button("Use", key=f"theme_use_{k}", use_container_width=True):
+                            state["ui_theme"] = k
+                            save_state(state)
+                            flash(f"🎨 {name} applied.")
+                            st.rerun()
+                    elif lvl_now < need:
+                        st.caption(f"🔒 Level {need}")
+                    elif st.button(f"{dealer_price(state, 'theme', k, cost):,} 🪙", key=f"theme_buy_{k}", use_container_width=True,
+                                   disabled=state["coins"] < dealer_price(state, "theme", k, cost)):
+                        bank(state, -dealer_price(state, "theme", k, cost), f"🎨 Paint: {name}")
+                        _dealer_sold(state, "theme", k)
+                        owned_t.append(k)
                         state["ui_theme"] = k
                         save_state(state)
-                        flash(f"🎨 {name} applied.")
+                        flash(f"🎨 **{name}** unlocked and applied.", celebrate=True, sound="jackpot")
                         st.rerun()
-                elif lvl_now < need:
-                    st.caption(f"🔒 Level {need}")
-                elif st.button(f"{dealer_price(state, 'theme', k, cost):,} 🪙", key=f"theme_buy_{k}", use_container_width=True,
-                               disabled=state["coins"] < dealer_price(state, "theme", k, cost)):
-                    bank(state, -dealer_price(state, "theme", k, cost), f"🎨 Paint: {name}")
-                    _dealer_sold(state, "theme", k)
-                    owned_t.append(k)
-                    state["ui_theme"] = k
-                    save_state(state)
-                    flash(f"🎨 **{name}** unlocked and applied.", celebrate=True, sound="jackpot")
-                    st.rerun()
 
-    with fold("showroom", "🏢 Showroom — the Honda & Acura ladder", False):
-        lvl_now = level_of(state["xp"])
-        owned = car.setdefault("owned", ["civic_si"])
-        for m in CARS:
-            paint_, num_ = SHOWROOM_PAINT.get(m["id"], ("#c8102e", 1))
-            locked_ = lvl_now < m["level"] and m["id"] not in owned
-            tag = "🟢 driving" if m["id"] == car.get("model") else "✅ owned" if m["id"] in owned else \
-                  ("🔒 level " + str(m["level"]) if lvl_now < m["level"] else f"{m['cost']:,} 🪙")
-            with st.container(border=True, key=f"sr_{m['id']}"):
-                st.markdown(f"<div class='dod-sr{' locked' if locked_ else ''}'>"
-                            + carart.car_svg(m["body"], paint_, num_, SHOWROOM_SPEC.get(m["id"], {}), 100, width=640,
-                                             studio=True) + "</div>", unsafe_allow_html=True)
-                c1, c2 = st.columns([3, 2], vertical_alignment="center")
-                c1.markdown(f"<div class='dod-sr-n'>{m['name']}</div><div class='dod-sr-s'>Base {m['base']} · tunes to "
-                            f"L{G.cap(m['id'])} · {m['blurb']}</div>", unsafe_allow_html=True)
-                if m["id"] == car.get("model"):
-                    c2.caption(tag)
-                elif m["id"] in owned:
-                    if c2.button("Drive it", key=f"drive_{m['id']}", use_container_width=True):
+    with fold("showroom", "🏢 Showroom — the Honda & Acura ladder", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            lvl_now = level_of(state["xp"])
+            owned = car.setdefault("owned", ["civic_si"])
+            for m in CARS:
+                paint_, num_ = SHOWROOM_PAINT.get(m["id"], ("#c8102e", 1))
+                locked_ = lvl_now < m["level"] and m["id"] not in owned
+                tag = "🟢 driving" if m["id"] == car.get("model") else "✅ owned" if m["id"] in owned else \
+                      ("🔒 level " + str(m["level"]) if lvl_now < m["level"] else f"{m['cost']:,} 🪙")
+                with st.container(border=True, key=f"sr_{m['id']}"):
+                    st.markdown(f"<div class='dod-sr{' locked' if locked_ else ''}'>"
+                                + carart.car_svg(m["body"], paint_, num_, SHOWROOM_SPEC.get(m["id"], {}), 100, width=640,
+                                                 studio=True) + "</div>", unsafe_allow_html=True)
+                    c1, c2 = st.columns([3, 2], vertical_alignment="center")
+                    c1.markdown(f"<div class='dod-sr-n'>{m['name']}</div><div class='dod-sr-s'>Base {m['base']} · tunes to "
+                                f"L{G.cap(m['id'])} · {m['blurb']}</div>", unsafe_allow_html=True)
+                    if m["id"] == car.get("model"):
+                        c2.caption(tag)
+                    elif m["id"] in owned:
+                        if c2.button("Drive it", key=f"drive_{m['id']}", use_container_width=True):
+                            car["model"] = m["id"]
+                            save_state(state)
+                            st.rerun()
+                    elif lvl_now < m["level"]:
+                        c2.caption(tag)
+                    elif c2.button(f"Buy · {dealer_price(state, 'car', m['id'], m['cost']):,} 🪙", key=f"buy_{m['id']}",
+                                   disabled=state["coins"] < dealer_price(state, "car", m["id"], m["cost"]),
+                                   type="primary", use_container_width=True):
+                        bank(state, -dealer_price(state, "car", m["id"], m["cost"]), f"🏢 Bought {m['name']}")
+                        _dealer_sold(state, "car", m["id"])
+                        owned.append(m["id"])
                         car["model"] = m["id"]
                         save_state(state)
+                        flash(f"🔑 **{m['name']}** is yours. Every coin of it came from finished work.", celebrate=True,
+                              sound="jackpot")
                         st.rerun()
-                elif lvl_now < m["level"]:
-                    c2.caption(tag)
-                elif c2.button(f"Buy · {dealer_price(state, 'car', m['id'], m['cost']):,} 🪙", key=f"buy_{m['id']}",
-                               disabled=state["coins"] < dealer_price(state, "car", m["id"], m["cost"]),
-                               type="primary", use_container_width=True):
-                    bank(state, -dealer_price(state, "car", m["id"], m["cost"]), f"🏢 Bought {m['name']}")
-                    _dealer_sold(state, "car", m["id"])
-                    owned.append(m["id"])
-                    car["model"] = m["id"]
-                    save_state(state)
-                    flash(f"🔑 **{m['name']}** is yours. Every coin of it came from finished work.", celebrate=True,
-                          sound="jackpot")
-                    st.rerun()
 
     ready_, n_own, n_max = prestige_ready(state)
     pres = int(state.get("prestige", 0))
-    with fold("prestige", f"⭐ Prestige{f' ×{pres}' if pres else ''}", False):
-        st.caption(f"Own the whole ladder ({len(CARS)} cars) and tune every part to L{MAX_PART_LEVEL}, then retire the "
-                   f"build: all parts go back to stock, you keep every car, your paint and your coins, and you get a "
-                   f"permanent ⭐ badge plus **+{int(PRESTIGE_STEP * 100)}% coins on every task** "
-                   f"(stacks to +{int(PRESTIGE_STEP * PRESTIGE_MAX * 100)}%).")
-        st.progress(min(1.0, (n_own + n_max) / (len(CARS) + len(PARTS))),
-                    text=f"🚗 {n_own}/{len(CARS)} cars owned · 🔧 {n_max}/{len(PARTS)} parts at L{MAX_PART_LEVEL}"
-                         + (f" · ⭐ ×{pres} (+{int((prestige_mult(state) - 1) * 100)}% coins now)" if pres else ""))
-        if ready_:
-            sure = st.checkbox("I'm retiring this build: every part back to stock", key="pres_sure")
-            if st.button("⭐ Retire the build", type="primary", disabled=not sure, key="pres_go"):
-                for k in PARTS:
-                    car["parts"][k] = 0
-                state["prestige"] = pres + 1
-                state.setdefault("prestige_log", []).append({"at": now().isoformat(), "n": pres + 1})
-                save_state(state)
-                flash(f"⭐ **Prestige {pres + 1}.** The build is retired; the badge is forever. Task coins now pay "
-                      f"×{prestige_mult(state):.2f}. Time to build it again.", celebrate=True, sound="jackpot")
-                st.rerun()
+    with fold("prestige", f"⭐ Prestige{f' ×{pres}' if pres else ''}", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            st.caption(f"Own the whole ladder ({len(CARS)} cars) and tune every part to L{MAX_PART_LEVEL}, then retire the "
+                       f"build: all parts go back to stock, you keep every car, your paint and your coins, and you get a "
+                       f"permanent ⭐ badge plus **+{int(PRESTIGE_STEP * 100)}% coins on every task** "
+                       f"(stacks to +{int(PRESTIGE_STEP * PRESTIGE_MAX * 100)}%).")
+            st.progress(min(1.0, (n_own + n_max) / (len(CARS) + len(PARTS))),
+                        text=f"🚗 {n_own}/{len(CARS)} cars owned · 🔧 {n_max}/{len(PARTS)} parts at L{MAX_PART_LEVEL}"
+                             + (f" · ⭐ ×{pres} (+{int((prestige_mult(state) - 1) * 100)}% coins now)" if pres else ""))
+            if ready_:
+                sure = st.checkbox("I'm retiring this build: every part back to stock", key="pres_sure")
+                if st.button("⭐ Retire the build", type="primary", disabled=not sure, key="pres_go"):
+                    for k in PARTS:
+                        car["parts"][k] = 0
+                    state["prestige"] = pres + 1
+                    state.setdefault("prestige_log", []).append({"at": now().isoformat(), "n": pres + 1})
+                    save_state(state)
+                    flash(f"⭐ **Prestige {pres + 1}.** The build is retired; the badge is forever. Task coins now pay "
+                          f"×{prestige_mult(state):.2f}. Time to build it again.", celebrate=True, sound="jackpot")
+                    st.rerun()
 
     st.subheader("Upgrades")
     cap_now = G.cap(model["id"])
@@ -8792,15 +8892,16 @@ with tab_garage:
                         n_, why = G.UPGRADES[key][i]
                         st.markdown(f"**L{i + 1} {n_}** — {why}")
 
-    with fold("livery", "🎨 Livery", False):
-        with st.form("livery"):
-            name = st.text_input("Car name", value=car["name"], max_chars=24)
-            num = st.number_input("Number", 1, 99, value=int(car["number"]))
-            color = st.color_picker("Paint", value=car["color"])
-            if st.form_submit_button("Save livery"):
-                car.update({"name": name.strip() or car["name"], "number": int(num), "color": color})
-                save_state(state)
-                st.rerun()
+    with fold("livery", "🎨 Livery", False) as _fo:
+        if _open(_fo):  # collapsed = not built (faster page, smaller download)
+            with st.form("livery"):
+                name = st.text_input("Car name", value=car["name"], max_chars=24)
+                num = st.number_input("Number", 1, 99, value=int(car["number"]))
+                color = st.color_picker("Paint", value=car["color"])
+                if st.form_submit_button("Save livery"):
+                    car.update({"name": name.strip() or car["name"], "number": int(num), "color": color})
+                    save_state(state)
+                    st.rerun()
 
 # ── Race ──
 with tab_race:
@@ -8903,11 +9004,12 @@ with tab_race:
 
         _hide = 1 if (st.session_state.get("race_replay") or {}).get("revealed") is False else 0
         if state["races"][_hide:]:
-            with fold("race_history", "Race history", False):
-                for r in state["races"][_hide:15]:
-                    pos = r["pos"] if r["pos"] == "DNF" else f"P{r['pos']}"
-                    st.markdown(f"**{pos}** {r['track']} · +{r['payout']} 🪙 "
-                                f"<small>· {parse_dt(r['ts']):%b %d}</small>", unsafe_allow_html=True)
+            with fold("race_history", "Race history", False) as _fo:
+                if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                    for r in state["races"][_hide:15]:
+                        pos = r["pos"] if r["pos"] == "DNF" else f"P{r['pos']}"
+                        st.markdown(f"**{pos}** {r['track']} · +{r['payout']} 🪙 "
+                                    f"<small>· {parse_dt(r['ts']):%b %d}</small>", unsafe_allow_html=True)
 
 # ── Lounge ──
 with tab_lounge:
@@ -9175,19 +9277,20 @@ with tab_set:
             else:
                 st.caption("Add ZOTERO_USER_ID and ZOTERO_API_KEY to secrets. Both are on zotero.org/settings/keys; "
                            "the user ID is at the top of that page.")
-        with fold("adv", "Claude model and Notion import", False):
-            with st.form("set_adv", border=False):
-                model = st.text_input("Claude model", value=s["model"])
-                db = st.text_input("Import tasks from another Notion database (link or ID)", value=s["notion_db"])
-                c1, c2 = st.columns(2)
-                dprop = c1.text_input("Due-date property (blank = first date)", value=s["notion_date_prop"])
-                fprop = c2.text_input("Done property (optional)", value=s["notion_done_prop"])
-                if st.form_submit_button("Save", type="primary"):
-                    s.update(model=model.strip(), notion_db=db.strip(), notion_date_prop=dprop.strip(),
-                             notion_done_prop=fprop.strip())
-                    save_state(state)
-                    flash("Saved.")
-                    st.rerun()
+        with fold("adv", "Claude model and Notion import", False) as _fo:
+            if _open(_fo):  # collapsed = not built (faster page, smaller download)
+                with st.form("set_adv", border=False):
+                    model = st.text_input("Claude model", value=s["model"])
+                    db = st.text_input("Import tasks from another Notion database (link or ID)", value=s["notion_db"])
+                    c1, c2 = st.columns(2)
+                    dprop = c1.text_input("Due-date property (blank = first date)", value=s["notion_date_prop"])
+                    fprop = c2.text_input("Done property (optional)", value=s["notion_done_prop"])
+                    if st.form_submit_button("Save", type="primary"):
+                        s.update(model=model.strip(), notion_db=db.strip(), notion_date_prop=dprop.strip(),
+                                 notion_done_prop=fprop.strip())
+                        save_state(state)
+                        flash("Saved.")
+                        st.rerun()
 
     else:  # Backup
         with st.container(border=True):
