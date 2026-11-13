@@ -324,7 +324,9 @@ def run(n: Notion, parent: str, topic: str, app_url: str | None, now: datetime |
     quiet, today, sent = in_quiet(now.hour), now.date().isoformat(), []
 
     def send(title, msg, prio, tags):
-        push(topic, title, msg, prio, tags, click=app_url)
+        to = "dailies" if "🔁" in title or "🕌" in title else "timer" if "⏱️" in title else "mission"
+        push(topic, title, msg, prio, tags,
+             click=f"{app_url}{'&' if '?' in app_url else '?'}to={to}" if app_url else app_url)  # lands on that section
         sent.append(title)
 
     tasks = collect(save, rows)

@@ -4058,8 +4058,73 @@ def render_commitments_manage(state: dict) -> None:
 
 
 # ── Today: up next · your goals · the car ──
-def _go_tab(label: str) -> None:
+# Where a tap or a notification can land: section → (tab, the element to scroll to, the fold to open, extra state)
+JUMPS = {
+    "mission": ("🏁 Today", "tg_today", "live_card", {}),
+    "timer": ("🏁 Today", "tg_timer", "timer", {}),
+    "dailies": ("🏁 Today", "tg_dailies", "dailies", {}),
+    "commit": ("🏁 Today", "tg_commit", "commitments", {}),
+    "crew": ("🏁 Today", "tg_crew", "crew", {}),
+    "journal": ("📒 Log", None, None, {"stats_view": "📓 Journal"}),
+    "tasks": ("✅ Tasks", None, "tasks_open", {}),
+    "goals": ("🎯 Goals", None, None, {}),
+    "race": ("🏎️ Race", None, None, {}),
+}
+
+
+def _go_tab(label: str, to: str | None = None) -> None:
     st.session_state["nav"] = label
+    if to in JUMPS:
+        jump_to(to)
+
+
+def jump_to(to: str) -> None:
+    """Open the right tab, unfold the section and scroll to it (after this run renders)."""
+    tab, el, fold_k, extra = JUMPS[to]
+    st.session_state["nav"] = tab
+    for k, v in extra.items():
+        st.session_state[k] = v
+    if fold_k:
+        st.session_state["_open_fold"] = fold_k  # applied once the save is loaded this run (apply_jump)
+    if el:
+        st.session_state["_jump"] = el
+
+
+def jump_from_link() -> None:
+    """A notification opens ?to=<section>: land there, then tidy the URL."""
+    to = st.query_params.get("to")
+    if to:
+        st.query_params.pop("to", None)
+        if to in JUMPS:
+            jump_to(to)
+
+
+def apply_jump(state: dict) -> None:
+    k = st.session_state.pop("_open_fold", None)
+    if not k:
+        return
+    if not state.setdefault("folds", {}).get(k, False):
+        state["folds"][k] = True
+        save_state(state)
+    for pre in ("card_", "fold_"):
+        if pre + k in st.session_state:
+            st.session_state[pre + k] = True
+
+
+def render_jump() -> None:
+    el = st.session_state.pop("_jump", None)
+    if not el:
+        return
+    with st.container(key="jump_js"):
+        st.iframe(f"""<script>
+(function(){{const P=window.parent.document;let n=0;
+ const go=()=>{{const e=P.querySelector('.st-key-{el}');
+   if(e&&e.offsetHeight>0){{e.scrollIntoView({{behavior:'smooth',block:'start'}});
+     e.style.transition='box-shadow .4s';e.style.boxShadow='0 0 0 2px var(--y,#f5c518)';e.style.borderRadius='16px';
+     setTimeout(()=>{{e.style.boxShadow='none'}},1600);if(++n<3)setTimeout(go,500);}}
+   else if(++n<25)setTimeout(go,200);}};
+ setTimeout(go,150);}})();
+</script>""", height=1)
 
 
 def mission_sorted(state: dict, m: list[dict], d: date | None = None) -> list[dict]:
@@ -4201,7 +4266,7 @@ def render_up_next(state: dict) -> None:
         c1.markdown(f"<div class='dod-next slim'><div class='k'>🚦 Qualify by {stt['deadline']:%I:%M %p}".replace("by 0", "by ")
                     + f" · {fmt_left(stt['deadline'] - n_)} left</div></div>", unsafe_allow_html=True)
         c2.button("Lock in →", key="upn_q", type="primary", use_container_width=True, on_click=_go_tab,
-                  args=("🏁 Today",))
+                  args=("🏁 Today", "mission"))
         return
     tm = state.get("timer")
     if tm:
@@ -6619,6 +6684,10 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 /* ── the loading screen (sign-in check + first load) ── */
 .dod-load{min-height:72vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
   background:radial-gradient(60% 45% at 50% 42%,rgba(245,197,24,.07),transparent 70%);animation:dodIn .35s ease-out both}
+.st-key-jump_js{position:absolute;height:0;overflow:hidden}
+.dod-load.cover{position:fixed;inset:0;z-index:999980;min-height:100vh;background-color:#12151c;
+  animation:dodCoverOut .01s 20s forwards}  /* safety: never covers the app for more than 20 s */
+@keyframes dodCoverOut{to{visibility:hidden;pointer-events:none}}
 .dod-load-lights{display:flex;gap:10px;padding:10px 14px;border-radius:12px;background:#0b0d11;border:1px solid #232833}
 .dod-load-lights i{width:16px;height:16px;border-radius:50%;background:#2a1012;box-shadow:inset 0 0 0 2px #3a1416;
   animation:dodLight 2.6s infinite}
@@ -7137,9 +7206,9 @@ _SYNC_LATER = bool(st.session_state.get("_fresh_load") and notion_cfg())  # clea
 sync_msgs = st.session_state.pop("_sync_msgs", [])
 _T_LOADED = time.time()
 
-if _boot is not None:
-    _boot.empty()
-    st.session_state["_booted"] = True
+if _boot is not None:  # keep the start lights up (as a cover) while the page builds underneath; lifted at the very end
+    _boot.markdown(_loader(("Warming up the tyres…", "Building your day…", "Checking Notion…")).replace(
+        "class='dod-load'", "class='dod-load cover'", 1), unsafe_allow_html=True)
 if notion_cfg() and needs_settle(state, now()):
     state = fresh_for_settle(state, fresh=st.session_state.pop("_fresh_this_run", False))
 st.session_state.pop("_fresh_this_run", None)
@@ -7185,6 +7254,8 @@ if crash_msgs or rust_msg or _excused or _made_good or st.session_state.pop("_ne
 if rebalance_pit_checks(state):
     save_state(state)
 start_from_link(state)
+jump_from_link()
+apply_jump(state)
 remember_app_url(state)
 sync_alarms(state)
 
@@ -9239,3 +9310,7 @@ if _SYNC_LATER:
     if _sm or _changed:
         st.session_state["_sync_msgs"] = _sm
         st.rerun()
+render_jump()
+if _boot is not None:  # everything is on the page and synced: lights out
+    _boot.empty()
+    st.session_state["_booted"] = True

@@ -67,10 +67,16 @@ def _hm(dt: datetime) -> str:
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
+# Tapping a notification opens the app on the section it's about (?to=…; see JUMPS in app.py)
+TO = {"q": "mission", "qb": "mission", "qw": "mission", "z": "mission", "sl": "mission", "block": "mission",
+      "task": "mission", "dl": "dailies", "pr": "dailies", "cm": "commit", "journal": "journal", "recap": "journal",
+      "timer": "timer", "ch": "timer"}
+
+
 def _alarm(key, at, title, msg, prio, tags, wanted, go=None):
     """go=(task id or 'new', minutes) adds a ▶️ Start button that opens the app with that timer running."""
     return {"seq": _seq(*key), "at": at, "title": title, "message": msg, "priority": prio, "tags": tags,
-            "wanted": bool(wanted), "go": go}
+            "wanted": bool(wanted), "go": go, "to": TO.get(key[0])}
 
 
 def _prayers(save: dict, d: date, now: datetime) -> list[dict]:
@@ -408,8 +414,9 @@ def send(topic: str, post: list[dict], cancel: list[dict], click: str | None = N
         body = {"topic": topic, "title": a["title"], "message": a["message"], "priority": a["priority"],
                 "tags": a["tags"], "sequence_id": a["seq"], "delay": str(int(a["at"].timestamp()))}
         if click:
-            body["click"] = click
-            body["actions"] = [{"action": "view", "label": "Open Deadline or Die", "url": click, "clear": True}]
+            here = f"{click}{'&' if '?' in click else '?'}to={a['to']}" if a.get("to") else click
+            body["click"] = here
+            body["actions"] = [{"action": "view", "label": "Open Deadline or Die", "url": here, "clear": True}]
             if a.get("go"):
                 tid, mins = a["go"]
                 go = f"{click}{'&' if '?' in click else '?'}go={tid}&m={int(mins)}"
