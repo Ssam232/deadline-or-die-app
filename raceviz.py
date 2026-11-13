@@ -20,6 +20,11 @@ TRACK_SHAPES = {
                            "C30,165 25,130 45,120 L90,100 L40,80 Z",
     "Prairie 12 Hours": "M30,150 L230,150 C300,150 300,96 250,90 L200,84 C170,80 175,46 205,40 L280,30 "
                         "C300,28 300,12 280,12 L60,14 C20,16 14,60 36,80 L70,108 C82,120 20,118 30,150 Z",
+    "Kananaskis Night Stage": "M30,120 C30,60 70,30 120,40 L170,50 C200,56 210,30 240,24 C290,14 306,60 280,84 "
+                              "L240,118 C222,134 260,150 250,166 C238,184 180,170 150,160 L80,150 C50,146 30,140 30,120 Z",
+    "Icefields Endurance": "M40,170 L280,170 C306,170 306,130 280,128 L120,120 C96,118 96,96 120,94 L280,86 "
+                           "C306,84 306,40 280,38 L220,36 C190,34 200,12 170,12 L60,14 C24,16 16,60 34,80 "
+                           "C50,98 16,110 20,140 C22,160 28,170 40,170 Z",
 }
 # The top track changes layout every season (seasons.py); same name, new corners to learn.
 TOP_TRACK = "Defense Day 24"
@@ -47,6 +52,8 @@ TRACK_CHARACTER = {
     "Thesis Defense Ring": (["engine", "aero", "tires"], "brutal everywhere — power, downforce and grip"),
     "Prairie 12 Hours": (["turbo", "engine", "weight"], "endless prairie straights and a twelve-hour night — power that lasts"),
     "Defense Day 24": (["aero", "brakes", "tires"], "twenty-four hours against the best — downforce, brakes and tyres that survive"),
+    "Kananaskis Night Stage": (["tires", "brakes", "aero"], "a mountain road in the dark — grip, brakes and nerve"),
+    "Icefields Endurance": (["engine", "weight", "turbo"], "glacier straights at altitude — power that doesn't fade"),
 }
 RIVAL_COLORS = ["#4cc9f0", "#f72585", "#90be6d", "#f9c74f", "#b5179e", "#577590", "#f3722c"]
 PASS_PHRASES = ["late on the brakes into the hairpin", "around the outside of turn 3", "with a better exit onto the straight",

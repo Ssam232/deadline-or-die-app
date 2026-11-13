@@ -75,6 +75,7 @@ import insights as I
 import daily
 import dailies as DL
 import commitments as CM
+import crew as CR
 import locks as LK
 import pomo as PM
 import prayers as PR
@@ -188,6 +189,9 @@ TRACKS = [  # prizes stay a side-dish to real work at every stage (see race_sim 
     # the Acura-era endurance tracks: wider, faster fields; sweet-spot EV stays below the Ring's (race_sim2)
     {"name": "Prairie 12 Hours", "laps": 14, "level": 11, "fee": 95, "ai": (225, 300), "prize": [230, 115, 55]},
     {"name": "Defense Day 24", "laps": 16, "level": 14, "fee": 120, "ai": (285, 380), "prize": [270, 135, 65]},
+    # the long game: tiers above the old top, so there's always a faster grid to buy your way into
+    {"name": "Kananaskis Night Stage", "laps": 18, "level": 17, "fee": 150, "ai": (360, 470), "prize": [320, 160, 80]},
+    {"name": "Icefields Endurance", "laps": 20, "level": 20, "fee": 185, "ai": (430, 560), "prize": [380, 190, 95]},
 ]
 
 # ── conditioning layer ──
@@ -1492,7 +1496,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
     pm_ = prestige_mult(state)
     pr_ = float(t.get("prorate") or 1.0)  # timer under target as proof: pays its share
     am_ = float(t.get("time_mult") or 1.0)  # ⏳ the actual time you entered
-    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl * pm_ * pr_ * am_))
+    tb_ = TURBO_MULT if turbo_on(state, t.get("goal_id")) else 1.0  # ⚡ you invested in this goal
+    total = int(round(base * (1 + early + danger) * streak_mult * ext_cut * guard * dbl * pm_ * pr_ * am_ * tb_))
     parts = [f"base {base}"] + guard_why + (["×2 ⚡ token"] if used_token else ["×2 ⚡ double"] if dbl == 2 else [])
     if early:
         parts.append(f"+{int(early * 100)}% early")
@@ -1508,6 +1513,8 @@ def compute_reward(state: dict, t: dict, at: datetime) -> tuple[int, str]:
         parts.append(f"×{pr_:.2f} timer pro-rated ({t.get('proof_timer', 0):.0f} min logged)")
     if am_ != 1:
         parts.append(f"×{am_:.2f} ⏳ took {t.get('actual_min')} of {t.get('minutes')} min")
+    if tb_ > 1:
+        parts.append(f"×{tb_:.2f} ⚡ turbo")
     return total, ", ".join(parts)
 
 
@@ -2177,24 +2184,112 @@ def sandbag(state: dict, track: dict) -> float:
     return 1.0 if r <= hi else max(0.3, min(1.0, hi * 1.15 / r))
 
 
-def race_tickets(state: dict) -> tuple[int, str]:
-    """Races are earned: 1 ticket per proof-backed finish today + 1 per 25 minutes of focus in today's timer sessions
-    (a long session earns several, even if you stopped before its planned end). Tickets are for the day they're earned."""
-    today = now().date()
-    iso = today.isoformat()
-    finishes = sum(1 for t in daily.finished_on(state, today) if (t.get("minutes") or 0) >= TICKET_MIN_TASK)
+TICKET_BANK_CAP = 6   # unused tickets carry over, up to this many
+GP_DAY = 6            # 🏁 Sunday Grand Prix
+INVITE_BANK = 1000    # 🎟️ the Invitational only calls when you're sitting on this much
+
+
+def _tickets_earned(state: dict, d: date) -> int:
+    iso = d.isoformat()
+    finishes = sum(1 for t in daily.finished_on(state, d) if (t.get("minutes") or 0) >= TICKET_MIN_TASK)
     sessions = sum(int(float(x.get("min", 0)) // 25) for x in state.get("focus_log", []) if x.get("date") == iso)
-    raced = sum(1 for r in state.get("races", []) if r["ts"][:10] == iso)
-    left = max(0, min(RACE_DAY_CAP, finishes + sessions) - raced)
+    return finishes + sessions
+
+
+def _races_on(state: dict, d: date, kinds=("race", "gp")) -> list[dict]:
+    iso = d.isoformat()
+    return [r for r in state.get("races", []) if r["ts"][:10] == iso and r.get("kind", "race") in kinds]
+
+
+def ticket_carry(state: dict, today: date) -> int:
+    """Unused tickets from the last two weeks roll forward, capped at TICKET_BANK_CAP."""
+    c = 0
+    for i in range(14, 0, -1):
+        d = today - timedelta(days=i)
+        c = min(TICKET_BANK_CAP, max(0, c + _tickets_earned(state, d) - len(_races_on(state, d))))
+    return c
+
+
+def race_tickets(state: dict) -> tuple[int, str]:
+    """Races are earned: 1 ticket per proof-backed 30+ min finish + 1 per 25 min of timer focus. Unused tickets carry
+    over (up to 6 banked). Still at most RACE_DAY_CAP regular races a day (the Sunday GP is extra)."""
+    today = now().date()
+    carry, earned = ticket_carry(state, today), _tickets_earned(state, today)
+    used = len(_races_on(state, today))
+    raced = len(_races_on(state, today, ("race",)))
+    left = max(0, min(TICKET_BANK_CAP, carry + earned) - used)
     if raced >= RACE_DAY_CAP:
-        why = f"That's {RACE_DAY_CAP} races today — the track's closed till tomorrow."
-    elif not left:
+        why = f"That's {RACE_DAY_CAP} races today — the track's closed till tomorrow. Your {left} ticket(s) keep."
+        return 0, why
+    if not left:
         why = ("No race tickets. Finish a 30+ min task with proof, or log 25 min of focus on the timer, "
-               "to earn one. Tickets are earned and used the same day.")
+               f"to earn one. Unused tickets carry over (up to {TICKET_BANK_CAP}).")
     else:
-        why = (f"🎟️ {left} race ticket{'s' if left > 1 else ''} · earned today from {finishes} finish(es) + "
-               f"{sessions} × 25 min of focus · they reset at midnight")
+        why = (f"🎟️ {left} race ticket{'s' if left > 1 else ''} · {carry} banked + {earned} earned today"
+               f" · unused ones carry over (max {TICKET_BANK_CAP})"
+               + (f" · up to {RACE_DAY_CAP - raced} more race{'s' * (RACE_DAY_CAP - raced != 1)} today" if left > RACE_DAY_CAP - raced else ""))
     return left, why
+
+
+def field_form(state: dict, track_name: str) -> float:
+    """📈 The grid learns you. Wins (+1) and podiums (+½) at a track make its rivals faster there; off-days (−½) ease
+    it back. 0–6 → rivals up to +21%. You never get to sit on a track you've mastered."""
+    f = 0.0
+    for r in [r for r in state.get("races", []) if r["track"] == track_name and r.get("kind", "race") != "inv"][:8]:
+        f += 1 if r["pos"] == 1 else 0.5 if r["pos"] in (2, 3) else 0 if r["pos"] == "DNF" else -0.5
+    return max(0.0, min(6.0, f))
+
+
+def ai_range(state: dict, track: dict) -> tuple[int, int]:
+    up = 1 + 0.035 * field_form(state, track["name"])
+    return round(track["ai"][0] * up), round(track["ai"][1] * up)
+
+
+def run_cost(state: dict, track: dict) -> int:
+    """⛽ Fuel, tyres, brake pads: faster cars cost more to run, every lap."""
+    car = state["car"]
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    rate = 1 + math.sqrt(CAR_BY_ID[mid]["cost"]) / 25
+    return round(track["laps"] * rate * (0.7 if "tires" in state.get("crew", []) else 1))
+
+
+def best_track(state: dict) -> int:
+    """The auto-pick: the highest unlocked track you can actually win (your car inside its field), else the highest
+    you can at least run with."""
+    lv = level_of(state["xp"])
+    ok = [i for i, t in enumerate(TRACKS) if lv >= t["level"]]
+    if not ok:
+        return 0
+    win = [i for i in ok if track_rating(state, TRACKS[i]) >= ai_range(state, TRACKS[i])[0]]
+    return win[-1] if win else ok[0]
+
+
+def gp_track(state: dict) -> dict:
+    """🏁 This Sunday's Grand Prix: your best track, half again as long, double the stakes."""
+    t = dict(TRACKS[best_track(state)])
+    t.update(name=t["name"], gp=True, laps=round(t["laps"] * 1.5), fee=t["fee"] * 2,
+             prize=[round(x * 2.2) for x in t["prize"]])
+    return t
+
+
+def gp_open(state: dict) -> bool:
+    n_ = now()
+    return n_.weekday() == GP_DAY and not any(r.get("kind") == "gp" for r in _races_on(state, n_.date(), ("gp",)))
+
+
+def invitational(state: dict) -> dict | None:
+    """🎟️ When you're hoarding (bank > INVITE_BANK) a once-a-week invitation: a field built around YOUR pace.
+    ~13% to win, ~50% podium; it costs more than it pays on average. It's for glory, and it spends."""
+    n_ = now()
+    if state["coins"] <= INVITE_BANK:
+        return None
+    wk = n_.isocalendar()[:2]
+    if any(r.get("kind") == "inv" and parse_dt(r["ts"]).isocalendar()[:2] == wk for r in state.get("races", [])):
+        return None
+    lf = daily.level_factor(state)
+    lv = level_of(state["xp"])
+    base = dict([t for t in TRACKS if lv >= t["level"]][-1])  # the most prestigious track you've unlocked
+    return dict(base, inv=True, fee=round(300 * lf), prize=[round(800 * lf), round(400 * lf), round(150 * lf)])
 
 
 @st.fragment(run_every=2)
@@ -2216,20 +2311,34 @@ def _race_result(rp: dict) -> None:
     st.markdown(rp["why"])
 
 
+def _race_boosts(state: dict) -> float:
+    """Rating bumps for this race: 🧪 consumables bought for it, and the 🧑‍🔧 strategist."""
+    b = sum(SHOP_BOOSTS[k]["rating"] for k in state.get("boosts", []) if k in SHOP_BOOSTS)
+    return b + (3 if "strategist" in state.get("crew", []) else 0)
+
+
 def race_seconds(track: dict) -> int:
     return 8 + 5 * track["laps"]  # 23 s for a 3-lap sprint … 68 s for the 12-lap Ring
 
 
-def simulate_race(state: dict, track: dict) -> None:
+def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
+    """kind: race · gp (🏁 Sunday Grand Prix) · inv (🎟️ Invitational: a field built around your pace)."""
     car = state["car"]
     cond_before = car["condition"]
     heat_lvl = state["rival_heat"]
+    boost = _race_boosts(state)
     you = {"name": f"#{car['number']} {car['name']}", "you": True,
-           "rating": track_rating(state, track) + random.gauss(0, 5), "color": car["color"]}
+           "rating": track_rating(state, track) + boost + random.gauss(0, 5), "color": car["color"]}
     heat = 3 * heat_lvl  # your misses literally make them faster
-    rivals = [{"name": n, "you": False, "rating": random.uniform(*track["ai"]) + heat + random.gauss(0, 5),
-               "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
-    mult = sandbag(state, track)
+    lo_, hi_ = ai_range(state, track)  # 📈 …and so do your wins
+    if kind == "inv":
+        base_r = track_rating(state, track) + boost
+        rivals = [{"name": n, "you": False, "rating": base_r + random.uniform(-6, 6) + heat + random.gauss(0, 5),
+                   "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
+    else:
+        rivals = [{"name": n, "you": False, "rating": random.uniform(lo_, hi_) + heat + random.gauss(0, 5),
+                   "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
+    mult = sandbag(state, track) if kind != "inv" else 1.0
     if mult < 1:  # you outclass the track: the fast guys show up too
         for r_ in rivals[:2]:
             r_["rating"] = you["rating"] * random.uniform(0.9, 1.06) + random.gauss(0, 5)
@@ -2251,19 +2360,27 @@ def simulate_race(state: dict, track: dict) -> None:
 
     order = sorted(field, key=lambda f: (not f["dnf"], f["dist"]), reverse=True)
     pos = next(i for i, f in enumerate(order, 1) if f["you"])
-    payout = 0 if you["dnf"] else (round(track["prize"][pos - 1] * mult) if pos <= 3 else 0)
+    payout = 0 if you["dnf"] else (round(track["prize"][pos - 1] * mult * (1.05 if "chief" in state.get("crew", []) else 1))
+                                   if pos <= 3 else 0)
     wear = 2 + track["laps"] // 3
+    if "engineer" in state.get("crew", []):
+        wear = max(1, round(wear * 0.7))
     car["condition"] = max(0, car["condition"] - wear)
     state["xp"] += 5
+    tag = {"gp": "🏁 Sunday GP: ", "inv": "🎟️ Invitational: "}.get(kind, "")
     if payout:
-        bank(state, payout, f"🏆 P{pos} at {track['name']}")
-    state["races"].insert(0, {"ts": now().isoformat(), "track": track["name"],
+        bank(state, payout, f"🏆 P{pos} at {tag}{track['name']}")
+    state["races"].insert(0, {"ts": now().isoformat(), "track": track["name"], "kind": kind,
                               "pos": "DNF" if you["dnf"] else pos, "payout": payout})
+    if pos == 1 and not you["dnf"] and kind in ("gp", "inv"):
+        state.setdefault("cups", []).append({"kind": kind, "track": track["name"], "date": now().date().isoformat()})
+    state["boosts"] = []  # 🧪 one-race consumables are used up
     del state["races"][100:]
     save_state(state)
     winner = order[0]
     gap = (winner["dist"] - you["dist"]) / max(you["rating"], 1) * 1.7  # pseudo-seconds
     names = [html.escape(f["name"]) for f in field]
+    title_ = {"gp": f"🏁 Sunday Grand Prix · {track['name']}", "inv": f"🎟️ Invitational · {track['name']}"}.get(kind, track["name"])
     ticker = RV.narrate(history, [f["name"] for f in field], 0, track["laps"], track["name"], dnf_tick, random.Random())
     mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
     why = RV.explain("DNF" if you["dnf"] else pos, gap, track["name"], cond_before, heat_lvl,
@@ -2283,7 +2400,7 @@ def simulate_race(state: dict, track: dict) -> None:
     st.session_state["race_replay"] = {
         "html": RV.replay_html(track["name"], history, names, [f["color"] for f in field], 0, track["laps"],
                                ticker, dnf_tick, seconds=secs, start_ms=time.time() * 1000),
-        "why": why, "title": track["name"], "result": res, "payout": payout,
+        "why": why, "title": title_, "result": res, "payout": payout,
         "reveal_at": time.time() + secs + 1, "revealed": False,
     }
     st.rerun()
@@ -3502,6 +3619,193 @@ def render_today(state: dict) -> None:
             render_qualify_form(state)
 
 
+# ── 🪙 Coin sinks: race boosts · crew · dealer · turbo ──
+SHOP_BOOSTS = {  # one race only; priced off the track's entry fee
+    "nitro": {"label": "🧪 Nitro", "rating": 6, "k": 1.2, "why": "+6 rating for one race"},
+    "setup": {"label": "🔧 Setup tune", "rating": 4, "k": 0.8, "why": "+4 rating for one race"},
+}
+TURBO_MULT, TURBO_DAYS = 1.25, 7
+DEALER_HOURS = 48
+
+
+def boost_price(k: str, track: dict) -> int:
+    return max(10, round(track["fee"] * SHOP_BOOSTS[k]["k"]))
+
+
+def render_boost_shop(state: dict, track: dict) -> None:
+    have = state.setdefault("boosts", [])
+    c = st.columns(len(SHOP_BOOSTS))
+    for col, (k, b) in zip(c, SHOP_BOOSTS.items()):
+        if k in have:
+            col.caption(f"✅ {b['label']} loaded")
+        elif col.button(f"{b['label']} · {boost_price(k, track)} 🪙", key=f"boost_{k}", use_container_width=True,
+                        help=b["why"] + " (used up in your next race)", disabled=state["coins"] < boost_price(k, track)):
+            bank(state, -boost_price(k, track), f"{b['label']} for {track['name']}")
+            have.append(k)
+            save_state(state)
+            st.rerun()
+
+
+def crew_ctx(state: dict) -> dict:
+    n_ = now()
+    d = n_.date()
+    stt = daily.status(state, n_)
+    att = state.get("attendance", {})
+    flaked = any(r.get("status") == "flaked" and k.split("|")[1] >= (d - timedelta(days=1)).isoformat()
+                 for k, r in att.items())
+    won = any(r["ts"][:10] == d.isoformat() and r["pos"] == 1 for r in state.get("races", []))
+    short = n_.hour >= 17 and daily.slice_penalty(state, d)[0] > 0
+    return {"name": state["settings"].get("player_name", "Driver"), "qualified": stt["qualified"],
+            "focus": int(focus_today(state)), "done": len(daily.finished_on(state, d)),
+            "streak": int(state.get("day_streak", 0)), "flaked": flaked, "slices_short": short, "won": won,
+            "coins": f"{state['coins']:,}", "hour": n_.hour}
+
+
+def render_crew_card(state: dict) -> None:
+    hired = [k for k in CR.CREW if k in state.get("crew", [])]
+    q, who = CR.quote_of_day(now().date())
+    with fold("crew", "🧑‍🔧 **Your crew**" + (f" :gray[{len(hired)}]" if hired else ""), True, card=True):
+        if hired:
+            ctx = crew_ctx(state)
+            mood = CR.mood(ctx)
+            for k in hired:
+                c = CR.CREW[k]
+                since = (state.get("crew_since") or {}).get(k)
+                days = (now().date() - date.fromisoformat(since)).days if since else 0
+                st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 52, mood)}</div><div>"
+                            f"<b>{c['name']}</b> <span class='r'>· {c['role']}{f' · {days} days with you' if days else ''}</span>"
+                            f"<div class='say'>“{html.escape(CR.line(k, ctx))}”</div></div></div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='dod-crew'>" + "".join(f"<div class='av ghost'>{CR.avatar_svg(k, 40)}</div>"
+                                                           for k in CR.CREW) + "</div>", unsafe_allow_html=True)
+            st.caption("Nobody in your garage yet. Hire a crew in 🔧 Garage: each one gives a permanent perk, "
+                       "and they'll be here every day.")
+        st.markdown(f"<div class='dod-quote'>“{html.escape(q)}”<span>— {html.escape(who)}</span></div>",
+                    unsafe_allow_html=True)
+
+
+def render_crew_hire(state: dict) -> None:
+    crew = state.setdefault("crew", [])
+    with fold("crew_hire", f"🧑‍🔧 Crew — {len(crew)}/{len(CR.CREW)} hired", len(crew) < len(CR.CREW)):
+        st.caption("Hire once, keep forever. Each brings a permanent perk and shows up on Today.")
+        cols = st.columns(2)
+        for i, (k, c) in enumerate(CR.CREW.items()):
+            with cols[i % 2], st.container(border=True, key=f"crew_{k}"):
+                st.markdown(f"<div class='dod-crew'><div class='av{'' if k in crew else ' ghost'}'>{CR.avatar_svg(k, 56)}</div>"
+                            f"<div><b>{c['name']}</b> <span class='r'>· {c['role']}</span>"
+                            f"<div class='say'>{c['perk']}</div></div></div>", unsafe_allow_html=True)
+                price = dealer_price(state, "crew", k, c["price"])
+                if k in crew:
+                    st.caption("✅ On the team")
+                elif st.button(f"Hire · {price:,} 🪙", key=f"hire_{k}", use_container_width=True,
+                               disabled=state["coins"] < price, type="primary"):
+                    bank(state, -price, f"🧑‍🔧 Hired {c['name']} ({c['role']})")
+                    crew.append(k)
+                    state.setdefault("crew_since", {})[k] = now().date().isoformat()
+                    _dealer_sold(state, "crew", k)
+                    save_state(state)
+                    flash(f"🧑‍🔧 **{c['name']}** joined the crew: {c['perk']}.", celebrate=True, sound="jackpot")
+                    st.rerun()
+
+
+def _dealer_window() -> int:
+    return int(now().timestamp() // (DEALER_HOURS * 3600))
+
+
+def _dealer_pool(state: dict) -> list[dict]:
+    """Things the dealer can put on offer for you right now."""
+    lv = level_of(state["xp"])
+    car = state["car"]
+    out = []
+    for m in CARS:
+        if m["id"] not in car.get("owned", []) and lv >= m["level"] and m["cost"]:
+            out.append({"kind": "car", "id": m["id"], "name": m["name"], "price": m["cost"], "off": 0.2})
+    for k, c in CR.CREW.items():
+        if k not in state.get("crew", []):
+            out.append({"kind": "crew", "id": k, "name": f"{c['name']}, {c['role']}", "price": c["price"], "off": 0.15})
+    for k, (name, _a, _o, cost, need, _b) in THEMES.items():
+        if k not in state.get("themes_owned", []) and lv >= need and cost:
+            out.append({"kind": "theme", "id": k, "name": f"{name} paint", "price": cost, "off": 0.3})
+    return out
+
+
+def dealer_offer(state: dict) -> dict | None:
+    """🛒 While you're sitting on more than INVITE_BANK, one rotating deal every 48 h."""
+    if state["coins"] <= INVITE_BANK:
+        return None
+    w = _dealer_window()
+    if (state.get("dealer") or {}).get("sold") == w:
+        return None
+    pool = _dealer_pool(state)
+    if not pool:
+        return None
+    o = dict(pool[int(hashlib.sha1(str(w).encode()).hexdigest(), 16) % len(pool)])
+    o["deal"] = round(o["price"] * (1 - o["off"]))
+    o["ends"] = datetime.fromtimestamp((w + 1) * DEALER_HOURS * 3600, TZ)
+    return o
+
+
+def dealer_price(state: dict, kind: str, id_: str, full: int) -> int:
+    o = dealer_offer(state)
+    return o["deal"] if o and o["kind"] == kind and o["id"] == id_ else full
+
+
+def _dealer_sold(state: dict, kind: str, id_: str) -> None:
+    o = dealer_offer(state)
+    if o and o["kind"] == kind and o["id"] == id_:
+        state["dealer"] = {"sold": _dealer_window()}
+
+
+def render_dealer(state: dict) -> None:
+    o = dealer_offer(state)
+    left = o["ends"] - now()
+    with st.container(border=True, key="dealer_card"):
+        st.markdown(f"**🛒 Dealer's offer** · {hmin(left.total_seconds() / 60)} left")
+        st.markdown(f"{o['name']}: ~~{o['price']:,}~~ **{o['deal']:,} 🪙** ({int(o['off'] * 100)}% off)")
+        st.caption("You're sitting on a lot of coins. Coins in the bank don't make the car faster.")
+        if st.button(f"Buy · {o['deal']:,} 🪙", key="dealer_buy", use_container_width=True, type="primary"):
+            bank(state, -o["deal"], f"🛒 Dealer: {o['name']}")
+            if o["kind"] == "car":
+                state["car"].setdefault("owned", ["civic_si"]).append(o["id"])
+                state["car"]["model"] = o["id"]
+            elif o["kind"] == "crew":
+                state.setdefault("crew", []).append(o["id"])
+                state.setdefault("crew_since", {})[o["id"]] = now().date().isoformat()
+            elif o["kind"] == "theme":
+                state.setdefault("themes_owned", ["phoenix"]).append(o["id"])
+                state["ui_theme"] = o["id"]
+            state["dealer"] = {"sold": _dealer_window()}
+            save_state(state)
+            flash(f"🛒 **{o['name']}** for {o['deal']:,}. Good deal.", celebrate=True, sound="jackpot")
+            st.rerun()
+
+
+def turbo_on(state: dict, gid: str | None) -> bool:
+    until = (state.get("turbo") or {}).get(gid) if gid else None
+    return bool(until) and now() < datetime.fromisoformat(until)
+
+
+def turbo_cost(state: dict) -> int:
+    return round(300 * daily.level_factor(state))
+
+
+def render_turbo(state: dict, g: dict) -> None:
+    """⚡ Spend coins on a goal: its tasks pay +25% for a week. The one coin sink that pays you back for working."""
+    if turbo_on(state, g["id"]):
+        until = datetime.fromisoformat(state["turbo"][g["id"]])
+        st.caption(f"⚡ Turbo on: this goal's tasks pay ×{TURBO_MULT} until {until:%a %b} {until.day}.")
+        return
+    cost = turbo_cost(state)
+    if st.button(f"⚡ Turbo this goal · {cost} 🪙", key=f"turbo_{g['id']}", disabled=state["coins"] < cost,
+                 help=f"Every task on this goal pays ×{TURBO_MULT} for {TURBO_DAYS} days."):
+        bank(state, -cost, f"⚡ Turbo: {g['title']}")
+        state.setdefault("turbo", {})[g["id"]] = (now() + timedelta(days=TURBO_DAYS)).isoformat()
+        save_state(state)
+        flash(f"⚡ **{g['title']}** is turbocharged: ×{TURBO_MULT} on its tasks for {TURBO_DAYS} days. Go use it.",
+              sound="win")
+        st.rerun()
+
+
 # ── 📍 Commitments: showing up ──
 _GEO = components.declare_component("geo", path=str(Path(__file__).parent / "components" / "geo"))
 
@@ -3649,25 +3953,26 @@ def render_commitments_manage(state: dict) -> None:
     kind = kind or "weekly"
     with st.form("cm_add", clear_on_submit=True, border=False):
         name = st.text_input("What", placeholder={"weekly": "🥋 Taekwondo", "quota": "🏢 Office",
-                                                   "oneoff": "🎉 Club event"}[kind])
+                                                   "oneoff": "🎉 Club event"}[kind], key="cm_name")
         stakes = st.radio("Stakes", list(CM.STAKES), format_func=lambda k: CM.STAKES[k]["label"], horizontal=True,
-                          index=0 if kind == "weekly" else 1 if kind == "quota" else 2)
+                          index=0 if kind == "weekly" else 1 if kind == "quota" else 2, key="cm_stakes")
         c1, c2, c3 = st.columns(3)
         days, on, per, stay, t_, mins = [], None, 3, CM.STAY_DEFAULT, dtime(19, 0), 90
         if kind == "weekly":
             days = st.pills("Days", CM.WD, selection_mode="multi", key="cm_days")
-            t_ = c1.time_input("Starts", value=dtime(19, 0), step=900)
-            mins = c2.selectbox("Length", [30, 45, 60, 90, 120, 180], index=3, format_func=min_label)
+            t_ = c1.time_input("Starts", value=dtime(19, 0), step=900, key="cm_t")
+            mins = c2.selectbox("Length", [30, 45, 60, 90, 120, 180], index=3, format_func=min_label, key="cm_len")
         elif kind == "oneoff":
-            on = c1.date_input("Date", value=n_.date(), min_value=n_.date())
-            t_ = c2.time_input("Starts", value=dtime(19, 0), step=900)
-            mins = c3.selectbox("Length", [30, 45, 60, 90, 120, 180, 240], index=3, format_func=min_label)
+            on = c1.date_input("Date", value=n_.date(), min_value=n_.date(), key="cm_on")
+            t_ = c2.time_input("Starts", value=dtime(19, 0), step=900, key="cm_t1")
+            mins = c3.selectbox("Length", [30, 45, 60, 90, 120, 180, 240], index=3, format_func=min_label, key="cm_len1")
         else:
-            per = c1.number_input("Times a week", 1, 7, 3)
+            per = c1.number_input("Times a week", 1, 7, 3, key="cm_per")
             stay = c2.selectbox("Stay at least", [0, 30, 60, 120, 180, 240], index=3,
-                                format_func=lambda m: "just tap in" if not m else min_label(m))
+                                format_func=lambda m: "just tap in" if not m else min_label(m), key="cm_stay")
             days = st.pills("Counts on", CM.WD, selection_mode="multi", default=CM.WD[:5], key="cm_qdays")
-        travel = c3.number_input("Travel (min)", 0, 120, 20, 5, help="For the 🚗 leave-now nag.") if kind != "oneoff" else 20
+        travel = c3.number_input("Travel (min)", 0, 120, 20, 5, help="For the 🚗 leave-now nag.",
+                                 key="cm_travel") if kind != "oneoff" else 20
         if st.form_submit_button("➕ Add commitment", type="primary"):
             dsel = [CM.WD.index(x) for x in (days or [])]
             if not name.strip():
@@ -6280,6 +6585,12 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 .dod-pills span{font-size:.8rem;color:var(--muted);background:var(--card,#141821);border:1px solid var(--line);border-radius:999px;
   padding:3px 10px}
 .dod-pills b{color:#ece8df;font-weight:600}
+.dod-crew{display:flex;gap:12px;align-items:center;margin:6px 0 10px}.dod-crew .av{flex:0 0 auto;line-height:0}
+.dod-crew .av.ghost{opacity:.28;filter:grayscale(1)}.dod-crew .r{color:#8b909c;font-size:.85rem}
+.dod-crew .say{font-size:.92rem;margin-top:2px}
+.dod-quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(--y);font-style:italic;
+  color:#d6d8dd;font-size:.92rem;background:rgba(255,255,255,.03);border-radius:0 8px 8px 0}
+.dod-quote span{display:block;font-style:normal;color:#8b909c;font-size:.8rem;margin-top:4px}
 .dod-mrow{display:flex;gap:10px;align-items:center;padding:9px 14px;margin:0 0 .5rem;border:1px solid var(--line);
   border-radius:12px;background:var(--card,#141821)}
 .dod-mrow .m{color:var(--muted);font-size:.85rem;margin-left:6px}
@@ -6367,6 +6678,9 @@ THEMES = {  # key: (name, accent, text-on-accent, cost, level, blurb)
     "mugen": ("Mugen Gold", "#d9a441", "#14171d", 500, 3, "Gold wheels on a white Civic: the tuner look."),
     "nsx": ("NSX Orange", "#ff7a1a", "#14171d", 700, 3, "A loud orange pearl off the NSX colour chart."),
     "ctr": ("Championship White", "#f1efe8", "#14171d", 1000, 4, "White with a red badge: the Type R signature."),
+    "valencia": ("Valencia Red", "#c4142f", "#ffffff", 1400, 5, "A deep red pearl for the cars that earned it."),
+    "longbeach": ("Long Beach Blue", "#3f78c9", "#ffffff", 1800, 6, "The bright blue of a sunny track day."),
+    "sonic": ("Sonic Gray", "#8f98a3", "#14171d", 2400, 8, "Liquid-metal grey. Understated, expensive."),
 }
 
 
@@ -6915,6 +7229,11 @@ with tab_today:
         with c_rail:
             with st.container(key="tg_car"):
                 render_car_card(state)
+            with st.container(key="tg_crew"):
+                render_crew_card(state)
+            if dealer_offer(state):
+                with st.container(key="tg_dealer"):
+                    render_dealer(state)
             with st.container(key="tg_season"):
                 render_season_card(state)
             if not state.get("timer"):
@@ -7707,6 +8026,7 @@ with tab_goals:
                         text=f"{n_done}/{len(gtasks)} milestones · {'📅 event' if g.get('event_kind') else 'target'} "
                              f"{target:%b %d, %Y} "
                              f"({(target - now().date()).days} days)")
+            render_turbo(state, g)
             big = R.goal_bonus(g, state["tasks"])
             flow_ed = False  # True when the editor is open under the flow chart (then it holds the planner)
             if gtasks or R.stages(g) or R.notes(g):  # any goal with something in it gets its chart
@@ -8165,6 +8485,7 @@ with tab_garage:
             else:
                 st.caption("Can't afford repairs. Go finish something.")
 
+    render_crew_hire(state)
     render_kits(state)
     with fold("paint", "🎨 Paint shop — colour the whole app", False):
         _kit_on = active_kit(state)
@@ -8190,9 +8511,10 @@ with tab_garage:
                         st.rerun()
                 elif lvl_now < need:
                     st.caption(f"🔒 Level {need}")
-                elif st.button(f"{cost:,} 🪙", key=f"theme_buy_{k}", use_container_width=True,
-                               disabled=state["coins"] < cost):
-                    bank(state, -cost, f"🎨 Paint: {name}")
+                elif st.button(f"{dealer_price(state, 'theme', k, cost):,} 🪙", key=f"theme_buy_{k}", use_container_width=True,
+                               disabled=state["coins"] < dealer_price(state, "theme", k, cost)):
+                    bank(state, -dealer_price(state, "theme", k, cost), f"🎨 Paint: {name}")
+                    _dealer_sold(state, "theme", k)
                     owned_t.append(k)
                     state["ui_theme"] = k
                     save_state(state)
@@ -8223,9 +8545,11 @@ with tab_garage:
                         st.rerun()
                 elif lvl_now < m["level"]:
                     c2.caption(tag)
-                elif c2.button(f"Buy · {m['cost']:,} 🪙", key=f"buy_{m['id']}", disabled=state["coins"] < m["cost"],
+                elif c2.button(f"Buy · {dealer_price(state, 'car', m['id'], m['cost']):,} 🪙", key=f"buy_{m['id']}",
+                               disabled=state["coins"] < dealer_price(state, "car", m["id"], m["cost"]),
                                type="primary", use_container_width=True):
-                    bank(state, -m["cost"], f"🏢 Bought {m['name']}")
+                    bank(state, -dealer_price(state, "car", m["id"], m["cost"]), f"🏢 Bought {m['name']}")
+                    _dealer_sold(state, "car", m["id"])
                     owned.append(m["id"])
                     car["model"] = m["id"]
                     save_state(state)
@@ -8313,23 +8637,61 @@ with tab_race:
         st.error("⬛ **Black flag.** Race control won't let you out: " + "; ".join(reasons) + ".")
         st.caption("Clear it on the Pit Wall / Garage, or finish tasks to get out of debt.")
     else:
-        rating = car_rating(state)
+        rp_ = st.session_state.get("race_replay")
+        racing = bool(rp_ and not rp_.get("revealed"))
+        left_t, why_t = race_tickets(state)
+        # 🏁 Sunday Grand Prix · 🎟️ Invitational: the big-stakes events, on top when they're on
+        if gp_open(state):
+            g_ = gp_track(state)
+            with st.container(border=True, key="gp_card"):
+                st.markdown(f"### 🏁 Sunday Grand Prix · {g_['name']}")
+                st.caption(f"{g_['laps']} laps, double season points, and a 🏆 for the cabinet if you win. "
+                           f"Needs a ticket; doesn't count toward today's {RACE_DAY_CAP} races.")
+                lo_, hi_ = ai_range(state, g_)
+                st.markdown(f"Your car **{track_rating(state, g_):.0f}** vs **{lo_}–{hi_}** · Entry **{g_['fee']}** + "
+                            f"⛽ {run_cost(state, g_)} · Purse 🥇{g_['prize'][0]} 🥈{g_['prize'][1]} 🥉{g_['prize'][2]}")
+                cost_ = g_["fee"] + run_cost(state, g_)
+                if st.button(f"🏁 Start the Grand Prix · {cost_} 🪙", type="primary", key="gp_go",
+                             disabled=racing or not left_t or state["coins"] < cost_ or lvl < 1):
+                    bank(state, -g_["fee"], f"🎟️ Entry: Sunday GP at {g_['name']}")
+                    bank(state, -run_cost(state, g_), f"⛽ Running costs: {g_['name']}")
+                    simulate_race(state, g_, "gp")
+        inv_ = invitational(state)
+        if inv_:
+            with st.container(border=True, key="inv_card"):
+                st.markdown(f"### 🎟️ You're invited · {inv_['name']}")
+                st.caption(f"You're sitting on {state['coins']:,} coins, so the Invitational called. A field built "
+                           "around your pace: no easy wins, no sandbagging. Once a week, no ticket needed.")
+                st.markdown(f"Entry **{inv_['fee']}** + ⛽ {run_cost(state, inv_)} · Purse 🥇{inv_['prize'][0]} "
+                            f"🥈{inv_['prize'][1]} 🥉{inv_['prize'][2]} · 🏆 trophy for a win")
+                cost_ = inv_["fee"] + run_cost(state, inv_)
+                if st.button(f"🎟️ Accept · {cost_} 🪙", key="inv_go", disabled=racing):
+                    bank(state, -inv_["fee"], f"🎟️ Entry: Invitational at {inv_['name']}")
+                    bank(state, -run_cost(state, inv_), f"⛽ Running costs: {inv_['name']}")
+                    simulate_race(state, inv_, "inv")
         names = [t["name"] for t in TRACKS]
+
         def track_label(n: str) -> str:
             t = next(t for t in TRACKS if t["name"] == n)
             locked = lvl < t["level"]
             return f"{'🔒 ' if locked else ''}{n} — {t['laps']} laps" + (f" (level {t['level']})" if locked else "")
 
-        pick = st.selectbox("Track", names, format_func=track_label)
+        pick = st.selectbox("Track", names, index=best_track(state), format_func=track_label,
+                            help="Starts on the highest track you can actually win.")
         track = TRACKS[names.index(pick)]
-        lo, hi = track["ai"]
+        lo, hi = ai_range(state, track)
         rating = track_rating(state, track)
         st.caption("🏁 " + RV.TRACK_CHARACTER.get(track["name"], ([], ""))[1].capitalize() + "."
                    + (f" Season {RV.SEASON} layout: **{RV.layout_name(track['name'])}**." if track["name"] == RV.TOP_TRACK else ""))
         m_ = sandbag(state, track)
         pz = [round(x * m_) for x in track["prize"]]
-        st.markdown(f"Your car **{rating:.0f}** here vs rivals **{lo}–{hi}** · Entry **{track['fee']} 🪙** · "
-                    f"Prizes 🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}")
+        rc = run_cost(state, track)
+        st.markdown(f"Your car **{rating:.0f}** here vs rivals **{lo}–{hi}** · Entry **{track['fee']}** + ⛽ **{rc}** "
+                    f"running costs · Prizes 🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}")
+        ff = field_form(state, track["name"])
+        if ff:
+            st.caption(f"📈 This grid has learned you: rivals **+{ff * 3.5:.0f}%** from your recent results here. "
+                       "Win more and they get faster; move up a tier to keep the money flowing.")
         if m_ < 1:
             st.caption(f"🪜 You outclass this track: fast rivals show up and prizes pay ×{m_:.2f}. "
                        "Move up a track for full prizes.")
@@ -8338,16 +8700,16 @@ with tab_race:
         if lvl < track["level"]:
             st.info(f"Unlocks at driver level {track['level']}. Earn XP by finishing tasks.")
         else:
-            left_t, why_t = race_tickets(state)
-            rp_ = st.session_state.get("race_replay")
-            racing = bool(rp_ and not rp_.get("revealed"))
+            render_boost_shop(state, track)
             st.caption(why_t)
-            if state["coins"] < track["fee"]:
-                st.info("Can't cover the entry fee.")
+            cost_ = track["fee"] + rc + sum(boost_price(k, track) for k in state.get("boosts", []))
+            if state["coins"] < track["fee"] + rc:
+                st.info("Can't cover the entry fee and running costs.")
             elif racing:
                 st.button("🏎️ Race in progress…", disabled=True)
-            elif st.button("🚦 Lights out", type="primary", disabled=not left_t):
+            elif st.button(f"🚦 Lights out · {track['fee'] + rc} 🪙", type="primary", disabled=not left_t):
                 bank(state, -track["fee"], f"🎟️ Entry: {track['name']}")
+                bank(state, -rc, f"⛽ Running costs: {track['name']}")
                 simulate_race(state, track)
 
         rp = st.session_state.get("race_replay")

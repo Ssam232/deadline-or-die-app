@@ -44,7 +44,7 @@ def results(state: dict, n: int) -> dict:
     races = [r for r in state.get("races", []) if _in(r.get("ts"), start, end)]
     wins = sum(1 for r in races if r.get("pos") == 1)
     podiums = sum(1 for r in races if r.get("pos") in (1, 2, 3))
-    race_pts = sum(RACE_POINTS.get(r.get("pos"), 0) for r in races)
+    race_pts = sum(RACE_POINTS.get(r.get("pos"), 0) * (2 if r.get("kind") == "gp" else 1) for r in races)  # 🏁 GP = double
     sea = state.get("season") or {}
     streak = int(sea.get("best_streak", 0)) if sea.get("n") == n else 0
     pts = finishes * FINISH_POINTS + race_pts + streak * STREAK_POINTS
