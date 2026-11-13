@@ -2786,6 +2786,45 @@ def _qi(x) -> list:
     return x
 
 
+def _slice_picker(state: dict, today, picked: list, opts: dict, fk) -> list:
+    """⏱️ 'Put 45 min into Thesis chapter today': counts toward qualifying, the task's own deadline stays put.
+    Returns the queued slices as [(task, minutes)]."""
+    taken = {opts[k][1]["id"] for k in picked if k[:2] in ("t:", "g:")}
+    have = {sl["tid"]: sl["min"] for sl in daily.slices(state, today)}
+    cands = [t for t in sorted(state["tasks"], key=lambda t: t["deadline"]) if t["status"] == "open"
+             and t["id"] not in taken and not t["title"].startswith("🚨")][:40]
+    q = [x for x in st.session_state.setdefault("q_slices", []) if any(t["id"] == x[0] for t in cands)]
+    st.session_state["q_slices"] = q
+    by = {t["id"]: t for t in cands}
+    with fold("q_slice", "⏱️ Or put time into something bigger · its deadline stays" + (f" ({len(q)})" if q else ""),
+              bool(q)):
+        st.caption("A slice counts toward the hour like a task, but it's done when the **focus timer** logs that much "
+                   "on it today. Once locked in it can't shrink: minutes you don't log cost "
+                   f"{daily.SLICE_PEN_PER_HOUR}/h (× your level) at midnight. Any real time on it saves the day from "
+                   "being a zero.")
+        if cands:
+            c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="bottom")
+            tid = c1.selectbox("Task", [t["id"] for t in cands], index=None, key=f"q_sl_t{fk}",
+                               format_func=lambda i: by[i]["title"] + f" · due {_rel_day(parse_dt(by[i]['deadline']), today)}"
+                               + (f" · ⏱️ {have[i]} min already" if i in have else ""),
+                               placeholder="Pick a task…", label_visibility="collapsed")
+            mins = c2.segmented_control("Slice", daily.SLICE_LENGTHS, default=45, format_func=min_label,
+                                        key=f"q_sl_m{fk}", label_visibility="collapsed")
+            if c3.button("＋ Slice", key=f"q_sl_add{fk}", use_container_width=True, disabled=not (tid and mins)):
+                q = [x for x in q if x[0] != tid] + [(tid, int(mins))]
+                st.session_state["q_slices"] = q
+                st.rerun()
+        else:
+            st.caption("No open tasks to slice yet.")
+        for i, (tid_, m_) in enumerate(q):
+            c1, c2 = st.columns([6, 1], vertical_alignment="center")
+            c1.markdown(f"⏱️ **{min_label(m_)}** on {html.escape(by[tid_]['title'])}")
+            if c2.button("✕", key=f"q_sl_x{fk}_{i}", help="Not committed yet: remove it"):
+                st.session_state["q_slices"] = [x for x in q if x[0] != tid_]
+                st.rerun()
+    return [(by[t_], m_) for t_, m_ in q]
+
+
 def _q_restore(state: dict) -> None:
     if "q_pending" not in st.session_state:
         d = state.get("draft") or {}
@@ -2942,6 +2981,7 @@ def render_qualify_form(state: dict) -> None:
         if keys:
             picked += st.pills(heads[g], keys, selection_mode="multi", key=f"q_pick_{g}{fk}",
                                default=default_t if g == "t" else None, format_func=lambda k: opts[k][0]) or []
+    sl_new = _slice_picker(state, today, picked, opts, fk)  # ⏱️ time into something bigger, deadline untouched
     _q_restore(state)
     pending = st.session_state["q_pending"]
     queue_slot = st.container()  # drawn after the form runs, so a new entry shows without a second redraw
@@ -2961,8 +3001,8 @@ def render_qualify_form(state: dict) -> None:
     real = (sum((opts[k][1].get("minutes") or 60) for k in picked
                 if k[:2] in ("t:", "r:") and V.counts_for_qualifying(opts[k][1]))
             + sum(60 for k in picked if k.startswith("b:")) + sum(PAPER_MIN for k in picked if k.startswith("z:"))
-            + sum(_qi(x)[1] for x in pending if _qi(x)[2] != "pit"))
-    n_sel = len(picked) + len(pending)
+            + sum(_qi(x)[1] for x in pending if _qi(x)[2] != "pit") + sum(m_ for _, m_ in sl_new))
+    n_sel = len(picked) + len(pending) + len(sl_new)
     need = daily.min_mission_minutes(state)
     st.pills("Quick add", [x[0] for x in Q.TEMPLATES], key=f"q_tpl{fk}", selection_mode="single",
              label_visibility="collapsed", on_change=_q_tpl, args=(f"q_tpl{fk}", state))
@@ -3004,10 +3044,11 @@ def render_qualify_form(state: dict) -> None:
                    if k[:2] in ("t:", "r:", "g:") and V.counts_for_qualifying(opts[k][1]))
                + sum((opts[k][1].get("minutes") or 30) for k in picked if k.startswith("d:"))
                + sum(60 for k in picked if k.startswith("b:")) + sum(PAPER_MIN for k in picked if k.startswith("z:"))
-               + sum(p_["minutes"] for p_ in parsed if V.counts_for_qualifying(p_)))  # 🔧 pit checks don't count
+               + sum(p_["minutes"] for p_ in parsed if V.counts_for_qualifying(p_))  # 🔧 pit checks don't count
+               + sum(m_ for _, m_ in sl_new))  # ⏱️ slices count at the time you commit
     if dl <= now() + timedelta(minutes=5):  # late at night (or a time that's gone by): same time tomorrow
         dl += timedelta(days=1)
-    if not parsed and not picked:
+    if not parsed and not picked and not sl_new:
         st.error("Nothing to lock in yet. Type a task and press Enter (or Add), or pick one from your list.")
         return
     if minutes < daily.min_mission_minutes(state) and not daily.peek_day(state, today).get("qualified"):
@@ -3079,9 +3120,15 @@ def render_qualify_form(state: dict) -> None:
             t.update(scheduled=p_["at"].isoformat(), scheduled_time=True)
         state["tasks"].append(t)
         ids.append(t["id"])
+    for t_, m_ in sl_new:  # ⏱️ committed slices: locked from here on (add more any time, never shrink)
+        daily.add_slice(state, today, t_, m_)
     msg = daily.lock_in(state, now(), ids, start_t.strftime("%H:%M"), bank)
+    if sl_new:
+        msg += (f" ⏱️ {len(sl_new)} slice{'s' * (len(sl_new) != 1)} committed: the timer finishes "
+                f"{'them' if len(sl_new) > 1 else 'it'}; unlogged minutes cost at midnight.")
     st.session_state["_qf_n"] = fk + 1
     st.session_state["q_pending"] = []
+    st.session_state["q_slices"] = []
     state["draft"] = None
     cursor = max(start_dt or now(), now()).replace(second=0, microsecond=0)  # 11:45 PM + 1h = tomorrow, not today
     for tid in ids:  # lay the mission out as a schedule from your start time (for the output board)
@@ -3313,7 +3360,9 @@ def render_today(state: dict) -> None:
         _lab = "🚦 **Qualifying**" + (" :gray[optional today]" if stt["optional"] else "")
     else:
         _m = [t for t in stt["mission"] if t["status"] != "cancelled"]
-        _lab = f"🏁 **Today's mission** :gray[{len(stt['mission_done'])}/{len(_m)}]"
+        _sl = daily.slices(state, n_.date())
+        _lab = (f"🏁 **Today's mission** :gray[{len(stt['mission_done']) + sum(daily.slice_done(state, x, n_.date()) for x in _sl)}"
+                f"/{len(_m) + len(_sl)}]")
     with fold("live_card", _lab, card=True):
         render_coming_up(state)
         _shield_strip(state, n_)
@@ -3369,16 +3418,19 @@ def render_today(state: dict) -> None:
         m, done = stt["mission"], stt["mission_done"]
         m = mission_sorted(state, m)
         open_m = [t for t in m if t["status"] == "open"]
-        left_min = sum(t.get("minutes") or 30 for t in open_m)
+        sl_ = daily.slices(state, n_.date())
+        sl_ok = [x for x in sl_ if daily.slice_done(state, x, n_.date())]
+        left_min = sum(t.get("minutes") or 30 for t in open_m) + sum(
+            max(0, x["min"] - daily.slice_logged(state, x["tid"], n_.date())) for x in sl_ if x not in sl_ok)
         segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
-                       "</i>" for t in m)
+                       "</i>" for t in m) + "".join(f"<i class='{'ok' if x in sl_ok else ''}'></i>" for x in sl_)
         pills = [f"🔥 <b>{stt['day_streak']}</b>-day streak" + ("" if stt["done_today"] else " · +1 on your first finish")]
         if stt["start_at"]:
             pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
         pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
         st.markdown(
-            f"<div class='dod-mh'><div class='dod-mb'>{len(done)}/{len(m)} done"
-            + (f" · {_hm_left(left_min)} to go" if open_m else "") + "</div></div>"
+            f"<div class='dod-mh'><div class='dod-mb'>{len(done) + len(sl_ok)}/{len(m) + len(sl_)} done"
+            + (f" · {_hm_left(left_min)} to go" if left_min > 0 else "") + "</div></div>"
             f"<div class='dod-seg'>{segs}</div>"
             "<div class='dod-pills'>" + "".join(f"<span>{x}</span>" for x in pills) + "</div>", unsafe_allow_html=True)
         tm = state.get("timer")
@@ -3414,9 +3466,32 @@ def render_today(state: dict) -> None:
             else:
                 st.markdown(f"<div class='dod-mrow bad'><span class='dod-dot'></span><div>{html.escape(t['title'])}"
                             f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
-        if m and len(done) == len(m):
+        for x in sl_:  # ⏱️ slices: locked in, finished by the timer
+            lg_ = daily.slice_logged(state, x["tid"], n_.date())
+            t_ = next((t for t in state["tasks"] if t["id"] == x["tid"]), None)
+            if x in sl_ok:
+                st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>⏱️ {min_label(x['min'])} on "
+                            f"{html.escape(x['title'])}</s> <span class='m'>slice done</span></div></div>",
+                            unsafe_allow_html=True)
+                continue
+            c1, c2 = st.container(key=f"msl_{x['tid']}").columns([6, 1], vertical_alignment="center")
+            pen_ = round(daily.SLICE_PEN_PER_HOUR * daily.level_factor(state) * (x["min"] - lg_) / 60)
+            c1.markdown(f"⏱️ **{min_label(x['min'])}** on {html.escape(x['title'])} "
+                        f"<span class='m'>· {hmin(lg_)} logged · −{pen_} if it's short at midnight</span>"
+                        f"<div class='dod-seg'><i class='ok' style='flex:{max(lg_, 0.01):.2f}'></i>"
+                        f"<i style='flex:{max(x['min'] - lg_, 0.01):.2f}'></i></div>", unsafe_allow_html=True)
+            running = bool(tm) and tm.get("task_id") == x["tid"]
+            if t_ and t_["status"] == "open" and c2.button(
+                    "⏱️" if running else "▶", key=f"mslgo_{x['tid']}", use_container_width=True, disabled=bool(tm),
+                    help="Running" if running else "Start the timer for the rest of this slice"):
+                mins = max(5, int(round(x["min"] - lg_)))
+                _start_timer(state, t_, mins)
+                flash(f"▶️ **{t_['title']}** — {mins} min to finish the slice. Phone face-down.", sound="win")
+                st.rerun()
+        if (m or sl_) and len(done) == len(m) and len(sl_ok) == len(sl_):
             st.success("Mission complete. Anything else today is pure bonus. 🏆")
-        elif not stt["done_today"] and n_.hour >= 18 and n_.weekday() not in daily.WEEKEND:
+        elif not stt["done_today"] and not daily.slice_worked(state, n_.date()) and n_.hour >= 18 \
+                and n_.weekday() not in daily.WEEKEND:
             st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
                        "Do the smallest one now.")
         _only_booked = bool(m) and all(t.get("block") for t in m)

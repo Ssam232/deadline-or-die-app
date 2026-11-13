@@ -197,7 +197,8 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
                                                                 "fuel is yours. Skip it and nothing happens.")):
             out.append(_alarm(("qw", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
                               title, msg, 3, ["vertical_traffic_light"], not rest and not daily.qualified(save, d)))
-    zero = not rest and d.weekday() not in daily.WEEKEND and not daily.finished_on(save, d)  # weekends: optional
+    zero = (not rest and d.weekday() not in daily.WEEKEND and not daily.finished_on(save, d)
+            and not daily.slice_worked(save, d))  # weekends: optional; real time on a slice counts
     for hh, mm, prio, title, msg in (
             (18, 0, 4, "⚠️ Zero finishes today", f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins "
                                                 "and the day streak dies. Smallest task, now."),
@@ -211,6 +212,12 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
         out.append(_alarm(("dl", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
                           title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio,
                           ["repeat"], bool(stake) and not rest))
+    # ⏱️ committed slices still short: 8 PM and 10:30 PM, cancelled as soon as the timer covers them
+    pen, lines = daily.slice_penalty(save, d)
+    for hh, mm, prio, title in ((20, 0, 4, "⏱️ Slices still open"), (22, 30, 5, "⏱️ LAST CALL on slices")):
+        out.append(_alarm(("sl", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
+                          title, "\n".join(lines[:3]) + f"\n−{pen} coins at midnight for the minutes you don't log.",
+                          prio, ["stopwatch"], bool(pen) and not rest))
     # 🗓️ Sunday-evening weekly recap
     if d.weekday() == J.RECAP_DAY:
         r = J.recap(save, J.week_start(d), now.tzinfo, through=now.date())

@@ -84,6 +84,62 @@ def booked(save: dict, d: date) -> list[dict]:
                    and t.get("status") in ("open", "done", "redeemed")), key=lambda t: t["block"]["start"])
 
 
+# ⏱️ Slices: "45 min on Thesis chapter". Time into a big task that counts toward qualifying without pulling the
+# task's deadline to today. Done when the focus timer logs that much on it that day (or the task is finished).
+# Locked once committed: you can add, never shrink or remove; an unfinished slice costs its missing share at midnight.
+SLICE_LENGTHS = [15, 30, 45, 60, 90, 120]
+SLICE_PEN_PER_HOUR = 40       # × level factor, for the minutes you didn't log
+SLICE_PEN_CAP = 120           # per day
+SLICE_COUNTS_MIN = 10         # a slice with at least this much logged keeps the day from being a zero day
+
+
+def slices(save: dict, d: date) -> list[dict]:
+    return peek_day(save, d).get("slices", [])
+
+
+def slice_logged(save: dict, tid: str, d: date) -> float:
+    key = d.isoformat()
+    return sum(float(x.get("min", 0)) for x in save.get("focus_log", []) if x.get("task") == tid and x.get("date") == key)
+
+
+def slice_done(save: dict, sl: dict, d: date) -> bool:
+    t = next((t for t in save.get("tasks", []) if t["id"] == sl["tid"]), None)
+    if t and t.get("status") in ("done", "redeemed") and (t.get("completed_at") or "")[:10] == d.isoformat():
+        return True
+    return slice_logged(save, sl["tid"], d) >= sl["min"]
+
+
+def add_slice(save: dict, d: date, task: dict, mins: int) -> dict:
+    """Commit (more) time to a task for day d. Adding to an existing slice grows it; nothing ever shrinks it."""
+    e = day(save, d)
+    sl = next((x for x in e.setdefault("slices", []) if x["tid"] == task["id"]), None)
+    if sl:
+        sl["min"] = int(sl["min"]) + int(mins)
+    else:
+        sl = {"tid": task["id"], "title": task["title"], "min": int(mins)}
+        e["slices"].append(sl)
+    return sl
+
+
+def slice_worked(save: dict, d: date) -> bool:
+    """Real time went into a slice today: counts as a working day for the streak."""
+    return any(slice_done(save, sl, d) or slice_logged(save, sl["tid"], d) >= SLICE_COUNTS_MIN for sl in slices(save, d))
+
+
+def slice_penalty(save: dict, d: date) -> tuple[int, list[str]]:
+    """What day d's unfinished slices cost: the missing minutes at SLICE_PEN_PER_HOUR (× level), capped."""
+    total, lines = 0, []
+    for sl in slices(save, d):
+        if slice_done(save, sl, d):
+            continue
+        miss = max(0.0, sl["min"] - slice_logged(save, sl["tid"], d))
+        pen = round(SLICE_PEN_PER_HOUR * level_factor(save) * miss / 60)
+        if pen:
+            total += pen
+            lines.append(f"{sl['title']}: {sl['min'] - miss:.0f}/{sl['min']} min → −{pen}")
+    return min(total, SLICE_PEN_CAP), lines
+
+
 def qualified(save: dict, d: date) -> bool:
     """Locked in a mission, or booked roadmap time that day (booked work IS a plan for the day)."""
     return bool(peek_day(save, d).get("qualified")) or bool(booked(save, d))
@@ -230,9 +286,16 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
     while d < today:
         e = day(save, d)
         if not e.get("settled"):
+            if not is_rest(save, d) and not e.get("slices_settled") and slices(save, d):
+                pen, lines = slice_penalty(save, d)
+                e["slices_settled"] = True
+                if pen:
+                    bank(save, -pen, f"⏱️ Unfinished slices: {d:%a %b %d}")
+                    msgs.append(f"### ⏱️ Slices not finished — {d:%A %b %d}\n" + "\n".join(f"- {x}" for x in lines)
+                                + (f"\n\nTotal −{pen} (capped)" if pen == SLICE_PEN_CAP else ""))
             if is_rest(save, d):
                 e["settled"] = "rest"
-            elif finished_on(save, d):
+            elif finished_on(save, d) or slice_worked(save, d):
                 save["day_streak"] = save.get("day_streak", 0) + 1
                 save["best_day_streak"] = max(save.get("best_day_streak", 0), save["day_streak"])
                 e["settled"] = "ok"
