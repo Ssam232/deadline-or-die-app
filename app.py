@@ -74,6 +74,7 @@ import garage as G
 import insights as I
 import daily
 import dailies as DL
+import commitments as CM
 import locks as LK
 import pomo as PM
 import prayers as PR
@@ -3501,6 +3502,215 @@ def render_today(state: dict) -> None:
             render_qualify_form(state)
 
 
+# ── 📍 Commitments: showing up ──
+_GEO = components.declare_component("geo", path=str(Path(__file__).parent / "components" / "geo"))
+
+
+def _geo(label: str, key: str, alt: bool = False) -> dict | None:
+    """One tap = one location fix. Returns the fix (or {err}) once per tap, else None."""
+    v = _GEO(label=label, alt=alt, key=key, default=None)
+    if v and v.get("t") != st.session_state.get(f"_seen_{key}"):
+        st.session_state[f"_seen_{key}"] = v.get("t")
+        return v
+    return None
+
+
+def _cm_when(c: dict, st_: datetime) -> str:
+    d = st_.date()
+    day = "Today" if d == now().date() else "Tomorrow" if d == now().date() + timedelta(days=1) else f"{d:%a %b} {d.day}"
+    return f"{day} {st_:%I:%M %p}".replace(" 0", " ")
+
+
+def _cm_photo(state: dict, c: dict, key: str) -> bool:
+    """📷 Fallback proof when location isn't possible. Returns True once a new photo is accepted."""
+    with st.popover("📷 Use a photo instead", use_container_width=True):
+        up = st.file_uploader("A photo from there", type=["jpg", "jpeg", "png", "heic", "webp"], key=f"{key}_up")
+        if st.button("Check in with this photo", key=f"{key}_go", disabled=not up):
+            h = hashlib.sha256(up.getvalue()).hexdigest()
+            if h in state["proof_hashes"]:
+                st.error("That photo's already been used as proof.")
+                return False
+            state["proof_hashes"].append(h)
+            return True
+    return False
+
+
+def _cm_done(ok: bool, msg: str) -> None:
+    if ok:
+        save_state(state)
+        flash(msg, sound="win")
+        st.rerun(scope="app")
+    else:
+        st.error(msg)
+
+
+def render_commitments(state: dict) -> None:
+    n_ = now()
+    lf = daily.level_factor(state)
+    cs = CM.items(state)
+    soon = [(c, t) for c, t in CM.upcoming(state, n_, 7)]
+    today_ = [(c, t) for c, t in soon if t.date() == n_.date()]
+    quotas = [c for c in cs if c["kind"] == "quota"]
+    shown = [(c, t) for c, t in soon if t.date() <= n_.date() + timedelta(days=1)]
+    done_today = sum(1 for c in cs if (CM.rec(state, c["id"], n_.date()) or {}).get("status") in ("attended", "late", "visit"))
+    label = "📍 **Commitments**" + (f" :gray[{done_today}/{len(today_) + sum(1 for q in quotas if not q.get('days') or n_.weekday() in q['days'])} today]"
+                                     if today_ or quotas else "")
+    with fold("commitments", label, True, card=True):
+        if not cs:
+            st.caption("Things you've said you'll show up for: classes, coaching, volunteering, the office 3× a week, "
+                       "a club event. Check in when you get there; a no-show without notice costs.")
+        for c, t in shown:
+            r = CM.rec(state, c["id"], t.date()) or {}
+            opens, on_time, end = CM.window(c, t)
+            fire = f" · 🔥 {c['streak']}" if c.get("streak") else ""
+            head = f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {_cm_when(c, t)}{fire}"
+            with st.container(border=True, key=f"cm_{c['id']}_{t.date()}"):
+                stt_ = r.get("status")
+                if stt_ in ("attended", "late"):
+                    st.markdown(head + f"  \n✅ {'On time' if stt_ == 'attended' else 'Late'} · +{r.get('paid', 0)}"
+                                + (" · 📷" if r.get("how") == "photo" else f" · 📍 {r['dist']} m" if r.get("dist") is not None else ""))
+                    continue
+                if stt_ == "cancelled":
+                    st.markdown(head + f"  \n🚫 Cancelled: {html.escape(r.get('reason', ''))}"
+                                + (f" · −{r['cost']}" if r.get("cost") else " · free"))
+                    continue
+                st.markdown(head)
+                if t.date() == n_.date() and opens <= n_ <= end:
+                    late = n_ > on_time
+                    st.caption(("⏰ Late now: half pay." if late else
+                                f"Check-in is open · on time until {on_time:%I:%M %p}".replace(" 0", " ")))
+                    fix = _geo("📍 I'm here" + (" (late)" if late else ""), f"cmgeo_{c['id']}_{t.date()}")
+                    if fix:
+                        ok, how, dist = CM.verify(c, fix if not fix.get("err") else None, False)
+                        if ok:
+                            _cm_done(*CM.check_in(state, c, n_, how, dist, bank, lf))
+                        else:
+                            st.warning(f"Not verified: {how}.")
+                    if _cm_photo(state, c, f"cmph_{c['id']}_{t.date()}"):
+                        _cm_done(*CM.check_in(state, c, n_, "photo", None, bank, lf))
+                else:
+                    pen = round(CM.STAKES[c["stakes"]]["flake"] * lf)
+                    st.caption(f"Check-in opens {opens:%I:%M %p}".replace(" 0", " ")
+                               + (f" · no-show without notice: −{pen}" if pen else " · bonus only"))
+                    if True:  # cancelling is always possible (and free 3+ h ahead with a reason)
+                        with st.popover("🚫 Can't make it", use_container_width=False):
+                            free_ = (t - n_).total_seconds() / 3600 >= CM.CANCEL_AHEAD_H
+                            st.caption("Free with a reason (3 a month)." if free_ else
+                                       f"Under {CM.CANCEL_AHEAD_H} h out: costs half a flake. Still better than a no-show.")
+                            why = st.text_input("Why", key=f"cmwhy_{c['id']}_{t.date()}", placeholder="Class cancelled · sick · …")
+                            if st.button("Cancel this one", key=f"cmcx_{c['id']}_{t.date()}"):
+                                _cm_done(*CM.cancel(state, c, t.date(), n_, why, bank, lf))
+        for c in quotas:
+            done, target, ws, we = CM.quota_week(state, c, n_.date())
+            need, left = CM.quota_pace(state, c, n_.date())
+            r = CM.rec(state, c["id"], n_.date()) or {}
+            with st.container(border=True, key=f"cmq_{c['id']}"):
+                pace = ("✅ Week done" if not need else
+                        f"⚠️ {need} left, {left} day{'s' * (left != 1)} to go" if need >= left else
+                        f"{need} left · {left} days to go")
+                st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {done}/{target} this week · {pace}"
+                            + (f" · 🔥 {c['streak']} wk" if c.get("streak") else "")
+                            + f"<div class='dod-seg'>" + "".join(f"<i class='{'ok' if i < done else ''}'></i>" for i in range(target))
+                            + "</div>", unsafe_allow_html=True)
+                today_ok = not c.get("days") or n_.weekday() in c["days"]
+                if r.get("status") == "visit":
+                    st.caption(f"✅ Today counted · {r.get('stay', 0)} min")
+                elif r.get("status") == "in":
+                    stayed = (n_ - datetime.fromisoformat(r["at"])).total_seconds() / 60
+                    st.caption(f"📍 In since {datetime.fromisoformat(r['at']):%I:%M %p}".replace(" 0", " ")
+                               + f" · {hmin(stayed)} of {hmin(c['stay'])}")
+                    if st.button("👋 Tap out", key=f"cmout_{c['id']}", disabled=stayed < c["stay"],
+                                 help=None if stayed >= c["stay"] else f"Counts after {hmin(c['stay'])}"):
+                        _cm_done(*CM.check_out(state, c, n_, bank, lf))
+                elif today_ok and need:
+                    fix = _geo("📍 I'm here", f"cmqgeo_{c['id']}_{n_.date()}")
+                    if fix:
+                        ok, how, dist = CM.verify(c, fix if not fix.get("err") else None, False)
+                        if ok:
+                            _cm_done(*CM.check_in(state, c, n_, how, dist, bank, lf))
+                        else:
+                            st.warning(f"Not verified: {how}.")
+                    if _cm_photo(state, c, f"cmqph_{c['id']}_{n_.date()}"):
+                        _cm_done(*CM.check_in(state, c, n_, "photo", None, bank, lf))
+        later = [(c, t) for c, t in soon if t.date() > n_.date() + timedelta(days=1)]
+        if later:
+            st.caption("Later this week: " + " · ".join(f"{c['name']} {t:%a %b} {t.day} {t:%I:%M %p}".replace(" 0", " ")
+                                                         for c, t in later[:6]))
+        with fold("cm_manage", "⚙️ Add & manage commitments", not cs):
+            render_commitments_manage(state)
+
+
+C_STAKE_DOT = {"red": "🔴", "yellow": "🟡", "green": "🟢"}
+
+
+def render_commitments_manage(state: dict) -> None:
+    n_ = now()
+    kind = st.segmented_control("Kind", list(CM.KINDS), format_func=CM.KINDS.get, default="weekly", key="cm_kind")
+    kind = kind or "weekly"
+    with st.form("cm_add", clear_on_submit=True, border=False):
+        name = st.text_input("What", placeholder={"weekly": "🥋 Taekwondo", "quota": "🏢 Office",
+                                                   "oneoff": "🎉 Club event"}[kind])
+        stakes = st.radio("Stakes", list(CM.STAKES), format_func=lambda k: CM.STAKES[k]["label"], horizontal=True,
+                          index=0 if kind == "weekly" else 1 if kind == "quota" else 2)
+        c1, c2, c3 = st.columns(3)
+        days, on, per, stay, t_, mins = [], None, 3, CM.STAY_DEFAULT, dtime(19, 0), 90
+        if kind == "weekly":
+            days = st.pills("Days", CM.WD, selection_mode="multi", key="cm_days")
+            t_ = c1.time_input("Starts", value=dtime(19, 0), step=900)
+            mins = c2.selectbox("Length", [30, 45, 60, 90, 120, 180], index=3, format_func=min_label)
+        elif kind == "oneoff":
+            on = c1.date_input("Date", value=n_.date(), min_value=n_.date())
+            t_ = c2.time_input("Starts", value=dtime(19, 0), step=900)
+            mins = c3.selectbox("Length", [30, 45, 60, 90, 120, 180, 240], index=3, format_func=min_label)
+        else:
+            per = c1.number_input("Times a week", 1, 7, 3)
+            stay = c2.selectbox("Stay at least", [0, 30, 60, 120, 180, 240], index=3,
+                                format_func=lambda m: "just tap in" if not m else min_label(m))
+            days = st.pills("Counts on", CM.WD, selection_mode="multi", default=CM.WD[:5], key="cm_qdays")
+        travel = c3.number_input("Travel (min)", 0, 120, 20, 5, help="For the 🚗 leave-now nag.") if kind != "oneoff" else 20
+        if st.form_submit_button("➕ Add commitment", type="primary"):
+            dsel = [CM.WD.index(x) for x in (days or [])]
+            if not name.strip():
+                st.error("Name it.")
+            elif kind == "weekly" and not dsel:
+                st.error("Pick at least one day.")
+            else:
+                CM.add(state, name, kind, stakes, n_, days=dsel, time=t_.strftime("%H:%M"), minutes=mins, on=on,
+                       per_week=per, stay=stay, travel=travel)
+                save_state(state)
+                flash(f"📍 Added **{name.strip()}**. Drop a pin the first time you're there, so check-ins can be "
+                      "verified by location.")
+                st.rerun(scope="app")
+    for c in CM.items(state):
+        got, tot = CM.rate(state, c, n_.date())
+        when = (", ".join(CM.WD[i] for i in c["days"]) + f" {c['time']}" if c["kind"] == "weekly" else
+                f"{c['date']} {c['time']}" if c["kind"] == "oneoff" else f"{c['per_week']}× a week")
+        with st.container(border=True, key=f"cmm_{c['id']}"):
+            st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {when}"
+                        + (f" · {got}/{tot} shown up" if tot else "")
+                        + (" · 📌 pinned" if c.get("pin") else " · no pin yet"))
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                fix = _geo("📌 Pin = here" if not c.get("pin") else "📌 Re-pin here", f"cmpin_{c['id']}", alt=True)
+                if fix and not fix.get("err"):
+                    c["pin"] = {"lat": round(fix["lat"], 5), "lon": round(fix["lon"], 5)}
+                    save_state(state)
+                    flash(f"📌 Pinned {c['name']} here. Check-ins within {c.get('radius', CM.PIN_RADIUS_M)} m count.")
+                    st.rerun(scope="app")
+            new_st = c2.selectbox("Stakes", list(CM.STAKES), index=list(CM.STAKES).index(c["stakes"]),
+                                  format_func=lambda k: CM.STAKES[k]["label"], key=f"cmst_{c['id']}",
+                                  label_visibility="collapsed")
+            if new_st != c["stakes"]:
+                c["stakes"] = new_st
+                save_state(state)
+                st.rerun(scope="app")
+            if c3.button("🗑️ Remove", key=f"cmdel_{c['id']}", use_container_width=True):
+                c["active"] = False
+                save_state(state)
+                flash(f"Removed {c['name']}. Its history stays in your stats.")
+                st.rerun(scope="app")
+
+
 # ── Today: up next · your goals · the car ──
 def _go_tab(label: str) -> None:
     st.session_state["nav"] = label
@@ -6535,6 +6745,7 @@ crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
 crash_msgs += DL.settle(state, DL.day_for(now(), _bailed(state)), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
+crash_msgs += CM.settle(state, now(), bank, daily.level_factor(state))  # 📍 flakes and quota weeks
 _made_good = daily.make_good(state, bank, DL)
 _moved_off = daily.release_moved(state)
 # 🏆 seasons: keep the season's best streak, close a finished season (trophy + fresh grid), rotate the top track
@@ -6691,6 +6902,8 @@ with tab_today:
                 render_checkin(state)
             with st.container(key="tg_today"):
                 render_today(state)
+            with st.container(key="tg_commit"):
+                render_commitments(state)
             with st.container(key="tg_goals"):
                 render_goals_today(state)
             with st.container(key="tg_todo"):

@@ -24,6 +24,7 @@ import sys
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import commitments as C
 import daily
 import dailies as DL
 import alarms as AL
@@ -180,7 +181,8 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
             dm["h20"] = dm[key] = True
             out.append((title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio, ["repeat"]))
             break
-    if not stt["done_today"] and not daily.slice_worked(save, now.date()) and not quiet:
+    if not stt["done_today"] and not daily.slice_worked(save, now.date()) and not C.attended_on(save, now.date()) \
+            and not quiet:
         hour = now.hour + now.minute / 60
         ladder = [("z18", 18, 4, "⚠️ Zero finishes today",
                    f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins and your "

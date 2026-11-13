@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{margin:0;padding:0;background:transparent;font-family:"Source Sans Pro",system-ui,sans-serif}
+button{width:100%;min-height:42px;border-radius:10px;border:1px solid rgba(255,255,255,.18);font:600 15px inherit;
+  font-family:inherit;cursor:pointer;color:#0e1117;background:#7aa2ff}
+button.alt{background:transparent;color:#e6e6e6}
+button:disabled{opacity:.6;cursor:wait}
+.m{font-size:12px;color:#9aa0aa;margin-top:4px;min-height:14px}
+</style></head>
+<body>
+<button id="b">📍</button><div class="m" id="m"></div>
+<script>
+// 📍 One location fix, only when you tap. Sends {lat, lon, acc, t} (or {err, t}) to the app, which compares it to
+// the venue pin and keeps just the distance. Nothing is tracked in the background.
+const send = (type, extra) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, extra), "*");
+const b = document.getElementById("b"), m = document.getElementById("m");
+const height = () => send("streamlit:setFrameHeight", {height: document.body.scrollHeight + 2});
+window.addEventListener("message", ev => {
+  const d = ev.data || {};
+  if (d.type !== "streamlit:render") return;
+  const a = d.args || {};
+  b.textContent = a.label || "📍 I'm here";
+  b.className = a.alt ? "alt" : "";
+  height();
+});
+b.addEventListener("click", () => {
+  if (!navigator.geolocation) { m.textContent = "This browser can't share location."; send("streamlit:setComponentValue", {value: {err: "unsupported", t: Date.now()}, dataType: "json"}); return; }
+  b.disabled = true; m.textContent = "Getting your location…";
+  navigator.geolocation.getCurrentPosition(p => {
+    b.disabled = false; m.textContent = "";
+    send("streamlit:setComponentValue", {value: {lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: Date.now()}, dataType: "json"});
+  }, e => {
+    b.disabled = false; m.textContent = e.code === 1 ? "Location blocked: allow it for this site, or use a photo." : "Couldn't get a fix: try again or use a photo.";
+    send("streamlit:setComponentValue", {value: {err: String(e.code || "x"), t: Date.now()}, dataType: "json"});
+    height();
+  }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 60000});
+});
+send("streamlit:componentReady", {apiVersion: 1});
+height();
+</script>
+</body></html>

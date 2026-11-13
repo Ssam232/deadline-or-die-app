@@ -15,6 +15,7 @@ import hashlib
 from datetime import date, datetime, timedelta
 
 import dailies as DL
+import commitments as C
 import daily
 import journal as J
 import pomo as PM
@@ -198,7 +199,7 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
             out.append(_alarm(("qw", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
                               title, msg, 3, ["vertical_traffic_light"], not rest and not daily.qualified(save, d)))
     zero = (not rest and d.weekday() not in daily.WEEKEND and not daily.finished_on(save, d)
-            and not daily.slice_worked(save, d))  # weekends: optional; real time on a slice counts
+            and not daily.slice_worked(save, d) and not C.attended_on(save, d))  # weekends optional; slices/showing up count
     for hh, mm, prio, title, msg in (
             (18, 0, 4, "⚠️ Zero finishes today", f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins "
                                                 "and the day streak dies. Smallest task, now."),
@@ -291,6 +292,39 @@ def _live(save: dict, now: datetime, prof: dict | None) -> list[dict]:
     return out
 
 
+def _commitments(save: dict, now: datetime) -> list[dict]:
+    """📍 Pack your bag 2 h before, leave on time, check in once it starts; quota pace in the morning."""
+    out = []
+    for d in (now.date(), now.date() + timedelta(days=1)):
+        rest = daily.is_rest(save, d)
+        for c in C.items(save):
+            st_ = C.start_on(c, d, now.tzinfo)
+            if st_:
+                r = C.rec(save, c["id"], d) or {}
+                open_ = not r.get("status")
+                t12 = f"{st_:%I:%M %p}".lstrip("0")
+                stakes = c["stakes"]
+                lose = ("" if stakes == "green" else
+                        f" No check-in, no notice = flake (−{round(C.STAKES[stakes]['flake'] * daily.level_factor(save))}).")
+                out.append(_alarm(("cm", c["id"], d, "pack"), st_ - timedelta(hours=2), f"🎒 {c['name']} at {t12}",
+                                  f"Two hours out. Get your stuff together.{lose}", 3, ["round_pushpin"], open_))
+                lv = st_ - timedelta(minutes=int(c.get("travel") or 0))
+                if c.get("travel"):
+                    out.append(_alarm(("cm", c["id"], d, "leave"), lv, f"🚗 Leave now: {c['name']}",
+                                      f"It starts at {t12}. {c['travel']} min to get there.", 4, ["red_car"], open_))
+                out.append(_alarm(("cm", c["id"], d, "in"), st_ + timedelta(minutes=5), f"📍 Check in: {c['name']}",
+                                  f"Tap “I'm here” in the app. On time until {st_ + timedelta(minutes=C.ON_TIME_MIN):%I:%M %p}."
+                                  .replace(" 0", " "), 5 if stakes == "red" else 4, ["round_pushpin"], open_))
+            elif c["kind"] == "quota" and not rest and (not c.get("days") or d.weekday() in c["days"]):
+                need, left = C.quota_pace(save, c, d)
+                behind = need > 0 and need >= left
+                out.append(_alarm(("cm", c["id"], d, "pace"), datetime.combine(d, datetime.min.time(), now.tzinfo)
+                                  .replace(hour=8, minute=30), f"🎯 {c['name']}: {need} left this week",
+                                  f"{left} day{'s' * (left != 1)} left to do it. Today's a good one.", 4, ["dart"],
+                                  behind and (C.rec(save, c["id"], d) or {}).get("status") not in ("in", "visit")))
+    return out
+
+
 def _journal(save: dict, d: date, now: datetime) -> list[dict]:
     """📓 The evening journal for day d keeps nudging until it locks at 4 AM the next morning; every one is
     cancelled once you've closed the day (yesterday's night is planned too, so a 1 AM entry cancels the rest)."""
@@ -324,6 +358,7 @@ def plan(save: dict, now: datetime, prof: dict | None = None) -> list[dict]:
         out += _prayers(save, d, now) + _day(save, d, now) + _daily_reminders(save, d, now)
     for d in (now.date() - timedelta(days=1), now.date(), now.date() + timedelta(days=1)):
         out += _journal(save, d, now)
+    out += _commitments(save, now)
     lo, hi = now + timedelta(seconds=MIN_LEAD), now + HORIZON
     return [a for a in out if lo <= a["at"] <= hi]
 

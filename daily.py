@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time as dtime, timedelta
 
+import commitments as C
 import shield as SH
 
 DAILY_DEFAULTS = {
@@ -295,7 +296,7 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
                                 + (f"\n\nTotal −{pen} (capped)" if pen == SLICE_PEN_CAP else ""))
             if is_rest(save, d):
                 e["settled"] = "rest"
-            elif finished_on(save, d) or slice_worked(save, d):
+            elif finished_on(save, d) or slice_worked(save, d) or C.attended_on(save, d):  # 📍 showing up counts
                 save["day_streak"] = save.get("day_streak", 0) + 1
                 save["best_day_streak"] = max(save.get("best_day_streak", 0), save["day_streak"])
                 e["settled"] = "ok"
