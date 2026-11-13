@@ -2574,19 +2574,33 @@ def _remind_picker(key: str, mode: str, cur, h: dict | None = None):
     return m
 
 
+def _bailed(state: dict):
+    return lambda d: bool(daily.peek_day(state, d).get("bailout"))
+
+
 @st.fragment
 def render_dailies(state: dict) -> None:
     if st.session_state.pop("_dl_full", False):
         st.rerun(scope="app")
-    today = now().date()
+    today = DL.day_for(now(), _bailed(state))  # after a 🪂 bailout, that day's dailies stay open till 4 AM
     rows = DL.today_status(state, today)
     _dn = sum(r["done"] for r in rows)
+    bail_ = bool(daily.peek_day(state, today).get("bailout"))
     with fold("dailies", "🔁 **Dailies**" + (f" :gray[{_dn}/{len(rows)}]" if rows else ""), card=True):
         if rows:
             done = _dn
             stake, _ = DL.at_stake(state, today)
             if done == len(rows):
                 note = "<div style='color:#2ec4b6;font-size:.88rem'>All done today ✅</div>"
+            elif bail_:
+                left_ = (DL.closes_at(today, TZ, _bailed(state)) - now()).total_seconds() / 60
+                note = (f"<div style='color:#8ab4ff;font-size:.88rem'>🪂 Bailout day"
+                        + (f" ({today:%A})" if today != now().date() else "")
+                        + f": open till 4 AM · <b>{hmin(max(0, left_))}</b> left. Misses cost nothing and keep "
+                          "your streaks; anything you finish still counts.</div>")
+            elif daily.is_rest(state, today):
+                note = ("<div style='color:#8ab4ff;font-size:.88rem'>🛌 Rest day: misses cost nothing and keep your "
+                        "streaks</div>")
             elif stake:
                 note = (f"<div style='color:#ff6a5c;font-size:.88rem'>−{stake} 🪙 at midnight if "
                         "these aren't done</div>")
@@ -3307,7 +3321,7 @@ def render_today(state: dict) -> None:
             b_ = stt["bailout"]
             st.markdown("### 🪂 Bailed out")
             st.caption(f"{b_['reason']} · {b_['why']}")
-            st.markdown("<div class='dod-pills'><span>No zero-day</span><span>Dailies not charged</span>"
+            st.markdown("<div class='dod-pills'><span>No zero-day</span><span>Dailies free till 4 AM</span>"
                         "<span>Streak frozen</span>" + (f"<span>{len(b_['moved'])} moved to tomorrow</span>"
                                                         if b_.get("moved") else "") + "</div>", unsafe_allow_html=True)
             st.caption("Rest, reset. Prayer reminders keep going; everything else is quiet until tomorrow.")
@@ -3892,7 +3906,8 @@ def _bail_dialog(state: dict) -> None:
                                    "restart tomorrow at 9.", max_chars=300)
     moving = [t for t in daily.bail_preview(state, n_) if not t["title"].startswith("🚨 Safety car")]
     st.markdown("**4 · What happens**")
-    st.markdown("- No zero-day penalty; today's dailies aren't charged\n- Your day streak is frozen (not broken)\n"
+    st.markdown("- No zero-day penalty; today's dailies aren't charged and their streaks are kept\n"
+                "- Dailies stay open till 4 AM tonight\n- Your day streak is frozen (not broken)\n"
                 + (f"- Moves to tomorrow: {', '.join(t['title'] for t in moving)}\n" if moving else "")
                 + "- Penalties already taken today stay taken\n- Uses this week's bailout")
     conf = st.text_input("Type BAIL OUT to confirm", key="bail_conf")
@@ -6443,7 +6458,7 @@ if st.session_state.pop("_resave", False) or (getattr(_saver(), "dirty", False) 
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
-crash_msgs += DL.settle(state, now().date(), bank, daily.is_rest)
+crash_msgs += DL.settle(state, DL.day_for(now(), _bailed(state)), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
 _made_good = daily.make_good(state, bank, DL)
 _moved_off = daily.release_moved(state)

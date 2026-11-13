@@ -155,6 +155,22 @@ def today_status(save: dict, d: date) -> list[dict]:
     return out
 
 
+BAIL_GRACE_HOURS = 4  # a bailout day's dailies stay open until 4 AM
+
+
+def day_for(now: datetime, bailed) -> date:
+    """Which day the dailies are on. Normally the calendar day; after a 🪂 bailout that day stays open until 4 AM.
+    bailed(d) → True if d was a bailout day."""
+    y = now.date() - timedelta(days=1)
+    return y if now.hour < BAIL_GRACE_HOURS and bailed(y) else now.date()
+
+
+def closes_at(d: date, tz, bailed) -> datetime:
+    """When day d's dailies lock: midnight, or 4 AM the next morning on a bailout day."""
+    end = datetime.combine(d + timedelta(days=1), datetime.min.time(), tz)
+    return end + timedelta(hours=BAIL_GRACE_HOURS) if bailed(d) else end
+
+
 def settle(save: dict, today: date, bank, is_rest) -> list[str]:
     """Close out past days: auto-claim days you hit, charge the penalty for days you missed. Idempotent."""
     msgs = []
@@ -166,15 +182,16 @@ def settle(save: dict, today: date, bank, is_rest) -> list[str]:
     d = max(d, today - timedelta(days=7))
     charged = 0
     while d < today:
-        if not is_rest(save, d):
+        rest = is_rest(save, d)
+        if habits(save):  # every day settles; rest / bailout days just waive the misses
             missed, day_total = [], 0
             for h in habits(save):
                 if not active_on(h, d):
                     continue
                 if count(save, h["id"], d) >= h["target"]:
                     claim(save, h["id"], d, bank, " (auto-claimed)")
-                elif h["start"] == d.isoformat():
-                    pass  # the day you added it is free
+                elif rest or h["start"] == d.isoformat():
+                    pass  # rest / pit stop / 🪂 bailout days and the day you added it: a miss is free, streak kept
                 elif charged < MAX_CHARGED_DAYS:
                     lost = h.get("streak", 0)
                     h["streak"] = 0
