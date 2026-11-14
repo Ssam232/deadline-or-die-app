@@ -21,7 +21,7 @@ STATUS_TAGS = (READ_TAG, READING_TAG, DROPPED_TAG)
 SKIP_TYPES = {"attachment", "note", "annotation"}
 MANUAL_TAG = "manual entry"  # papers you added yourself through the Inbox
 LEVELS = {"A": "Foundational", "B": "Core", "C": "Specialized", "D": "Niche"}
-FACETS = ("question", "subject", "species", "sex", "type", "source")  # Zotero tags written as "subject:Diet and muscle"
+FACETS = ("question", "subject", "species", "sex", "type", "source", "scholarship")  # Zotero tags written as "subject:Diet and muscle"
 _ORDER = re.compile(r"^Read order:\s*([A-D])(\d+)", re.M | re.I)
 _LEFTOVER = re.compile(r"^\s*\((Foundational|Core|Specialized|Niche)\)\s*$", re.I)
 

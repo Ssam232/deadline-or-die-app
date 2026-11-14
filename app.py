@@ -6255,14 +6255,14 @@ READING_SORTS = {"Rank": lambda p: p.get("rank") or 9999,
                  "Author": lambda p: p["who"].casefold() or "~",
                  "Question": lambda p: (sorted(p["facets"].get("question", [])) or ["~"])[0],
                  "Subject": lambda p: (p["facets"].get("subject", []) or ["~"])[0].casefold()}
-READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type", "source": "Added by"}
+READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type", "source": "Added by", "scholarship": "Scholarship"}
 
 
 def _paper_tags(p: dict) -> list[str]:
     """A paper's clickable tags as "filter|value". Its subject mostly repeats its question, so it only shows without one."""
     f = {k: p["facets"].get(k, []) for k in ("question", "subject", "species", "sex", "type", "source")}
     tags = [("question", v) for v in sorted(f["question"])] + ([] if f["question"] else [("subject", v) for v in f["subject"]])
-    tags += ([("year", p["year"])] if p.get("year") else []) + [(n, v) for n in ("species", "sex", "type", "source") for v in f[n]]
+    tags += ([("year", p["year"])] if p.get("year") else []) + [(n, v) for n in ("species", "sex", "type", "source", "scholarship") for v in f[n]]
     return [f"{n}|{v}" for n, v in tags]
 
 
