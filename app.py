@@ -3779,7 +3779,7 @@ def crew_ctx(state: dict) -> dict:
         ev = "bailout"
     elif stt.get("rest"):
         ev = "rest"
-    return {"event": ev, "slot": slot,
+    return {"event": ev, "slot": slot, "hired": [k for k in CR.CREW if k in state.get("crew", [])],
             "name": state["settings"].get("player_name", "Driver"), "qualified": stt["qualified"],
             "focus": int(focus_today(state)), "done": len(daily.finished_on(state, d)),
             "streak": int(state.get("day_streak", 0)), "flaked": bool(fl), "flaked_what": cname(fl[0]) if fl else "",
@@ -3810,13 +3810,17 @@ def render_crew_card(state: dict) -> None:
             ctx = crew_ctx(state)
             mood = CR.mood(ctx)
             salt = now().date().isoformat()
-            for k in hired:
+            boss = state.get("principal") if state.get("principal") in hired else None
+            if not boss and len(hired) > 1:
+                st.caption("👑 Pick a team principal in 💬 Get to know your crew: they'll be the voice at the top.")
+            for k in ([boss] + [x for x in hired if x != boss]) if boss else hired:
                 c = CR.CREW[k]
                 days = _crew_days(state, k)
                 lvl, bname, nxt = CR.bond(days)
                 hearts = "❤️" * lvl if lvl else "🤍"
                 st.markdown(f"<div class='dod-crew'><div class='av'>{CR.avatar_svg(k, 52, mood)}</div><div>"
-                            f"<b>{c['name']}</b> <span class='r'>· {c['role']} · {hearts}</span>"
+                            f"<b>{'👑 ' if k == boss else ''}{c['name']}</b> <span class='r'>· "
+                            f"{'Team principal · ' if k == boss else ''}{c['role']} · {hearts}</span>"
                             f"<div class='say'>“{html.escape(CR.line(k, ctx, salt))}”</div></div></div>", unsafe_allow_html=True)
             b_ = CR.banter(hired, ctx, salt + str(now().hour // 3))
             if b_:
@@ -3834,11 +3838,19 @@ def render_crew_card(state: dict) -> None:
                                     + (f" · next in {nxt} days" if nxt else "") + "</span>"
                                     f"<div class='say'>{html.escape(c['bio'])}</div></div></div>", unsafe_allow_html=True)
                         st.caption(f"Quirk: {c['quirk']} · Likes: {c['likes']} · Always says: “{c['catch']}”")
-                        told = CR.stories(k, days)
+                        if state.get("principal") == k:
+                            st.caption(f"👑 {c['name']} is your team principal: the voice at the top of the app.")
+                        elif st.button(f"👑 Make {c['name']} team principal", key=f"boss_{k}"):
+                            state["principal"] = k
+                            save_state(state)
+                            flash(f"👑 **{c['name']}** is your team principal. “{c['catch']}”", sound="win")
+                            st.rerun(scope="app")
+                        told = CR.stories(k, days, hired)
                         for t_ in told:
                             st.markdown(f"<div class='dod-banter'>“{html.escape(t_)}”</div>", unsafe_allow_html=True)
-                        if len(told) < len(CR.STORIES[k]):
-                            st.caption(f"🔒 {len(CR.STORIES[k]) - len(told)} more stor{'ies' if len(CR.STORIES[k]) - len(told) > 1 else 'y'} "
+                        _all = len(CR.stories(k, 10 ** 6, hired))
+                        if len(told) < _all:
+                            st.caption(f"🔒 {_all - len(told)} more stor{'ies' if _all - len(told) > 1 else 'y'} "
                                        f"as you two get closer.")
 
 
@@ -3853,14 +3865,18 @@ def crew_strip_html(state: dict) -> str:
         ctx = crew_ctx(state)
         mood = CR.mood(ctx)
         n_ = now()
-        who = hired[(ctx.get("slot", 0) + n_.hour // 2 + n_.timetuple().tm_yday) % len(hired)]
+        boss = state.get("principal") if state.get("principal") in hired else None
+        who = boss or hired[(ctx.get("slot", 0) + n_.hour // 2 + n_.timetuple().tm_yday) % len(hired)]
         said = CR.line(who, ctx, n_.date().isoformat())
     except Exception:  # noqa: BLE001 — the header must never break the page
         return ""
-    faces = "".join(f"<span class='f{' on' if k == who else ''}' title='{CR.CREW[k]['name']} · {CR.CREW[k]['role']}'>"
-                    f"{CR.avatar_svg(k, 30, mood)}</span>" for k in hired)
-    return (f"<div class='dod-crewbar'><span class='faces'>{faces}</span><span class='say'><b>{CR.CREW[who]['name']}:</b> "
-            f"{html.escape(said)}</span></div>")
+    order_ = ([who] + [k for k in hired if k != who]) if boss else hired
+    faces = "".join(f"<span class='f{' on' if k == who else ''}{' boss' if k == boss else ''}' "
+                    f"title='{CR.CREW[k]['name']} · {CR.CREW[k]['role']}'>{CR.avatar_svg(k, 34 if k == boss else 30, mood)}</span>"
+                    for k in order_)
+    tag = "👑 " if boss else ""
+    return (f"<div class='dod-crewbar{' has-boss' if boss else ''}'><span class='faces'>{faces}</span><span class='say'>"
+            f"<b>{tag}{CR.CREW[who]['name']}:</b> {html.escape(said)}</span></div>")
 
 
 def render_crew_hire(state: dict) -> None:
@@ -5508,6 +5524,40 @@ def _timer_controls(state: dict) -> None:
         st.rerun()
 
 
+def timer_keep_going(state: dict) -> None:
+    """🌊 The 'keep going' answer, wherever it's pressed: a flow check-in → next check-in; a timed session → +15."""
+    tm = state.get("timer")
+    if not tm:
+        return
+    eff = PM.effective_elapsed(tm, now().timestamp())
+    if tm.get("flow"):
+        tm["check"] = int(eff) + int(tm.get("every") or FLOW_AGAIN)
+        tm["period"] = tm.get("period", 0) + 1
+    else:
+        ph, _ = PM.phase(eff, tm.get("work"), tm.get("brk"), tm["planned"])
+        tm["planned"] += FLOW_STEP
+        tm["ext"] = tm.get("ext", 0) + FLOW_STEP
+        if ph == "done":  # finished already: the extension starts from now, not from the old finish line
+            tm["skipped"] = tm.get("skipped", 0.0) - max(0.0, (eff - PM.wall_minutes(
+                tm["planned"] - FLOW_STEP, tm.get("work"), tm.get("brk"))) * 60)
+    save_state(state)
+
+
+def timer_stop_log(state: dict) -> None:
+    """⏹️ Stop & log, wherever it's pressed."""
+    tm = state.get("timer")
+    if not tm:
+        return
+    t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
+    eff = PM.effective_elapsed(tm, now().timestamp())
+    mins = min(PM.credited(tm, eff), tm["planned"] + 15 + tm.get("over_total", 0.0))
+    state.pop("timer", None)
+    if mins >= 1 and t:
+        _log_session(state, t, parse_dt(tm["start"]), mins, tm)
+    else:
+        save_state(state)
+
+
 def track_for(tm: dict) -> dict:
     """A real circuit for this session: same session → same track (stable across refreshes)."""
     return TR.TRACKS[int(hashlib.md5(tm["start"].encode()).hexdigest(), 16) % len(TR.TRACKS)]
@@ -5767,10 +5817,28 @@ var S={sj};document.getElementById('n').textContent=S.title;{_timer_hook_js(sj)}
 S.OFF=parent.__dodTimer?parent.__dodTimer.OFF:0;
 function f(){{var o=dodTick(S,Date.now());var t=document.getElementById('t');t.textContent=o.time;t.style.color=o.color;
 document.getElementById('p').textContent=o.line;var b=document.getElementById('bi');
-b.style.width=Math.round(Math.max(0,Math.min(1,o.frac||0))*100)+'%';b.style.background=o.color||'#f5c518';}}
-f();setInterval(f,500);</script>""", height=44)
-        c2.button("Timer", key="float_open", use_container_width=True, on_click=_go_tab, args=("🏁 Today", "timer"),
-                  help="Jump to the full timer: pause, extend, pit, stop")
+b.style.width=Math.round(Math.max(0,Math.min(1,o.frac||0))*100)+'%';b.style.background=o.color||'#f5c518';
+var box=frameElement&&frameElement.closest('.st-key-float_timer');
+if(box){{box.classList.toggle('dod-due',!!(o.due||o.ph==='done'));}}}}
+f();setInterval(f,500);
+// hide the bar while the big timer itself is on screen (it comes back as soon as you scroll away or change tabs)
+(function(){{var P=parent.document,PW=parent,box=frameElement&&frameElement.closest('.st-key-float_timer');if(!box)return;
+ function chk(){{var h=PW.innerHeight,vis=false;
+  P.querySelectorAll('.st-key-tg_live, .st-key-tg_timer').forEach(function(el){{var r=el.getBoundingClientRect();
+   if(r.height>40&&r.top<h-40&&r.bottom>40)vis=true;}});  // any of the big timer on screen: one clock only
+  box.classList.toggle('dod-hidebar',vis);}}
+ chk();setInterval(chk,500);PW.addEventListener('scroll',chk,true);}})();</script>""", height=44)
+        with c2:
+            with st.container(key="bar_norm"):
+                st.button("Timer", key="float_open", use_container_width=True, on_click=_go_tab,
+                          args=("🏁 Today", "timer"), help="Jump to the full timer: pause, extend, pit, stop")
+            with st.container(key="bar_end", horizontal=True, gap="small"):
+                if st.button("🌊", key="bar_flow", help=f"Keep going (+{FLOW_STEP} min, or the next flow check-in)"):
+                    timer_keep_going(state)
+                    st.rerun(scope="app")
+                if st.button("⏹️", key="bar_stop", help="Stop & log"):
+                    timer_stop_log(state)
+                    st.rerun(scope="app")
 
 
 def _timer_ring(state: dict, tm: dict, big: bool = False) -> None:
@@ -6649,6 +6717,8 @@ CSS = """<style>
   -webkit-line-clamp:2;-webkit-box-orient:vertical}
 .dod-crewbar .say b{color:var(--y)}
 .dod-crewbar.ghost{opacity:.6}.dod-crewbar.ghost .f{filter:grayscale(1)}
+.dod-crewbar.has-boss .f.boss{box-shadow:0 0 0 2px #12151c,0 0 0 4px var(--y);transform:none;margin-right:6px}
+.dod-crewbar.has-boss .f:not(.boss){opacity:.75}
 @media (max-width:640px){.dod-crewbar{margin-left:0;width:100%;max-width:100%;border-radius:14px}}
 .dod-cluster{display:grid;grid-template-columns:repeat(4,1fr);background:var(--deep,#101319);border:1px solid var(--line);
   border-radius:14px;overflow:hidden;margin:0 0 1.1rem}
@@ -7068,11 +7138,18 @@ body.dod-focus [data-testid="stTabPanel"],body.dod-focus [data-testid="stMain"],
   border:1px solid rgba(245,197,24,.45);border-radius:14px;padding:4px 8px 4px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);
   bottom:auto!important;height:auto!important;max-height:64px;overflow:hidden;flex:none!important}
 body:has(.st-key-float_timer) [data-testid="stToolbarActions"]{display:none!important}
+.st-key-float_timer{transition:transform .25s ease,opacity .25s ease}
+.st-key-float_timer.dod-hidebar{transform:translateY(-140%);opacity:0;pointer-events:none}
+.st-key-float_timer .st-key-bar_end{display:none!important}
+.st-key-float_timer.dod-due .st-key-bar_end{display:flex!important;flex-wrap:nowrap!important}
+.st-key-float_timer.dod-due .st-key-bar_norm{display:none!important}
+.st-key-float_timer.dod-due{border-color:#ff6a5c}
+.st-key-float_timer .st-key-bar_end button{min-width:0!important;padding:0 .55rem!important;font-size:1.15rem}
 body:has(.st-key-float_timer) [data-testid="stMainBlockContainer"]{padding-top:4.6rem!important}
 .st-key-float_timer [data-testid="stElementContainer"]{margin:0!important}
 .st-key-float_timer [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;flex-direction:row!important;gap:.5rem}
 .st-key-float_timer [data-testid="stColumn"]{min-width:0!important}
-.st-key-float_timer [data-testid="stColumn"]:last-child{flex:0 0 76px!important;width:76px!important}
+.st-key-float_timer [data-testid="stColumn"]:last-child{flex:0 0 92px!important;width:92px!important}
 .st-key-float_timer iframe{display:block}
 .st-key-timer_gone{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0}
 @media (max-width:640px){.st-key-float_timer{left:10px;right:10px;bottom:10px;width:auto!important}}

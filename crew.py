@@ -11,6 +11,7 @@ All characters are original. Quotes are public-domain: classical authors in old 
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import date
 
 CREW = {
@@ -74,7 +75,7 @@ CREW = {
         "name": "Yuki", "role": "Livery designer", "price": 750, "perk": "−25% on paint & kits",
         "skin": "#f3d2b3", "hair": "#1c1c2e", "style": "bangs", "shirt": "#ff4f9a", "gear": "pencil",
         "bio": "Illustrator who sketches every car she sees. Designed liveries for a junior team, then for you. Fills a sketchbook a month.",
-        "quirk": "Doodles your car on whatever's nearby: napkins, whiteboards, Dot's notebook (Dot is not pleased).",
+        "quirk": "Doodles your car on whatever's nearby: napkins, whiteboards, the back of your to-do list.",
         "likes": "Manga, bold colour, the sketch you do every day even when it's bad.",
         "catch": "Make it yours.",
     },
@@ -136,7 +137,7 @@ STORIES.update({
         "Every track I've finished was worse than the one in my head. Finished beats unfinished, every time.",
         "My mom drove a bus for twenty years and still sang every morning. That's where I got the hype from.",
         "I used to wait for inspiration. Then I learned you just open the laptop and it shows up halfway through.",
-        "If I ever play a big show, your race intro is going in the set. Don't tell Mags.",
+        "If I ever play a big show, your race intro is going in the set. Don't tell anyone.",
     ],
     "chef": [
         "My grandmother cooked the same soup every Sunday for fifty years. People came from three towns over. Consistency is a flavour.",
@@ -457,27 +458,44 @@ def bond(days: int) -> tuple[int, str, int | None]:
     return lvl, BOND_LEVELS[lvl][1], nxt
 
 
-def stories(key: str, days: int) -> list[str]:
-    """The stories they've told you so far (one per bond level reached)."""
-    return STORIES[key][:bond(days)[0]]
+def stories(key: str, days: int, hired=None) -> list[str]:
+    """The stories they've told you so far (one per bond level reached), skipping any about crew you haven't met."""
+    return [x for x in STORIES[key] if known(x, hired)][:bond(days)[0]]
 
 
 def _pick(variants: list[str], salt: str) -> str:
     return variants[int(hashlib.sha1(salt.encode()).hexdigest(), 16) % len(variants)]
 
 
+_NAMES = {"Mags": "chief", "Rook": "tires", "Dot": "engineer", "Ash": "strategist", "Noor": "medic", "Kai": "dj",
+          "Inês": "chef", "Ines": "chef", "Yuki": "artist", "Mateo": "spotter"}
+_NAME_RE = re.compile(r"\b(" + "|".join(_NAMES) + r")\b")
+
+
+def known(text: str, hired) -> bool:
+    """Only mention crew you've actually hired (no 'who's Yuki?')."""
+    if hired is None:
+        return True
+    return all(_NAMES[m] in hired for m in _NAME_RE.findall(text))
+
+
+def _fit(variants: list[str], hired) -> list[str]:
+    return [v for v in variants if known(v, hired)]
+
+
 def line(key: str, ctx: dict, salt: str = "") -> str:
     """What they say right now: the moment first (bailout, rest, a running timer), otherwise now and then a joke,
     otherwise their read on your day. Rotates every 3 hours (every few minutes while a timer runs)."""
-    ev = ctx.get("event")
-    if ev and ev in EVENTS.get(key, {}):
-        return _pick(EVENTS[key][ev], f"{key}{salt}{ev}{ctx.get('slot', 0)}").format(**ctx)
-    if int(hashlib.sha1(f"q{key}{salt}{ctx.get('hour', 0) // 3}".encode()).hexdigest(), 16) % 4 == 0:
-        return _pick(QUIPS[key], f"{key}{salt}{ctx.get('hour', 0)}")
+    ev, hired = ctx.get("event"), ctx.get("hired")
+    if ev and _fit(EVENTS.get(key, {}).get(ev, []), hired):
+        return _pick(_fit(EVENTS[key][ev], hired), f"{key}{salt}{ev}{ctx.get('slot', 0)}").format(**ctx)
+    quips = _fit(QUIPS[key], hired)
+    if quips and int(hashlib.sha1(f"q{key}{salt}{ctx.get('hour', 0) // 3}".encode()).hexdigest(), 16) % 4 == 0:
+        return _pick(quips, f"{key}{salt}{ctx.get('hour', 0)}")
     for cond, variants in LINES[key]:
         try:
-            if cond(ctx):
-                return _pick(variants, f"{key}{salt}{ctx.get('hour', 0) // 3}").format(**ctx)
+            if cond(ctx) and _fit(variants, hired):
+                return _pick(_fit(variants, hired), f"{key}{salt}{ctx.get('hour', 0) // 3}").format(**ctx)
         except (KeyError, TypeError, ValueError):
             continue
     return CREW[key]["catch"]

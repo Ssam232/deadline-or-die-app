@@ -117,7 +117,9 @@ Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5
 
 **🏷️ Priority, difficulty, order.** Tag any task by tapping, no numbers: priority **🔥 Must · 📌 Should · 🌱 Could** and difficulty (how hard it feels to start) **🪶 Easy · 🧱 Medium · 🏔️ Hard**. Set them when you add a task, or inside any task row. The tags show at the front of the row. Pick the order your tasks are shown in, on the mission card or the Tasks tab: **✨ Start here** (the default: anything due within 3 h first, then by priority, and inside each priority the quickest, easiest one on top so the first move is a small win), ⏱️ Quickest, 🪶 Easiest, 🔥 Priority, ⏰ Due, or ✋ My order (your ↕ Arrange order). The top pick gets a **👉 Start here** line saying why it's first; Up next follows the same order.
 
-**⏱️ Timer bar.** While a timer runs it's pinned to the top of every tab: time left, phase, a progress line, ⧉ pop-out and a jump to the full timer.
+**⏱️ Timer bar.** While a timer runs it's pinned to the top of every tab: time left, phase, a progress line, ⧉ pop-out and a jump to the full timer. It hides whenever any of the full timer is on screen (one clock at a time). When the time's up it turns red and shows just 🌊 (keep going: +15 min, or the next flow check-in) and ⏹️ (stop & log), and those work from any tab.
+
+**👑 Team principal.** In 💬 Get to know your crew, make one of them team principal: they become the voice at the top of the app (with a 👑), instead of the crew taking turns. Crew only ever mention people you've actually hired.
 
 **↩️ Send it back.** Each open mission row has a ↩️: it takes the task off today's mission (a to-do goes back to its spot in the to-do list; anything else keeps its own deadline). Free for 30 min after you lock in, then it costs half the task's penalty, 2 a day. Never if the mission would drop under the qualifying hour, never once you've logged timer time on it, and not after 6 PM. You give a reason each time.
 
