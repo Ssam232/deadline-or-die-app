@@ -74,7 +74,7 @@ QUESTIONS_FILE = "paper-questions.json"
 QUESTIONS_MARKER = "paper-questions.done"
 ALLOWED = {"species": {"rat", "mouse", "human"}, "sex": {"male", "female", "both"},
            "type": {"review", "study", "methods"}}
-FACT_PREFIXES = ("question:", "subject:", "year:", "species:", "sex:", "type:")
+FACT_PREFIXES = ("question:", "subject:", "year:", "species:", "sex:", "type:", "scholarship:")
 STATUS_FOLDERS = {"read": "Read", "dropped": "Dropped"}
 ORDER_FILE = "reading-order.json"
 ORDER_MARKER = "reading-order.done"
