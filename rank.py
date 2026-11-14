@@ -95,3 +95,35 @@ def why_first(t: dict, now: datetime) -> str:
     if prio(t) == "must":
         return "It has to happen today. Starting is the hard part: give it 10 minutes."
     return "Lowest friction on the list. Start here and build momentum."
+
+
+_ROLL = ["🔥 <b>Keep it going:</b>", "💪 <b>Tuff. Next up:</b>", "🚀 <b>On a roll. Next:</b>",
+         "⚡ <b>Don't let it cool down:</b>", "😤 <b>Locked in. Next:</b>"]
+
+
+def lead(done: int, left: int) -> str:
+    """The banner's opener: 'Start here' before your first finish, momentum after it."""
+    if done <= 0:
+        return "👉 <b>Start here:</b>"
+    if left == 1:
+        return "🏁 <b>Last one:</b>"
+    return _ROLL[(done - 1) % len(_ROLL)]
+
+
+def why_next(t: dict, now: datetime, done: int, left: int) -> str:
+    """Why this one's on top, told as a continuation once you're already moving."""
+    if done <= 0:
+        return why_first(t, now)
+    m = _mins(t)
+    head = f"{done} down" + (", one to go. Close the day out." if left == 1 else ". ")
+    if left == 1:
+        return head
+    if urgent(t, now):
+        return head + why_first(t, now)
+    if m <= 15:
+        return head + f"Only {m} minutes: bank it while you're warm."
+    if diff(t) == "hard":
+        return head + "You're warmed up now, which is the best time for the hard one."
+    if diff(t) == "easy":
+        return head + "An easy one keeps the streak of wins going."
+    return head + "Same energy. Start the timer before the momentum fades."

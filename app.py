@@ -2263,10 +2263,34 @@ RACE_DAY_CAP = 3  # races a day, max — however rich you are
 TICKET_MIN_TASK = 30  # a finish earns a ticket only if the task was worth 30+ honest minutes
 
 
+def rivals_shown(state: dict, track: dict) -> tuple[int, int]:
+    """The grid you'll actually face: the track's field, sped up by what it's learned about you (📈) and by your
+    misses (🔥 rival heat)."""
+    lo, hi = ai_range(state, track)
+    h = 3 * state.get("rival_heat", 0)
+    return lo + h, hi + h
+
+
+def outclass(state: dict, track: dict) -> bool:
+    """Your car is faster than everything this grid has, even after it's caught up on you."""
+    return track_rating(state, track) > rivals_shown(state, track)[1]
+
+
+def higher_open(state: dict, track: dict) -> dict | None:
+    """The next harder track you've already unlocked, if any."""
+    lv = level_of(state["xp"])
+    i = next((k for k, t in enumerate(TRACKS) if t["name"] == track["name"]), len(TRACKS))
+    return next((t for t in TRACKS[i + 1:] if lv >= t["level"]), None)
+
+
 def sandbag(state: dict, track: dict) -> float:
-    """Prize multiplier: 1.0 on a fair track, shrinking (to 0.3) the more your car outclasses it."""
-    r, hi = track_rating(state, track), track["ai"][1]
-    return 1.0 if r <= hi else max(0.3, min(1.0, hi * 1.15 / r))
+    """Prize multiplier: 1.0 on a fair track. Only when you outclass a track AND a harder one is open to you do
+    prizes shrink (to 0.3): staying down is a choice then. On your top track there's nowhere to go, so full prizes
+    (the fast rivals still show up)."""
+    if not outclass(state, track) or not higher_open(state, track):
+        return 1.0
+    r, hi = track_rating(state, track), rivals_shown(state, track)[1]
+    return max(0.3, min(1.0, hi * 1.15 / r))
 
 
 TICKET_BANK_CAP = 6   # unused tickets carry over, up to this many
@@ -2429,7 +2453,8 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
         rivals = [{"name": n, "you": False, "rating": random.uniform(lo_, hi_) + heat + random.gauss(0, 5),
                    "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
     mult = sandbag(state, track) if kind != "inv" else 1.0
-    if mult < 1:  # you outclass the track: the fast guys show up too
+    fast_ = kind != "inv" and outclass(state, track)
+    if fast_:  # you outclass the grid: the fast guys show up too
         for r_ in rivals[:2]:
             r_["rating"] = you["rating"] * random.uniform(0.9, 1.06) + random.gauss(0, 5)
     field = [you] + rivals
@@ -2478,6 +2503,8 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
     if mult < 1:
         why += (f"\n- 🪜 Your car outclasses {track['name']}, so two fast rivals joined and prizes paid "
                 f"×{mult:.2f}. Move up a track for full prizes.")
+    elif fast_:
+        why += f"\n- 🪜 You're quicker than the {track['name']} grid, so two fast rivals joined to keep it honest."
     secs = race_seconds(track)
     if you["dnf"]:
         res = ("error", f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "fail", False)
@@ -3662,8 +3689,10 @@ def render_today(state: dict) -> None:
                 render_arrange(state, stt)
             _first = next((t for t in m if t["status"] == "open"), None)
             if _first and not tm:
-                st.markdown(f"<div class='dod-start'>👉 <b>Start here:</b> {html.escape(_first['title'])}"
-                            f"<span>{html.escape(RK.why_first(_first, n_))}</span></div>", unsafe_allow_html=True)
+                _left = sum(t["status"] == "open" for t in m)
+                st.markdown(f"<div class='dod-start'>{RK.lead(len(done), _left)} {html.escape(_first['title'])}"
+                            f"<span>{html.escape(RK.why_next(_first, n_, len(done), _left))}</span></div>",
+                            unsafe_allow_html=True)
             for t in m:
                 if t["status"] in ("done", "redeemed"):
                     st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>{html.escape(t['title'])}</s>"
@@ -7865,8 +7894,10 @@ with tab_tasks:
                 render_sort_pick(state, "sort_tasks")
             _ord = (open_tasks if sort_mode(state) == "mine" else RK.rank(open_tasks, sort_mode(state), now()))
             if _ord and sort_mode(state) == "start":
-                st.markdown(f"<div class='dod-start'>👉 <b>Start here:</b> {html.escape(_ord[0]['title'])}"
-                            f"<span>{html.escape(RK.why_first(_ord[0], now()))}</span></div>", unsafe_allow_html=True)
+                _dn = len(daily.finished_on(state, now().date()))  # finished today: the banner keeps you rolling
+                st.markdown(f"<div class='dod-start'>{RK.lead(_dn, len(_ord))} {html.escape(_ord[0]['title'])}"
+                            f"<span>{html.escape(RK.why_next(_ord[0], now(), _dn, len(_ord)))}</span></div>",
+                            unsafe_allow_html=True)
             for t in _ord:
                 render_task_row(state, t, "tt_")
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
@@ -9313,8 +9344,9 @@ with tab_race:
         pick = st.selectbox("Track", names, index=best_track(state), format_func=track_label,
                             help="Starts on the highest track you can actually win.")
         track = TRACKS[names.index(pick)]
-        lo, hi = ai_range(state, track)
+        lo, hi = rivals_shown(state, track)
         rating = track_rating(state, track)
+        fast_ = outclass(state, track)
         st.caption("🏁 " + RV.TRACK_CHARACTER.get(track["name"], ([], ""))[1].capitalize() + "."
                    + (f" Season {RV.SEASON} layout: **{RV.layout_name(track['name'])}**." if track["name"] == RV.TOP_TRACK else ""))
         m_ = sandbag(state, track)
@@ -9322,7 +9354,8 @@ with tab_race:
         rc = run_cost(state, track)
         edge_ = "#2ec4b6" if rating >= hi else "#f5c518" if rating >= lo else "#e10600"
         st.markdown(f"<div class='dod-tiles'><div><small>Your car</small><b style='color:{edge_}'>{rating:.0f}</b></div>"
-                    f"<div><small>Rivals</small><b>{lo}–{hi}</b></div>"
+                    f"<div><small>Rivals</small><b>{lo}–{hi}</b>"
+                    + (f"<small style='text-transform:none;margin-top:2px'>+2 fast ~{rating * .9:.0f}–{rating * 1.06:.0f}</small>" if fast_ else "") + "</div>"
                     f"<div><small>Laps</small><b>{track['laps']}</b></div>"
                     f"<div><small>Entry + ⛽ running</small><b>{track['fee']} + {rc} 🪙</b></div>"
                     f"<div><small>Prizes</small><b>🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}</b></div></div>", unsafe_allow_html=True)
@@ -9330,9 +9363,15 @@ with tab_race:
         if ff:
             st.caption(f"📈 This grid has learned you: rivals **+{ff * 3.5:.0f}%** from your recent results here. "
                        "Win more and they get faster; move up a tier to keep the money flowing.")
+        up_ = higher_open(state, track)
         if m_ < 1:
-            st.caption(f"🪜 You outclass this track: fast rivals show up and prizes pay ×{m_:.2f}. "
-                       "Move up a track for full prizes.")
+            st.caption(f"🪜 You outclass this track: two fast rivals join and prizes pay ×{m_:.2f}. "
+                       f"**{up_['name']}** is open to you, so move up for full prizes.")
+        elif fast_:
+            nxt_ = next((t for t in TRACKS if t["level"] > lvl), None)
+            st.caption("🪜 You're quicker than this grid, so two fast rivals join to keep it honest. Full prizes: "
+                       "it's the top track you've unlocked"
+                       + (f" (**{nxt_['name']}** opens at level {nxt_['level']})." if nxt_ else "."))
         if car["condition"] < 40:
             st.warning("Car under 40% — real risk of a DNF.")
         if lvl < track["level"]:
