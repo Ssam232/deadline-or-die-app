@@ -489,17 +489,19 @@ def send_back(save: dict, t: dict, now: datetime, reason: str, bank) -> tuple[bo
     return True, f"↩️ **{t['title']}** is off today's mission" + (f" (−{cost})." if cost else " (free).")
 
 
-# ⏳ Extensions cost a share of your bank, not of the task: 10% for the first on a task, 20% for the second… so it
-# stings whatever you're sitting on. The old price (30% of the task's penalty) is the floor. An extended task
+# ⏳ Extensions cost a share of your bank, not of the task: 5% for the first on a task, 10% for the second… so it
+# stings whatever you're sitting on. Floor: the old price (30% of the task's penalty). Cap: what giving up would cost
+# you (its penalty + the reward you'd lose), so extending is never a worse deal than abandoning. An extended task
 # leaves today's mission (it isn't today's anymore), as long as the mission keeps its qualifying hour.
-EXT_BANK_PCT = 0.10
+EXT_BANK_PCT = 0.05
 
 
 def extension_cost(save: dict, t: dict) -> tuple[int, int]:
     """(coins, percent of your bank)."""
     pct = round(EXT_BANK_PCT * 100 * (int(t.get("extensions") or 0) + 1))
-    floor = -(-int(t.get("penalty") or 20) * 3 // 10)
-    return max(floor, round(max(0, save.get("coins", 0)) * pct / 100)), pct
+    pen, rew = int(t.get("penalty") or 20), int(t.get("reward") or 0)
+    floor, cap = -(-pen * 3 // 10), pen + rew
+    return max(floor, min(cap, round(max(0, save.get("coins", 0)) * pct / 100))), pct
 
 
 def extension_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
@@ -518,7 +520,7 @@ def extend(save: dict, t: dict, now: datetime, hours: int, bank) -> tuple[bool, 
     cost, pct = extension_cost(save, t)
     if save.get("coins", 0) < cost:
         return False, "Can't afford it. Guess you're doing it on time."
-    bank(save, -cost, f"⏳ Extension ({pct}% of bank): {t['title']}")
+    bank(save, -cost, f"⏳ Extension: {t['title']}")
     dl = datetime.fromisoformat(t["deadline"])
     dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
     t["deadline"] = (dl + timedelta(hours=hours)).isoformat()
@@ -526,8 +528,59 @@ def extend(save: dict, t: dict, now: datetime, hours: int, bank) -> tuple[bool, 
     off = t.get("mission_day") == now.date().isoformat()
     if off:
         t.pop("mission_day", None)
-    return True, (f"⏳ Extended to {datetime.fromisoformat(t['deadline']):%a %b %d, %I:%M %p} for {cost} 🪙 ({pct}% of your "
-                  "bank). Reward cut 15%." + (" It's off today's mission." if off else ""))
+    return True, (f"⏳ Extended to {datetime.fromisoformat(t['deadline']):%a %b %d, %I:%M %p} for {cost} 🪙. "
+                  "Reward cut 15%." + (" It's off today's mission." if off else ""))
+
+
+# 🔁 Tried, but it's blocked: things you can't finish alone (a reply, a payment that bounced, an office that was
+# closed). You did your part, so the attempt counts today as a small finished item (a quarter of the reward, keeps
+# the mission and the day streak honest), and the task comes back on a retry day of your choosing with no fee.
+# Guards: you write what you did and what it's waiting on, once a day per task, 3 tries per task, a week out at most.
+BLOCK_MAX, BLOCK_CREDIT, BLOCK_DAYS = 3, 0.25, 7
+
+
+def blocked_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
+    if t.get("status") != "open":
+        return False, "Only open tasks."
+    if t.get("tried_on") == now.date().isoformat():
+        return False, "Already logged a try today. Retry on the day you picked."
+    if int(t.get("retries") or 0) >= BLOCK_MAX:
+        return False, f"Tried {BLOCK_MAX} times already. Finish it, extend it, or remove it with a reason."
+    return True, f"{BLOCK_MAX - int(t.get('retries') or 0)} tries left on this task."
+
+
+def tried_blocked(save: dict, t: dict, now: datetime, did: str, waiting: str, retry: date, bank,
+                  new_id: str) -> tuple[bool, str]:
+    ok, why = blocked_check(save, t, now)
+    if not ok:
+        return False, why
+    if len(did.strip()) < 10 or len(waiting.strip()) < 3:
+        return False, "Say what you did (10+ characters) and what it's waiting on."
+    today = now.date()
+    if not today < retry <= today + timedelta(days=BLOCK_DAYS):
+        return False, f"Pick a retry day from tomorrow to {BLOCK_DAYS} days out."
+    credit = max(1, round(int(t.get("reward") or 0) * BLOCK_CREDIT))
+    on_mission = t.get("mission_day") == today.isoformat()
+    save.setdefault("tasks", []).append({
+        "id": new_id, "title": f"🔁 Tried: {t['title']}", "details": f"Waiting on: {waiting.strip()}", "goal_id": None,
+        "deadline": now.isoformat(), "created": now.isoformat(), "completed_at": now.isoformat(),
+        "difficulty": t.get("difficulty", "Quick"), "reward": credit, "earned": credit, "penalty": 0, "xp": 2,
+        "consequence": "", "status": "done", "extensions": 0, "rejections": 0, "source": "attempt",
+        "category": t.get("category"), "minutes": min(int(t.get("minutes") or 15), 15), "attempt_of": t["id"],
+        "proof_note": did.strip(), "proof_kind": "attempt", "proof_detail": waiting.strip(),
+        **({"mission_day": today.isoformat()} if on_mission else {})})
+    bank(save, credit, f"🔁 Tried (blocked): {t['title']}")
+    save["xp"] = save.get("xp", 0) + 2
+    dl = datetime.fromisoformat(t["deadline"])
+    dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
+    t["deadline"] = max(dl, datetime.combine(retry, dtime(23, 59), now.tzinfo)).isoformat()
+    t["retries"] = int(t.get("retries") or 0) + 1
+    t["tried_on"] = today.isoformat()
+    t.setdefault("attempts", []).append({"at": now.isoformat(), "did": did.strip()[:200], "waiting": waiting.strip()[:120]})
+    if on_mission:
+        t.pop("mission_day", None)
+    return True, (f"🔁 Logged the try on **{t['title']}** (+{credit} 🪙). It's back {retry:%a %b} {retry.day}"
+                  f"{' and off today' + chr(39) + 's mission' if on_mission else ''}.")
 
 
 def pit_stop(save: dict, now: datetime) -> bool:

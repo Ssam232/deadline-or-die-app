@@ -3408,6 +3408,39 @@ def remove_task(state: dict, t: dict, reason: str, note: str) -> None:
     bank(state, 0, f"🗑️ Removed: {t['title'][:50]} ({reason}{': ' + note[:60] if note else ''})")
 
 
+def render_blocked(state: dict, t: dict, scope: str) -> None:
+    """🔁 You tried; it's stuck on someone or something else. Log the try, pick a retry day."""
+    ok, why = daily.blocked_check(state, t, now())
+    if t.get("attempts"):
+        a_ = t["attempts"][-1]
+        st.caption(f"🔁 Tried {len(t['attempts'])}× · last: {html.escape(a_['did'][:80])} · waiting on "
+                   f"{html.escape(a_['waiting'][:60])}")
+    with st.popover("🔁 Tried, but it's blocked", use_container_width=True,
+                    help="You did your part and it didn't go through. Log it and retry another day."):
+        if not ok:
+            st.caption(why)
+            return
+        st.caption(f"The try counts today (+{max(1, round(int(t.get('reward') or 0) * daily.BLOCK_CREDIT))} 🪙, a quarter "
+                   f"of the reward) and the task comes back on the day you pick, no fee. {why}")
+        did = st.text_input("What you did", key=f"{scope}bkdid_{t['id']}", max_chars=200,
+                            placeholder="e.g. Paid online, card got declined; called the shop, no answer")
+        wait = st.text_input("Waiting on", key=f"{scope}bkw_{t['id']}", max_chars=120,
+                             placeholder="e.g. their reply · the bank · office opens Monday")
+        days = {"Tomorrow": 1, "In 2 days": 2, "In 3 days": 3, "Next week": 7}
+        when_ = st.segmented_control("Retry", list(days), default="Tomorrow", key=f"{scope}bkr_{t['id']}") or "Tomorrow"
+        good = len(did.strip()) >= 10 and len(wait.strip()) >= 3
+        if st.button("🔁 Log the try", key=f"{scope}bkgo_{t['id']}", type="primary", disabled=not good,
+                     use_container_width=True):
+            done_, msg_ = daily.tried_blocked(state, t, now(), did, wait, now().date() + timedelta(days=days[when_]),
+                                              bank, uuid.uuid4().hex[:10])
+            if done_:
+                save_state(state)
+                flash(msg_)
+                st.rerun()
+            else:
+                st.error(msg_)
+
+
 def render_remove(state: dict, t: dict, scope: str) -> None:
     left = REMOVALS_PER_WEEK - removals_this_week(state)
     with st.popover(f"🗑️ Remove with a reason · {max(0, left)} left this week", use_container_width=True):
@@ -3563,8 +3596,11 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
         if t["extensions"] < s["max_extensions"]:
             ext_cost, ext_pct = daily.extension_cost(state, t)
             with ca.popover(f"⏳ +{s['extension_hours']}h · {ext_cost} 🪙", help="Buy more time (it stings)"):
-                st.markdown(f"**{ext_cost} 🪙**: {ext_pct}% of your bank"
-                            + (" (the next one on this task costs " + f"{ext_pct + 10}%)" if t["extensions"] + 1 < s["max_extensions"] else "")
+                _cap = int(t.get("penalty") or 20) + int(t.get("reward") or 0)
+                st.markdown(f"**{ext_cost} 🪙**: "
+                            + (f"{ext_pct}% of your bank" if ext_cost < _cap else f"capped at what giving up would cost "
+                               f"(−{t.get('penalty')} penalty + the {t.get('reward')} reward)")
+                            + (f" (the next one on this task: {ext_pct + 5}%)" if t["extensions"] + 1 < s["max_extensions"] else "")
                             + f". The reward drops 15%"
                             + (", and it leaves today's mission." if t.get("mission_day") == now().date().isoformat() else "."))
                 ok_, why_ = daily.extension_check(state, t, now())
@@ -3580,6 +3616,7 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
                         st.error(msg_)
         else:
             ca.caption("No extensions left.")
+        render_blocked(state, t, scope)
         young = now() - parse_dt(t["created"]) < timedelta(minutes=FREE_DELETE_MIN)
         if not young:
             render_remove(state, t, scope)
@@ -6306,7 +6343,7 @@ READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Spe
 
 def _paper_tags(p: dict) -> list[str]:
     """A paper's clickable tags as "filter|value". Its subject mostly repeats its question, so it only shows without one."""
-    f = {k: p["facets"].get(k, []) for k in ("question", "subject", "species", "sex", "type", "source")}
+    f = {k: p["facets"].get(k, []) for k in ("question", "subject", "species", "sex", "type", "source", "scholarship")}
     tags = [("question", v) for v in sorted(f["question"])] + ([] if f["question"] else [("subject", v) for v in f["subject"]])
     tags += ([("year", p["year"])] if p.get("year") else []) + [(n, v) for n in ("species", "sex", "type", "source", "scholarship") for v in f[n]]
     return [f"{n}|{v}" for n, v in tags]
