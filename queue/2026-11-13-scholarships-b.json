@@ -1,0 +1,68 @@
+{
+ "added": "2026-11-13",
+ "papers": [
+  {
+   "doi": "10.1038/ncb2015",
+   "title": "Muscle injury activates resident fibro/adipogenic progenitors that facilitate myogenesis",
+   "tags": [
+    "remodeling"
+   ],
+   "species": "mouse",
+   "type": "study",
+   "level": "specialized",
+   "before": "Thrombospondin-1 promotes fibro-adipogenic stromal expansion and contractile dysfunction of the diaphragm in obesity.",
+   "scholarships": [
+    "Katharine Sarah Melinda"
+   ]
+  },
+  {
+   "doi": "10.1038/ncb2014",
+   "title": "Mesenchymal progenitors distinct from satellite cells contribute to ectopic fat cell formation in skeletal muscle",
+   "tags": [
+    "remodeling"
+   ],
+   "species": "mouse",
+   "type": "study",
+   "level": "specialized",
+   "before": "Thrombospondin-1 promotes fibro-adipogenic stromal expansion and contractile dysfunction of the diaphragm in obesity.",
+   "scholarships": [
+    "Katharine Sarah Melinda"
+   ]
+  },
+  {
+   "doi": "10.1038/352536a0",
+   "title": "The mdx mouse diaphragm reproduces the degenerative changes of Duchenne muscular dystrophy",
+   "tags": [
+    "remodeling"
+   ],
+   "species": "mouse",
+   "type": "study",
+   "level": "specialized",
+   "scholarships": [
+    "Katharine Sarah Melinda"
+   ]
+  },
+  {
+   "pmcid": "PMC3631802",
+   "title": "The role of fibrosis in Duchenne muscular dystrophy",
+   "tags": [
+    "remodeling"
+   ],
+   "type": "review",
+   "level": "specialized",
+   "scholarships": [
+    "Katharine Sarah Melinda"
+   ]
+  },
+  {
+   "pmid": "21404285",
+   "title": "Exercise and Duchenne muscular dystrophy: toward evidence-based exercise prescription",
+   "tags": [],
+   "type": "review",
+   "level": "niche",
+   "scholarships": [
+    "Katharine Sarah Melinda"
+   ]
+  }
+ ]
+}
