@@ -2816,7 +2816,14 @@ def render_dailies(state: dict) -> None:
                 else:
                     note = ("<div style='color:#8b909c;font-size:.88rem'>Day one is free: misses start "
                             "costing tomorrow</div>")
-                st.markdown(note, unsafe_allow_html=True)
+                open_ = [r for r in rows if not r["done"]]
+                top_ = max(open_ or rows, key=lambda r: r["h"].get("streak") or 0)
+                pctx = {"done": done, "total": len(rows), "left": len(rows) - done, "hour": now().hour,
+                        "stake": stake or 0, "rest": bail_ or daily.is_rest(state, today),
+                        "best": top_["h"]["name"], "best_streak": (top_["h"].get("streak") or 0) if open_ else 0}
+                st.markdown(cast_say("marshal", CR.cast_line("marshal", pctx, f"{today}{now().hour}{done}"),
+                                     note.replace("<div style=", "<span style=").replace("</div>", "</span>")),
+                            unsafe_allow_html=True)  # 📋 Pearl watches the dailies; the plain facts sit under her line
                 for r in rows:
                     h = r["h"]
                     c1, c2, c3 = st.container(key=f"dlrow_{h['id']}").columns([5, 1, 2], vertical_alignment="center")
@@ -3852,6 +3859,14 @@ def render_crew_card(state: dict) -> None:
                         if len(told) < _all:
                             st.caption(f"🔒 {_all - len(told)} more stor{'ies' if _all - len(told) > 1 else 'y'} "
                                        f"as you two get closer.")
+
+
+def cast_say(who: str, line: str, sub: str = "", tone: str = "") -> str:
+    """A regular (not hired crew) saying something: face, name, one line, optional plain-facts footnote."""
+    c = CR.CAST[who]
+    return (f"<div class='dod-cast {tone}'><div class='av'>{CR.avatar_svg(who, 40)}</div><div>"
+            f"<b>{html.escape(c['name'])}</b> <span class='r'>{c['role']}</span>"
+            f"<div class='q'>{html.escape(line)}</div>" + (f"<div class='f'>{sub}</div>" if sub else "") + "</div></div>")
 
 
 def crew_strip_html(state: dict) -> str:
@@ -5351,11 +5366,16 @@ def render_timer(state: dict, big: bool = False) -> None:
                     st.rerun()
                 tok = state.get("tokens", {})
                 claimed = state.get("challenge_claims", [])
-                for ch in EV.focus_challenges(now().date(), TZ):
+                for ch in EV.focus_challenges(now().date(), TZ):  # 🎙️ Valenti calls the challenges
                     if ch["id"] in claimed:
-                        st.markdown(f"✅ ~~{ch['label']}~~")
+                        st.markdown(cast_say("announcer", CR.cast_line("announcer", {"claimed": True}, ch["id"]),
+                                             f"✅ <s>{html.escape(ch['label'])}</s>", "won"), unsafe_allow_html=True)
                     elif ch["start"] <= now() < ch["end"]:
-                        st.markdown(f"🔥 **LIVE CHALLENGE:** {ch['label']} — {fmt_left(ch['end'] - now())} left to start")
+                        left_ = fmt_left(ch["end"] - now())
+                        st.markdown(cast_say("announcer", CR.cast_line("announcer", {"live": True, "label": ch["label"],
+                                                                                      "left": left_}, ch["id"]),
+                                             f"🔥 <b>LIVE CHALLENGE:</b> {html.escape(ch['label'])} · {left_} left to start",
+                                             "live"), unsafe_allow_html=True)
                 drops_left = EV.DROPS_PER_DAY - sum(x.get("drops", 1) for x in state.get("focus_log", [])
                                                      if x["date"] == now().date().isoformat() and x.get("drop"))
                 st.caption(f"Today **{focus_today(state)} min** · timer-verified tasks pay +{int(V.TIMER_BONUS * 100)}% · "
@@ -7105,6 +7125,13 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 .dod-start b{color:var(--y)}.dod-start span{display:block;color:#b8bcc6;font-size:.84rem;margin-top:2px}
 .dod-quote.top{margin:-.2rem 0 .9rem;padding:6px 12px;font-size:.9rem;background:none}
 .dod-quote.top span{display:block;margin-top:2px}
+.dod-cast{display:flex;gap:10px;align-items:flex-start;margin:.3rem 0 .6rem;padding:9px 12px;border-radius:12px;
+  background:rgba(255,255,255,.04);border:1px solid var(--line)}
+.dod-cast .av{flex:0 0 40px;line-height:0}.dod-cast b{font-size:.88rem}
+.dod-cast .r{color:var(--muted);font-size:.75rem;margin-left:4px}
+.dod-cast .q{font-size:.92rem;line-height:1.4;margin-top:1px}.dod-cast .f{font-size:.84rem;margin-top:4px;color:#b8bcc6}
+.dod-cast.live{border-color:rgba(225,6,0,.55);background:linear-gradient(90deg,rgba(225,6,0,.14),rgba(225,6,0,.02))}
+.dod-cast.won{border-color:rgba(46,196,182,.45)}
 .dod-banter{margin:4px 0 10px;padding:9px 12px;border-radius:10px;background:rgba(255,255,255,.04);font-size:.9rem;
   line-height:1.45}
 .dod-mrow{display:flex;gap:10px;align-items:center;padding:9px 14px;margin:0 0 .5rem;border:1px solid var(--line);

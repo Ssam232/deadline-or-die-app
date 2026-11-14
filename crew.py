@@ -523,7 +523,10 @@ def mood(ctx: dict) -> str:
 
 def avatar_svg(key: str, size: int = 64, mood: str = "ok") -> str:
     """An original little portrait: face, hair, team shirt and one signature piece of kit."""
-    c = CREW[key]
+    return face_svg(CREW.get(key) or CAST[key], size, mood)
+
+
+def face_svg(c: dict, size: int = 64, mood: str = "ok") -> str:
     hair = {
         "bun": f"<circle cx='32' cy='12' r='7' fill='{c['hair']}'/><path d='M14 30 Q14 14 32 14 Q50 14 50 30 L50 24 Q46 18 32 18 Q18 18 14 24 Z' fill='{c['hair']}'/>",
         "buzz": f"<path d='M15 28 Q15 13 32 13 Q49 13 49 28 Q46 19 32 19 Q18 19 15 28 Z' fill='{c['hair']}'/>",
@@ -536,6 +539,8 @@ def avatar_svg(key: str, size: int = 64, mood: str = "ok") -> str:
                           for x, h in ((13, 22), (17, 26), (44, 26), (48, 22))),
         "long": f"<path d='M13 50 Q9 14 32 11 Q55 14 51 50 L46 50 Q48 22 32 19 Q16 22 18 50 Z' fill='{c['hair']}'/>",
         "bangs": f"<path d='M13 40 Q11 11 32 11 Q53 11 51 40 L48 40 Q48 24 44 24 L20 24 Q16 24 16 40 Z' fill='{c['hair']}'/>",
+        "pomp": f"<path d='M14 30 Q12 6 34 6 Q54 8 50 30 Q48 16 34 16 Q20 16 14 30 Z' fill='{c['hair']}'/>"
+                f"<path d='M22 42 Q32 47 42 42' stroke='{c['hair']}' stroke-width='2.4' fill='none'/>",
         "curly": "".join(f"<circle cx='{x}' cy='{y}' r='5' fill='{c['hair']}'/>" for x, y in
                          ((18, 22), (24, 16), (32, 14), (40, 16), (46, 22), (16, 29), (48, 29)))
                  + f"<path d='M22 42 Q32 52 42 42 Q42 50 32 51 Q22 50 22 42 Z' fill='{c['hair']}' opacity='.85'/>",
@@ -559,6 +564,12 @@ def avatar_svg(key: str, size: int = 64, mood: str = "ok") -> str:
         "apron": "<path d='M22 50 L42 50 L44 64 L20 64 Z' fill='#f6f1e7'/><path d='M24 50 Q32 46 40 50' stroke='#f6f1e7' stroke-width='1.5' fill='none'/>",
         "pencil": "<rect x='44' y='12' width='3' height='16' rx='1' fill='#f5c518' transform='rotate(25 45 20)'/>"
                   "<circle cx='22' cy='37' r='2.2' fill='#ff9db8' opacity='.7'/><circle cx='42' cy='37' r='2.2' fill='#ff9db8' opacity='.7'/>",
+        "mic": "<rect x='44' y='38' width='7' height='11' rx='3.5' fill='#c9ccd2'/><rect x='46' y='49' width='3' height='12' fill='#1b1f27'/>"
+               "<path d='M23 52 L32 57 L41 52' stroke='#f5c518' stroke-width='2' fill='none'/>",
+        "clipboard": "<rect x='40' y='44' width='15' height='19' rx='2' fill='#c8a46a'/><rect x='42' y='48' width='11' height='13' fill='#f6f1e7'/>"
+                     "<rect x='44' y='42' width='7' height='4' rx='1' fill='#8b909c'/>"
+                     "<circle cx='26' cy='32' r='5' stroke='#1b1f27' stroke-width='1.6' fill='none'/><circle cx='38' cy='32' r='5' stroke='#1b1f27' stroke-width='1.6' fill='none'/>"
+                     "<path d='M31 32 L33 32' stroke='#1b1f27' stroke-width='1.6'/>",
         "binoculars": "<rect x='22' y='51' width='8' height='9' rx='2.5' fill='#1b1f27'/><rect x='34' y='51' width='8' height='9' rx='2.5' fill='#1b1f27'/>"
                       "<rect x='29' y='53' width='6' height='3' fill='#1b1f27'/>",
     }[c["gear"]]
@@ -569,6 +580,66 @@ def avatar_svg(key: str, size: int = 64, mood: str = "ok") -> str:
             f"<ellipse cx='32' cy='31' rx='15' ry='17' fill='{c['skin']}'/>"
             f"{hair}{brows}<circle cx='26' cy='32' r='1.8' fill='#14171d'/><circle cx='38' cy='32' r='1.8' fill='#14171d'/>"
             f"<path d='{mouth}' stroke='#14171d' stroke-width='2' fill='none' stroke-linecap='round'/>{gear}</svg>")
+
+
+# ── The regulars: not crew you hire, just people who are always around ──
+CAST = {
+    "announcer": {"name": "\"Voice\" Valenti", "role": "Race-day announcer", "skin": "#d9a27a", "hair": "#1a1a1a",
+                  "style": "pomp", "shirt": "#e10600", "gear": "mic",
+                  "bio": "Has announced every grid for 30 years. Has never once used an indoor voice."},
+    "marshal": {"name": "Marshal Pearl", "role": "Dailies marshal", "skin": "#c98e6b", "hair": "#b9b9c0",
+                "style": "bun", "shirt": "#f5c518", "gear": "clipboard",
+                "bio": "Retired school hall monitor. Now she watches your dailies. Clipboard, whistle, no excuses, "
+                       "secretly very proud of you."},
+}
+
+# Valenti calls the focus challenges: ctx = {live, label, left, claimed, next_at}
+ANNOUNCER = {
+    "live": ["LADIES AND GENTLEMEN, A CHALLENGE HAS APPEARED! {left} on the clock! WHO WANTS IT?!",
+             "IT'S HAPPENING, FOLKS! {left} left to get rolling! I haven't been this excited since breakfast!",
+             "BREAKING NEWS FROM THE PADDOCK: the gates are open! The crowd is on its feet! (The crowd is me.)",
+             "{left} TO GO! Somebody hold my microphone, I'm getting emotional!",
+             "A double-or-nothing moment, folks! Well, double-or-regular. Still! {left}!"],
+    "claimed": ["WHAT A SESSION! CHALLENGE CLAIMED! I'm going to need a minute. And a lozenge.",
+                "UNBELIEVABLE SCENES! Challenge done! Someone get this driver a trophy! Or at least a snack!",
+                "AND THAT'S HOW IT'S DONE! Mark it in the history books! Small books! But books!"],
+    "quiet": ["Quiet on the track right now. Surprise challenges buzz your phone. I'll be warming up my voice.",
+              "No challenge live. I'm doing my vocal exercises. MEE-MAY-MAH. Sorry.",
+              "Between challenges, folks. Start a session anyway: the timer doesn't need my permission. (It does like it.)"],
+}
+
+# Pearl watches the dailies: ctx = {done, total, hour, stake, best, best_streak, rest}
+MARSHAL = [
+    (lambda x: x["rest"], ["Free day on the board. Clipboard's down. Don't get used to it.",
+                           "Off duty today. I'm doing a crossword. Do yours anyway if you like; I'll pretend not to look."]),
+    (lambda x: x["total"] and x["done"] == x["total"], ["All {total} done. I'm putting a gold star on my clipboard. Don't tell anyone.",
+                                                       "Full marks. In thirty years of hall monitoring, I've rarely said that. Well done.",
+                                                       "Everything ticked. I may have smiled. You didn't see it."]),
+    (lambda x: x["hour"] >= 21 and x["done"] < x["total"], ["It's past nine and I see {left} left. My whistle is ready. Please don't make me use it.",
+                                                           "Clock's ticking, {left} to go, −{stake} at midnight. I'll wait. I'm very good at waiting.",
+                                                           "Late shift. {left} left. I've seen students finish essays in less time. Go."]),
+    (lambda x: x["best_streak"] >= 5 and x["done"] < x["total"], ["{best} is on a {best_streak}-day streak. I'd hate to write 'reset' on my clipboard. Hate it.",
+                                                                 "Don't break {best}'s {best_streak}-day streak. I've grown attached. Professionally."]),
+    (lambda x: x["done"] == 0 and x["hour"] < 12, ["Morning. Clipboard's clean. Let's keep it that way: tick one off early.",
+                                                   "Roll call: 0 of {total}. That's fine for now. 'For now' is doing a lot of work there."]),
+    (lambda x: x["done"] == 0, ["0 of {total}. I'm not angry. I'm just writing things down.",
+                                "Nothing ticked yet. I've confiscated better excuses than whatever you're about to say."]),
+    (lambda x: True, ["{done} of {total}. Steady. I like steady.", "{done} down, {left} to go. Hallway's clear, keep walking. No running.",
+                      "Halfway-ish. I've made a note. A positive note, for once."]),
+]
+
+
+def cast_line(who: str, ctx: dict, salt: str = "") -> str:
+    if who == "announcer":
+        k = "claimed" if ctx.get("claimed") else "live" if ctx.get("live") else "quiet"
+        return _pick(ANNOUNCER[k], f"ann{salt}{k}").format(**ctx)
+    for cond, variants in MARSHAL:
+        try:
+            if cond(ctx):
+                return _pick(variants, f"pearl{salt}").format(**ctx)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            continue
+    return ""
 
 
 QUOTES = [
