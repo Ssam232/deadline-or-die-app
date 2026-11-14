@@ -77,6 +77,7 @@ import daily
 import dailies as DL
 import commitments as CM
 import crew as CR
+import rank as RK
 import locks as LK
 import pomo as PM
 import prayers as PR
@@ -2141,6 +2142,11 @@ def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
     start_dt = start_picker(f"{key}_s{fk}", default=None, label="I'll start in (optional)")
     with st.form(key, clear_on_submit=True, border=False):
         mins = st.select_slider("Honest time it'll take", V.MINUTES, value=60, format_func=min_label, key=f"{key}_min")
+        cp, cd = st.columns(2)
+        prio_ = cp.pills("Priority", list(RK.PRIO), format_func=RK.PRIO.get, key=f"{key}_prio{fk}",
+                         help=" · ".join(f"{RK.PRIO[o]}: {RK.PRIO_HELP[o]}" for o in RK.PRIO))
+        diff_ = cd.pills("Difficulty", list(RK.DIFF), format_func=RK.DIFF.get, key=f"{key}_diff{fk}",
+                         help=" · ".join(f"{RK.DIFF[o]}: {RK.DIFF_HELP[o]}" for o in RK.DIFF))
         gid = goal_id
         with st.expander("More: details, goal, type, consequence"):
             details = st.text_area("Details / what counts as done", height=70)
@@ -2162,6 +2168,10 @@ def task_form(state: dict, key: str, goal_id: str | None = None) -> None:
                 t = make_task(title, details, dl, None, cons, gid, category=None if cat == "auto" else cat, minutes=mins)
                 if start_dt:
                     t.update(scheduled=start_dt.isoformat(), scheduled_time=True)
+                if prio_:
+                    t["prio"] = prio_
+                if diff_:
+                    t["diff"] = diff_
                 state["tasks"].append(t)
                 st.session_state[f"_{key}_n"] = fk + 1
                 save_state(state)
@@ -3495,11 +3505,15 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
     fm_ = t.get("focus_min") or 0
     # the label never ticks (no live countdown): a changing label can make Streamlit redraw the panel closed
     _ba = R.block_at(t, TZ)  # booked roadmap time: show when it's booked, not the end-of-day deadline
-    with st.expander((f"🗺️ {t['title']} · booked {_when(_ba)}" if _ba else f"{chip(dl)} {t['title']} · due {_when(dl)}")
+    _ch = RK.chips(t)
+    with st.expander((_ch + " " if _ch else "")
+                     + (f"🗺️ {t['title']} · booked {_when(_ba)}" if _ba else f"{chip(dl)} {t['title']} · due {_when(dl)}")
+                     + f" · {min_label(t.get('minutes') or 30)}"
                      + f" · +{t['reward']}"
                      + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else ""), key=f"exp_{scope}{t['id']}",
                      expanded=proof_open(f"{scope}open_{t['id']}")):
         st.caption(f"⏳ {fmt_left(dl - now())} left")
+        render_tags(state, t, scope or "row")
         g = goal_title(state, t.get("goal_id"))
         st.markdown(
             f"**Due** {dl:%a %b %d, %I:%M %p} · **{t['difficulty']}** · +{t['reward']} 🪙 / −{t['penalty']} 🪙"
@@ -3636,8 +3650,13 @@ def render_today(state: dict) -> None:
                 f"<div class='dod-seg'>{segs}</div>"
                 "<div class='dod-pills'>" + "".join(f"<span>{x}</span>" for x in pills) + "</div>", unsafe_allow_html=True)
             tm = state.get("timer")
+            render_sort_pick(state, "sort_mission")
             if st.toggle("↕ Arrange & set start times", key="arrange_on"):
                 render_arrange(state, stt)
+            _first = next((t for t in m if t["status"] == "open"), None)
+            if _first and not tm:
+                st.markdown(f"<div class='dod-start'>👉 <b>Start here:</b> {html.escape(_first['title'])}"
+                            f"<span>{html.escape(RK.why_first(_first, n_))}</span></div>", unsafe_allow_html=True)
             for t in m:
                 if t["status"] in ("done", "redeemed"):
                     st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>{html.escape(t['title'])}</s>"
@@ -3654,8 +3673,11 @@ def render_today(state: dict) -> None:
                             if _bk else (f"⏰ {datetime.strptime(t['start_set'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
                                          + f" · {t['title']} · {min_label(t.get('minutes') or 30)}") if t.get("start_set")
                             else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
-                    with c1.expander(_lbl + f" · +{t['reward']}" + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
+                    _ch = RK.chips(t)
+                    with c1.expander((_ch + " " if _ch else "") + _lbl + f" · +{t['reward']}"
+                                     + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
                                      expanded=proof_open(f"today_open_{t['id']}")):
+                        render_tags(state, t, "m")
                         render_paper_pair(state, t, "today_")
                         render_proof_form(state, t, "open", scope="today_")
                     running = bool(tm) and tm.get("task_id") == t["id"]
@@ -4247,8 +4269,55 @@ def render_jump() -> None:
 </script>""", height=1)
 
 
+def sort_mode(state: dict) -> str:
+    m = state["settings"].get("task_sort")
+    if m is None and daily.peek_day(state, now().date()).get("order"):
+        return "mine"  # you arranged today's mission by hand and never picked an order: keep yours
+    return m if m in RK.MODES else "start"
+
+
+def _set_sort(state: dict, key: str) -> None:
+    v = st.session_state.get(key)
+    if v and v != sort_mode(state):
+        state["settings"]["task_sort"] = v
+        save_state(state)
+
+
+def render_sort_pick(state: dict, key: str) -> None:
+    """The order your tasks are shown in (one choice, used everywhere)."""
+    st.session_state[key] = sort_mode(state)
+    st.segmented_control("Order", list(RK.MODES), format_func=RK.MODES.get, key=key, label_visibility="collapsed",
+                         on_change=_set_sort, args=(state, key),
+                         help="✨ Start here puts anything due soon first, then the most important, and the easiest, "
+                              "quickest of those on top: small win first, momentum after.")
+
+
+def _set_tag(state: dict, t: dict, field: str, key: str) -> None:
+    v = st.session_state.get(key)
+    if v:
+        t[field] = v
+    else:
+        t.pop(field, None)
+    save_state(state)
+
+
+def render_tags(state: dict, t: dict, scope: str) -> None:
+    """🔥📌🌱 priority and 🪶🧱🏔️ difficulty, one tap each (tap again to clear)."""
+    c1, c2 = st.columns(2)
+    for col, field, opts, helps, label in ((c1, "prio", RK.PRIO, RK.PRIO_HELP, "Priority"),
+                                           (c2, "diff", RK.DIFF, RK.DIFF_HELP, "Difficulty")):
+        k = f"tag_{field}_{scope}_{t['id']}"
+        st.session_state[k] = t.get(field) if t.get(field) in opts else None
+        col.pills(label, list(opts), format_func=opts.get, key=k, on_change=_set_tag, args=(state, t, field, k),
+                  help=" · ".join(f"{opts[o]}: {helps[o]}" for o in opts))
+
+
 def mission_sorted(state: dict, m: list[dict], d: date | None = None) -> list[dict]:
-    """Today's mission in YOUR order (↕ Arrange) if you've set one; otherwise booked blocks by time, then the rest."""
+    """Today's mission in the order you picked (✨ Start here by default). ✋ My order = your ↕ Arrange order;
+    booked blocks by time, then the rest. Finished items stay on top either way."""
+    if sort_mode(state) != "mine":
+        fin = [t for t in m if t["status"] != "open"]
+        return fin + RK.rank([t for t in m if t["status"] == "open"], sort_mode(state), now())
     order = (daily.peek_day(state, d or now().date()).get("order") or [])
     pos = {tid: i for i, tid in enumerate(order)}
 
@@ -4275,6 +4344,7 @@ def _mv(state: dict, tid: str, step: int) -> None:
     j = max(0, min(len(ids) - 1, i + step))
     ids[i], ids[j] = ids[j], ids[i]
     daily.day(state, now().date())["order"] = ids
+    state["settings"]["task_sort"] = "mine"  # arranging by hand = you want your own order
     save_state(state)
 
 
@@ -4354,6 +4424,7 @@ def render_arrange(state: dict, stt: dict) -> None:
                                           for t in m]}], key=f"arr_sort_{now().date()}", numbered=True)
     if got and got.get("m") and got["m"] != [t["id"] for t in m]:
         daily.day(state, now().date())["order"] = got["m"]
+        state["settings"]["task_sort"] = "mine"  # dragging = you want your own order
         save_state(state)
         st.rerun()
     with fold("start_times", "⏰ Start times (optional)", any(t.get("start_set") for t in m)) as _fo:
@@ -4390,6 +4461,8 @@ def render_up_next(state: dict) -> None:
                   args=("🏁 Today", "mission"))
         return
     tm = state.get("timer")
+    if tm and not os.getenv("DOD_ALL_TABS"):
+        return  # the running clock is pinned to the top of the page instead
     if tm:
         t = next((x for x in state["tasks"] if x["id"] == tm.get("task_id")), None)
         st.markdown(f"<div class='dod-next run'><div class='k'>⏱️ In the zone</div>"
@@ -5661,26 +5734,28 @@ def render_timer_float(state: dict) -> None:
                 _embed(f"<script>{_timer_hook_js('null')}</script>", height=1)
         return
     st.session_state["_had_timer"] = True
-    if st.session_state.get("nav", "🏁 Today") == "🏁 Today":
-        return
     sj = _timer_js_state(state, tm)
     with st.container(key="float_timer"):
         c1, c2 = st.columns([3, 1.1], vertical_alignment="center")
         with c1:
             _embed(f"""<style>body{{margin:0;font-family:system-ui,-apple-system,sans-serif;color:#ece8df;overflow:hidden}}
-.r{{display:flex;align-items:center;gap:8px;height:52px}}#t{{font:700 22px/1 system-ui,sans-serif;font-variant-numeric:tabular-nums}}
+.r{{display:flex;align-items:center;gap:10px;height:40px}}#t{{font:800 21px/1 system-ui,sans-serif;font-variant-numeric:tabular-nums}}
+#bar{{position:absolute;left:0;right:0;bottom:0;height:3px;background:#2a2f3a;border-radius:2px;overflow:hidden}}
+#bar i{{display:block;height:100%;width:0;background:#f5c518;transition:width .5s linear}}
 .m{{min-width:0;flex:1}}#n{{font-size:12px;color:#ece8df;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
 #p{{font-size:11px;color:#8b909c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
 button{{background:#262b36;border:1px solid #3a4050;color:#ece8df;border-radius:8px;font-size:15px;width:34px;height:34px;cursor:pointer;flex:none}}</style>
 <div class="r"><div id="t">--:--</div><div class="m"><div id="n"></div><div id="p"></div></div>
-<button title="Pop out into its own window" onclick="{_popout_click_js()}">⧉</button></div>
+<button title="Pop out into its own window" onclick="{_popout_click_js()}">⧉</button></div><div id="bar"><i id="bi"></i></div>
 <script>{TIMER_CORE_JS}
 var S={sj};document.getElementById('n').textContent=S.title;{_timer_hook_js(sj)}
 S.OFF=parent.__dodTimer?parent.__dodTimer.OFF:0;
 function f(){{var o=dodTick(S,Date.now());var t=document.getElementById('t');t.textContent=o.time;t.style.color=o.color;
-document.getElementById('p').textContent=o.line;}}f();setInterval(f,500);</script>""", height=52)
-        c2.button("Open", key="float_open", use_container_width=True, on_click=_go_tab, args=("🏁 Today",),
-                  help="Back to the timer on Today")
+document.getElementById('p').textContent=o.line;var b=document.getElementById('bi');
+b.style.width=Math.round(Math.max(0,Math.min(1,o.frac||0))*100)+'%';b.style.background=o.color||'#f5c518';}}
+f();setInterval(f,500);</script>""", height=44)
+        c2.button("Timer", key="float_open", use_container_width=True, on_click=_go_tab, args=("🏁 Today", "timer"),
+                  help="Jump to the full timer: pause, extend, pit, stop")
 
 
 def _timer_ring(state: dict, tm: dict, big: bool = False) -> None:
@@ -6940,6 +7015,9 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 .dod-quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(--y);font-style:italic;
   color:#d6d8dd;font-size:.92rem;background:rgba(255,255,255,.03);border-radius:0 8px 8px 0}
 .dod-quote span{display:block;font-style:normal;color:#8b909c;font-size:.8rem;margin-top:4px}
+.dod-start{margin:.2rem 0 .55rem;padding:9px 12px;border-radius:12px;border:1px solid rgba(245,197,24,.45);
+  background:linear-gradient(90deg,rgba(245,197,24,.12),rgba(245,197,24,.02));font-size:.95rem}
+.dod-start b{color:var(--y)}.dod-start span{display:block;color:#b8bcc6;font-size:.84rem;margin-top:2px}
 .dod-quote.top{margin:-.2rem 0 .9rem;padding:6px 12px;font-size:.9rem;background:none}
 .dod-quote.top span{display:block;margin-top:2px}
 .dod-banter{margin:4px 0 10px;padding:9px 12px;border-radius:10px;background:rgba(255,255,255,.04);font-size:.9rem;
@@ -6966,12 +7044,17 @@ body.dod-focus .st-key-tg_live{position:fixed!important;top:0!important;left:0!i
 body.dod-focus .st-key-tg_live > div{max-width:min(1400px,100%);width:100%;margin:auto!important}
 body.dod-focus{overflow:hidden}
 body.dod-focus [data-testid="stTabPanel"],body.dod-focus [data-testid="stMain"],body.dod-focus .stMain{transform:none!important;contain:none!important;animation:none!important}
-.st-key-float_timer{position:fixed!important;right:16px;bottom:16px;z-index:999990;width:340px!important;
-  background:var(--panel,#1b1f27);border:1px solid var(--line,#2c313c);border-radius:14px;padding:6px 10px;
-  box-shadow:0 10px 30px rgba(0,0,0,.45)}
+/* ⏱️ a running timer lives in a bar pinned to the top of every tab */
+.st-key-float_timer{position:fixed!important;top:8px;left:12px;right:60px;z-index:999995;width:auto!important;
+  max-width:760px;margin:0 auto;background:rgba(20,23,30,.94);backdrop-filter:blur(8px);
+  border:1px solid rgba(245,197,24,.45);border-radius:14px;padding:4px 8px 4px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);
+  bottom:auto!important;height:auto!important;max-height:64px;overflow:hidden;flex:none!important}
+body:has(.st-key-float_timer) [data-testid="stToolbarActions"]{display:none!important}
+body:has(.st-key-float_timer) [data-testid="stMainBlockContainer"]{padding-top:4.6rem!important}
+.st-key-float_timer [data-testid="stElementContainer"]{margin:0!important}
 .st-key-float_timer [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;flex-direction:row!important;gap:.5rem}
 .st-key-float_timer [data-testid="stColumn"]{min-width:0!important}
-.st-key-float_timer [data-testid="stColumn"]:last-child{flex:0 0 74px!important;width:74px!important}
+.st-key-float_timer [data-testid="stColumn"]:last-child{flex:0 0 76px!important;width:76px!important}
 .st-key-float_timer iframe{display:block}
 .st-key-timer_gone{position:absolute!important;width:1px;height:1px;overflow:hidden;opacity:0}
 @media (max-width:640px){.st-key-float_timer{left:10px;right:10px;bottom:10px;width:auto!important}}
@@ -7624,7 +7707,13 @@ with tab_tasks:
         if _open(_fo):  # collapsed = not built (faster page, smaller download)
             if not open_tasks:
                 st.caption("Nothing open. Add one below.")
-            for t in open_tasks:
+            else:
+                render_sort_pick(state, "sort_tasks")
+            _ord = (open_tasks if sort_mode(state) == "mine" else RK.rank(open_tasks, sort_mode(state), now()))
+            if _ord and sort_mode(state) == "start":
+                st.markdown(f"<div class='dod-start'>👉 <b>Start here:</b> {html.escape(_ord[0]['title'])}"
+                            f"<span>{html.escape(RK.why_first(_ord[0], now()))}</span></div>", unsafe_allow_html=True)
+            for t in _ord:
                 render_task_row(state, t, "tt_")
     redeemable = [t for t in state["tasks"] if t["status"] == "failed" and not t.get("abandoned")
                   and now() - parse_dt(t["failed_at"]) < timedelta(hours=REDEEM_WINDOW_H)]
