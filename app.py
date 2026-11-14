@@ -3766,7 +3766,21 @@ def crew_ctx(state: dict) -> dict:
     cname = lambda k: (CM.get(state, k.split("|")[0]) or {}).get("name", "it")  # noqa: E731
     today_r = [r for r in state.get("races", []) if r["ts"][:10] == d.isoformat()]
     last_r = today_r[0] if today_r else None
-    return {"name": state["settings"].get("player_name", "Driver"), "qualified": stt["qualified"],
+    ev, slot = None, n_.hour // 3
+    tm = state.get("timer")
+    if tm:
+        el = PM.effective_elapsed(tm, n_.timestamp())
+        ph, ph_left = PM.phase(el, tm.get("work"), tm.get("brk"), tm.get("planned") or 25)
+        left = max(0.0, (tm.get("planned") or 25) - PM.work_done(el, tm.get("work"), tm.get("brk")))
+        ev = ("paused" if tm.get("paused_at") else "t_break" if ph == "break" else "t_end" if left <= 5
+              else "t_start" if el < 5 else "t_mid")
+        slot = int(el // 4)  # a new line every few minutes while the clock runs
+    elif stt.get("bailout"):
+        ev = "bailout"
+    elif stt.get("rest"):
+        ev = "rest"
+    return {"event": ev, "slot": slot,
+            "name": state["settings"].get("player_name", "Driver"), "qualified": stt["qualified"],
             "focus": int(focus_today(state)), "done": len(daily.finished_on(state, d)),
             "streak": int(state.get("day_streak", 0)), "flaked": bool(fl), "flaked_what": cname(fl[0]) if fl else "",
             "attended": cname(ok_[0]) if ok_ else "", "won": bool(last_r and last_r["pos"] == 1),
@@ -3839,7 +3853,7 @@ def crew_strip_html(state: dict) -> str:
         ctx = crew_ctx(state)
         mood = CR.mood(ctx)
         n_ = now()
-        who = hired[(n_.hour // 2 + n_.timetuple().tm_yday) % len(hired)]
+        who = hired[(ctx.get("slot", 0) + n_.hour // 2 + n_.timetuple().tm_yday) % len(hired)]
         said = CR.line(who, ctx, n_.date().isoformat())
     except Exception:  # noqa: BLE001 — the header must never break the page
         return ""

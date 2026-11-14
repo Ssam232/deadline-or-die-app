@@ -328,6 +328,128 @@ BANTER = [
 ]
 
 
+# Moments: what each of them says when something specific is going on. ctx["event"] picks the set:
+#   bailout (you bailed today) · rest (rest / pit stop day) · t_start (timer just started) · t_mid (mid-stint)
+#   t_end (last 5 minutes) · t_break (on a break) · paused (timer paused)
+EVENTS = {
+    "chief": {
+        "bailout": ["You called it. That's allowed. Rest properly and we go again tomorrow.",
+                    "Bailing isn't quitting. Quitting is not coming back. See you tomorrow."],
+        "rest": ["Rest day. Even the car gets a day off the track.", "No racing today. Recharge. That's an order."],
+        "t_start": ["Clock's running. Phone face-down. Let's work.", "Lights out. Nothing else exists for a while."],
+        "t_mid": ["Steady. You're right where you should be.", "Middle of the stint. This is where it's won."],
+        "t_end": ["Last few minutes. Bring it home clean.", "Final lap. Don't lift now."],
+        "t_break": ["Box, box. Stand up, stretch, back on time.", "Break means break. Away from the screen."],
+        "paused": ["Clock's stopped. Every minute paused is a minute owed.", "Paused. Sort it and get back out there."],
+    },
+    "tires": {
+        "bailout": ["Tyres need cooling sometimes. Today's a cool-down lap.", "Off day. The rubber will still be here."],
+        "rest": ["Tyre blankets on. Rest day.", "No laps today. Let everything cool down properly."],
+        "t_start": ["Cold tyres. First few minutes feel slow. Push through.", "Out lap. Build the heat."],
+        "t_mid": ["Tyres are in the window now. Feel that grip?", "Perfect temperature. Keep it here."],
+        "t_end": ["Tyres are going off, but you're nearly done. Hold on.", "Last minutes. Squeeze what's left."],
+        "t_break": ["Pit stop. Fresh rubber, fresh head.", "Quick break. Don't let the tyres go cold."],
+        "paused": ["Tyres are cooling while we sit here...", "Every second paused, they lose heat. Just saying."],
+    },
+    "engineer": {
+        "bailout": ["Bailout logged. Not as a failure. As data. Tomorrow's line starts fresh.",
+                    "One rest point in the graph. It's fine. Patterns are what matter."],
+        "rest": ["Rest day logged. Recovery shows up in next week's numbers.", "No sessions planned. Good: rest is a variable too."],
+        "t_start": ["Recording. Every minute from here goes in the notebook.", "Session started. I've opened a new page."],
+        "t_mid": ["Data looks good. Consistent pace.", "Halfway point. Numbers are clean."],
+        "t_end": ["Almost a full session. I'll log it in pen.", "Few minutes left. Finish clean, the data loves a clean finish."],
+        "t_break": ["Break logged. Recovery is part of the dataset.", "Rest interval. Hydrate, I'm graphing it."],
+        "paused": ["Paused. I've stopped the graph. It looks lonely.", "The line's flat while you're paused. Just noting it."],
+    },
+    "strategist": {
+        "bailout": ["Retreat isn't defeat. What's tomorrow's first move?", "Today's a sacrifice. Make it worth something tomorrow."],
+        "rest": ["Rest is a move too. A good one.", "No pieces moving today. Think about next week instead."],
+        "t_start": ["Opening move made. Now just play.", "The hardest move was starting. Done."],
+        "t_mid": ["Middlegame. Stay patient.", "You're ahead of where you'd be if you hadn't started. Obviously."],
+        "t_end": ["Endgame. Don't blunder now.", "Few minutes left. Close it out."],
+        "t_break": ["Break. What's the next move after this?", "Use the break to pick the next task. Then rest."],
+        "paused": ["Paused. Is this a plan, or a distraction?", "What's the reason for the pause? Honest answer."],
+    },
+    "medic": {
+        "bailout": ["Good call. Rest is treatment too. Sleep early tonight.", "Bailing out to recover is smart, not weak. Hydrate."],
+        "rest": ["Rest day. Eat well, sleep well, move a little.", "Recovery day. Your brain consolidates while you rest."],
+        "t_start": ["Water nearby? Good. Off you go.", "Posture check: shoulders down. Now work."],
+        "t_mid": ["Blink. Unclench your jaw. Keep going.", "You're doing well. Remember to breathe."],
+        "t_end": ["Almost there. Finish, then stretch.", "Last stretch. Literally stretch after this."],
+        "t_break": ["Look out a window. Twenty seconds at something far away.", "Stand up. Walk around. Doctor's orders."],
+        "paused": ["Pausing's fine if you need it. Just come back.", "Are you okay? Take what you need, then return."],
+    },
+    "dj": {
+        "bailout": ["Tonight's set is lo-fi and chill. Tomorrow we turn it back up.", "Skipping a show doesn't end the tour."],
+        "rest": ["Off-day playlist: slow jams only.", "No live set today. Recharging the speakers."],
+        "t_start": ["And the session is LIVE!", "Drop the beat. Focus mode, no skips."],
+        "t_mid": ["We're in the groove now!", "This is the part of the track where it all comes together."],
+        "t_end": ["Final chorus! Bring it home!", "Last few bars. Big finish!"],
+        "t_break": ["Intermission! Grab a drink, back for the second half.", "Halftime show is you stretching. Go."],
+        "paused": ["Dead air! The listeners are confused!", "Record scratch. Why'd we stop?"],
+    },
+    "chef": {
+        "bailout": ["Bailout day. Make yourself something warm and go to bed early.", "Some days you just need soup. Today's one."],
+        "rest": ["Rest day. Cook something slow. Enjoy it.", "Day off. Eat with people you like."],
+        "t_start": ["Water and a snack by your side? Good, now go.", "Mise en place done. Start cooking."],
+        "t_mid": ["Simmering nicely. Don't touch the heat.", "It's coming together. Keep stirring."],
+        "t_end": ["Almost ready to plate. Don't rush the end.", "Nearly done. I'll put the kettle on."],
+        "t_break": ["Break! Eat something. A real something.", "Snack time. Fruit counts. Chips also count, I'm not judging."],
+        "paused": ["Pot's off the heat. Don't let it go cold.", "Pausing the recipe halfway never ends well. Back to it."],
+    },
+    "artist": {
+        "bailout": ["Some days the sketchbook stays closed. That's okay. Doodle something for fun.",
+                    "Bailout day. Draw anything, just for you, no deadline."],
+        "rest": ["Rest day. Fill up on inspiration: go look at something beautiful.", "Off day. Doodle, don't design."],
+        "t_start": ["First lines down. Don't erase, keep going.", "Blank page conquered. Keep drawing."],
+        "t_mid": ["Shapes are forming. Trust the process.", "Messy middle. Every good piece has one."],
+        "t_end": ["Inking time. Finish the lines.", "Almost done. Sign it."],
+        "t_break": ["Break! Step back and look at it with fresh eyes.", "Stretch your hands. Artists get cramps too."],
+        "paused": ["Pencil down? Don't leave the sketch half-finished.", "Paused. The idea's still warm, come back soon."],
+    },
+    "spotter": {
+        "bailout": ["Not every day's a summit day. Weather's bad, we come back.", "Turning back is a skill. See you at base camp."],
+        "rest": ["Rest day at base camp. The mountain will wait.", "No climbing today. Watch the birds."],
+        "t_start": ["On belay. Climb when ready.", "First hold. Good. Next one."],
+        "t_mid": ["Good rhythm. Hold, move, hold.", "Halfway up. Don't look down, look at the next hold."],
+        "t_end": ["Summit's right there. Last few moves.", "Top-out in a few minutes. Steady hands."],
+        "t_break": ["Ledge rest. Shake out your arms.", "Good spot to rest. Enjoy the view a second."],
+        "paused": ["Hanging on the rope. That's fine, just don't stay too long.", "Paused on the wall. Breathe, then climb."],
+    },
+}
+
+# Now and then, instead of advice: just them being them.
+QUIPS = {
+    "chief": ["I once timed my own wedding. Ran four minutes over. Still annoyed.",
+              "Rook asked me if I ever take a day off. I said I'll consider it in 2037.",
+              "My stopwatch has a name. No, I'm not telling you."],
+    "tires": ["I can hear a tyre's pressure by flicking it. Party trick, wasted on parties.",
+              "Kai keeps sampling the tyre squeal for his beats. I want royalties.",
+              "Hot take: the best smell in the world is fresh rubber. I will not be taking questions."],
+    "engineer": ["I made a graph of how many graphs I make. It's trending up.",
+                 "Yuki drew a racecar on my data again. It's honestly a good drawing.",
+                 "My cat's name is Standard Deviation. Dev for short."],
+    "strategist": ["I lost to a nine-year-old at chess once. On purpose. Mostly.",
+                   "Have you ever noticed I never answer a question directly? Interesting, isn't it?",
+                   "Mags thinks I'm overthinking. I've thought about that a lot."],
+    "medic": ["Kai says 'water is just boring juice'. I'm drafting a formal response.",
+              "I've run 14 marathons and still trip on the paddock cables. Every week.",
+              "Ines keeps feeding me pastries. As your medic: excellent choice."],
+    "dj": ["I made a remix of the pit lane radio. It's a banger. Mags banned it.",
+           "My playlist titled 'Deadline Panic' has 300 songs. Make of that what you will.",
+           "I narrated Dot opening a spreadsheet once. Best commentary of my career."],
+    "chef": ["I put Mateo's bird seeds in a granola by accident. He said it was the best one yet.",
+             "If you're hungry, you're not lazy. You're hungry. Eat.",
+             "My grandmother would say you look thin. You don't. She says that to everyone."],
+    "artist": ["I designed a livery with 40 colours once. The team said 'maybe two'. We compromised on 39.",
+               "I've drawn Mags twelve times. She hasn't noticed. Or she's pretending.",
+               "Your car is my muse. Don't let it go to its head."],
+    "spotter": ["Saw a hawk at turn 3 today. Faster on the corners than you, no offence.",
+                "I've named every crow at Bow River. Mavis is my favourite. She's a menace.",
+                "Climbing tip: if you're scared, look at your hands. Works for emails too."],
+}
+
+
 def bond(days: int) -> tuple[int, str, int | None]:
     """(level index, name, days to the next level or None)."""
     lvl = max(i for i, (d, _) in enumerate(BOND_LEVELS) if days >= d)
@@ -345,7 +467,13 @@ def _pick(variants: list[str], salt: str) -> str:
 
 
 def line(key: str, ctx: dict, salt: str = "") -> str:
-    """What they say right now. Rotates every 3 hours so it doesn't go stale."""
+    """What they say right now: the moment first (bailout, rest, a running timer), otherwise now and then a joke,
+    otherwise their read on your day. Rotates every 3 hours (every few minutes while a timer runs)."""
+    ev = ctx.get("event")
+    if ev and ev in EVENTS.get(key, {}):
+        return _pick(EVENTS[key][ev], f"{key}{salt}{ev}{ctx.get('slot', 0)}").format(**ctx)
+    if int(hashlib.sha1(f"q{key}{salt}{ctx.get('hour', 0) // 3}".encode()).hexdigest(), 16) % 4 == 0:
+        return _pick(QUIPS[key], f"{key}{salt}{ctx.get('hour', 0)}")
     for cond, variants in LINES[key]:
         try:
             if cond(ctx):
