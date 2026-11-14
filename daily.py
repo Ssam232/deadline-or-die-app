@@ -489,6 +489,47 @@ def send_back(save: dict, t: dict, now: datetime, reason: str, bank) -> tuple[bo
     return True, f"↩️ **{t['title']}** is off today's mission" + (f" (−{cost})." if cost else " (free).")
 
 
+# ⏳ Extensions cost a share of your bank, not of the task: 10% for the first on a task, 20% for the second… so it
+# stings whatever you're sitting on. The old price (30% of the task's penalty) is the floor. An extended task
+# leaves today's mission (it isn't today's anymore), as long as the mission keeps its qualifying hour.
+EXT_BANK_PCT = 0.10
+
+
+def extension_cost(save: dict, t: dict) -> tuple[int, int]:
+    """(coins, percent of your bank)."""
+    pct = round(EXT_BANK_PCT * 100 * (int(t.get("extensions") or 0) + 1))
+    floor = -(-int(t.get("penalty") or 20) * 3 // 10)
+    return max(floor, round(max(0, save.get("coins", 0)) * pct / 100)), pct
+
+
+def extension_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
+    d = now.date()
+    if t.get("mission_day") == d.isoformat() and peek_day(save, d).get("qualified"):
+        need = min_mission_minutes(save)
+        if mission_minutes(save, d, without=t["id"]) < need:
+            return False, f"It's holding up today's mission: without it you'd drop under {need} min. Add something first."
+    return True, ""
+
+
+def extend(save: dict, t: dict, now: datetime, hours: int, bank) -> tuple[bool, str]:
+    ok, why = extension_check(save, t, now)
+    if not ok:
+        return False, why
+    cost, pct = extension_cost(save, t)
+    if save.get("coins", 0) < cost:
+        return False, "Can't afford it. Guess you're doing it on time."
+    bank(save, -cost, f"⏳ Extension ({pct}% of bank): {t['title']}")
+    dl = datetime.fromisoformat(t["deadline"])
+    dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
+    t["deadline"] = (dl + timedelta(hours=hours)).isoformat()
+    t["extensions"] = int(t.get("extensions") or 0) + 1
+    off = t.get("mission_day") == now.date().isoformat()
+    if off:
+        t.pop("mission_day", None)
+    return True, (f"⏳ Extended to {datetime.fromisoformat(t['deadline']):%a %b %d, %I:%M %p} for {cost} 🪙 ({pct}% of your "
+                  "bank). Reward cut 15%." + (" It's off today's mission." if off else ""))
+
+
 def pit_stop(save: dict, now: datetime) -> bool:
     today = now.date()
     if is_rest(save, today) or pit_stops_used(save, today) >= cfg(save)["pit_stops_per_week"]:

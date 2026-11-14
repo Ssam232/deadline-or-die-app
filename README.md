@@ -233,7 +233,7 @@ Once you own all 14 cars and every part is at L7, Garage → ⭐ Prestige lets y
 | Rust | Nothing finished for 2+ days → car loses 4%/day |
 | Rival heat | Each miss makes every rival +3 faster. Each finish takes 1 back. |
 | Redemption | Finish a missed task within 72h for half the penalty back |
-| Extensions | Cost 30% of the penalty and cut the reward 15% (max 2). The only way a deadline moves. |
+| Extensions | Cost a share of your **bank**: 10% for the first on a task, 20% for the second (never less than 30% of the task's penalty), and cut the reward 15% (max 2). An extended task leaves today's mission, unless that would drop the mission under the qualifying hour. The only way a deadline moves. |
 | Abandon | = taking the penalty (free only for 10 min after creating, for typos) |
 
 Tune the numbers at the top of `app.py` and `nag.py`.

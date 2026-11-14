@@ -3560,18 +3560,24 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
 
         st.divider()
         ca, cb = st.columns(2)
-        ext_cost = math.ceil(t["penalty"] * 0.3)
         if t["extensions"] < s["max_extensions"]:
-            if ca.button(f"⏳ +{s['extension_hours']}h ({ext_cost} 🪙)", key=f"{scope}ext_{t['id']}"):
-                if state["coins"] < ext_cost:
-                    st.error("Can't afford it. Guess you're doing it on time.")
-                else:
-                    bank(state, -ext_cost, f"⏳ Extension: {t['title']}")
-                    t["deadline"] = (dl + timedelta(hours=s["extension_hours"])).isoformat()
-                    t["extensions"] += 1
-                    save_state(state)
-                    flash(f"Extended to {parse_dt(t['deadline']):%a %b %d, %I:%M %p}. Reward cut 15%.", "warning")
-                    st.rerun()
+            ext_cost, ext_pct = daily.extension_cost(state, t)
+            with ca.popover(f"⏳ +{s['extension_hours']}h · {ext_cost} 🪙", help="Buy more time (it stings)"):
+                st.markdown(f"**{ext_cost} 🪙**: {ext_pct}% of your bank"
+                            + (" (the next one on this task costs " + f"{ext_pct + 10}%)" if t["extensions"] + 1 < s["max_extensions"] else "")
+                            + f". The reward drops 15%"
+                            + (", and it leaves today's mission." if t.get("mission_day") == now().date().isoformat() else "."))
+                ok_, why_ = daily.extension_check(state, t, now())
+                if not ok_:
+                    st.caption(why_)
+                elif st.button(f"⏳ Pay {ext_cost} 🪙 and extend", key=f"{scope}ext_{t['id']}", use_container_width=True):
+                    done_, msg_ = daily.extend(state, t, now(), s["extension_hours"], bank)
+                    if done_:
+                        save_state(state)
+                        flash(msg_, "warning")
+                        st.rerun()
+                    else:
+                        st.error(msg_)
         else:
             ca.caption("No extensions left.")
         young = now() - parse_dt(t["created"]) < timedelta(minutes=FREE_DELETE_MIN)
