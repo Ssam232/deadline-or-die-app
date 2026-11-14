@@ -3677,7 +3677,7 @@ def render_today(state: dict) -> None:
                     with c1.expander((_ch + " " if _ch else "") + _lbl + f" · +{t['reward']}"
                                      + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
                                      expanded=proof_open(f"today_open_{t['id']}")):
-                        render_tags(state, t, "m")
+                        render_tags(state, t, "m", extra=lambda t_=t: render_send_back(state, t_, f"m_{t_['id']}"))
                         render_paper_pair(state, t, "today_")
                         render_proof_form(state, t, "open", scope="today_")
                     running = bool(tm) and tm.get("task_id") == t["id"]
@@ -3687,9 +3687,6 @@ def render_today(state: dict) -> None:
                         _start_timer(state, t, mins)
                         flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
                         st.rerun()
-                    if not running:
-                        with c2:
-                            render_send_back(state, t, f"m_{t['id']}")
                 else:
                     st.markdown(f"<div class='dod-mrow bad'><span class='dod-dot'></span><div>{html.escape(t['title'])}"
                                 f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
@@ -4301,8 +4298,9 @@ def _set_tag(state: dict, t: dict, field: str, key: str) -> None:
     save_state(state)
 
 
-def render_tags(state: dict, t: dict, scope: str) -> None:
-    """🔥📌🌱 priority and 🪶🧱🏔️ difficulty, one tap each (tap again to clear)."""
+def render_tags(state: dict, t: dict, scope: str, extra=None) -> None:
+    """🔥📌🌱 priority and 🪶🧱🏔️ difficulty, one tap each (tap again to clear). `extra` draws in a third column
+    (the mission row puts ↩️ Send back there)."""
     c1, c2 = st.columns(2)
     for col, field, opts, helps, label in ((c1, "prio", RK.PRIO, RK.PRIO_HELP, "Priority"),
                                            (c2, "diff", RK.DIFF, RK.DIFF_HELP, "Difficulty")):
@@ -4310,6 +4308,9 @@ def render_tags(state: dict, t: dict, scope: str) -> None:
         st.session_state[k] = t.get(field) if t.get(field) in opts else None
         col.pills(label, list(opts), format_func=opts.get, key=k, on_change=_set_tag, args=(state, t, field, k),
                   help=" · ".join(f"{opts[o]}: {helps[o]}" for o in opts))
+    if extra:
+        with st.container(key=f"tagx_{scope}_{t['id']}"):
+            extra()
 
 
 def mission_sorted(state: dict, m: list[dict], d: date | None = None) -> list[dict]:
@@ -4552,7 +4553,7 @@ def render_send_back(state: dict, t: dict, key: str) -> None:
     """↩️ The send-back control on a mission row: shows the rule that applies right now."""
     ok, why, cost = daily.send_back_check(state, t, now())
     dest = "the to-do list" if _returns_to_todo(t) else "your task list (its own deadline stays)"
-    with st.popover("↩️", help="Send it back off today's mission", use_container_width=True):
+    with st.popover("↩️ Send back", help="Take it off today's mission"):
         st.markdown(f"**Send back:** {html.escape(t['title'])}")
         st.caption(f"Goes to {dest}. {why}")
         if ok:
@@ -7027,9 +7028,12 @@ details.dod-rc[open]>summary .dod-rc-t{display:none}
 .dod-mrow .m{color:var(--muted);font-size:.85rem;margin-left:6px}
 .dod-mrow.ok .dod-dot{background:var(--t)} .dod-mrow.ok s{color:var(--muted)}
 .dod-mrow.bad .dod-dot{background:var(--r)} .dod-mrow.bad{border-color:#4a1f22}
-[class*="st-key-mrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem}
-[class*="st-key-mrow_"] [data-testid="stColumn"]{min-width:0!important}
-[class*="st-key-mrow_"] [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
+[class*="st-key-mrow_"] > [data-testid="stHorizontalBlock"],
+[class*="st-key-mrow_"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.5rem}
+[class*="st-key-mrow_"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+[class*="st-key-mrow_"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{min-width:0!important}
+[class*="st-key-mrow_"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child,
+[class*="st-key-mrow_"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child{flex:0 0 3.2rem!important;width:3.2rem!important}
 [class*="st-key-qrow_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
 [class*="st-key-bplays_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.4rem}
 [class*="st-key-goalcard_"] [data-testid="stHorizontalBlock"]:has([class*="st-key-gfold_"]){flex-wrap:nowrap!important;flex-direction:row!important}
