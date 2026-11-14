@@ -1,0 +1,67 @@
+{
+ "added": "2026-11-13",
+ "papers": [
+  {
+   "doi": "10.1002/jor.70299",
+   "title": "Variation in Intrinsic Aerobic Capacity Reveals Distinct Differences in the Maintenance of Rat Knee Joint Integrity",
+   "tags": [
+    "hcr-lcr"
+   ],
+   "species": "rat",
+   "sex": "male",
+   "type": "study",
+   "level": "specialized",
+   "scholarships": [
+    "John William Cooke"
+   ]
+  },
+  {
+   "doi": "10.1002/jor.23103",
+   "title": "Response to diet-induced obesity produces time-dependent induction and progression of metabolic osteoarthritis in rat knees",
+   "tags": [],
+   "species": "rat",
+   "type": "study",
+   "level": "specialized",
+   "scholarships": [
+    "TENET Medical Engineering Graduate Scholarship"
+   ]
+  },
+  {
+   "doi": "10.1302/2046-3758.74.BJR-2017-0201.R2",
+   "title": "High-fat/high-sucrose diet-induced obesity results in joint-specific development of osteoarthritis-like degeneration in a rat model",
+   "tags": [],
+   "species": "rat",
+   "type": "study",
+   "level": "specialized",
+   "scholarships": [
+    "TENET Medical Engineering Graduate Scholarship"
+   ]
+  },
+  {
+   "doi": "10.1177/19476035231193090",
+   "title": "Aerobic and Resistance Training Attenuate Differently Knee Joint Damage Caused by a High-Fat–High-Sucrose Diet in a Rat Model",
+   "tags": [],
+   "species": "rat",
+   "type": "study",
+   "level": "specialized",
+   "scholarships": [
+    "TENET Medical Engineering Graduate Scholarship",
+    "John William Cooke"
+   ]
+  },
+  {
+   "doi": "10.1152/jappl.1996.81.3.1347",
+   "title": "Effects of aging and obesity on respiratory muscle phenotype in Zucker rats",
+   "tags": [
+    "remodeling"
+   ],
+   "species": "rat",
+   "type": "study",
+   "level": "specialized",
+   "before": "Diaphragm single-fiber weakness and loss of myosin in congestive heart failure rats",
+   "scholarships": [
+    "John William Cooke"
+   ]
+  }
+ ]
+}

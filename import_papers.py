@@ -229,6 +229,7 @@ def fact_tags(paper: dict, date: str | None) -> list[dict]:
     """The labelled tags for a paper: its subjects, year, and any species, sex and type that were stated."""
     names = [f"question:{QUESTIONS[t]}" for t in paper.get("tags", []) if t in QUESTIONS]
     names += [f"subject:{SUBJECTS.get(t, t)}" for t in paper.get("tags", [])]
+    names += [f"scholarship:{x.strip()}" for x in paper.get("scholarships", []) if x.strip()]
     year = (date or "")[:4]
     if year.isdigit():
         names.append(f"year:{year}")

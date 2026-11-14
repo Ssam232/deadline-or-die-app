@@ -595,7 +595,7 @@ class Tests(unittest.TestCase):
         Z.API = self.base
         p = Z.reading_list("1", "k")[0]
         self.assertEqual(p["facets"], {"question": ["Q3 How does diet change muscle?"], "subject": ["Diet and muscle"],
-                                       "species": ["rat"], "sex": [], "type": ["study"], "source": []})
+                                       "species": ["rat"], "sex": [], "type": ["study"], "source": [], "scholarship": []})
         self.assertEqual(p["year"], "2020")
         self.assertFalse(p["needs_check"])
 
@@ -701,6 +701,10 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.m.run(), 0)
         self.assertEqual(json.loads((self.root / "search-topics.json").read_text()), ["Another", "Diaphragm anatomy and remodelling"])
         self.assertEqual(sum(c["data"]["name"] == "Diaphragm anatomy and remodelling" for c in fake.collections), 1)
+
+    def test_scholarship_tags(self):
+        names = [x["tag"] for x in self.m.fact_tags({"tags": [], "scholarships": ["TENET Medical Engineering Graduate Scholarship"]}, "2018-04-01")]
+        self.assertEqual(names, ["scholarship:TENET Medical Engineering Graduate Scholarship", "year:2018"])
 
     def test_every_question_code_has_a_short_numbered_tag(self):
         self.assertEqual(set(self.m.QUESTIONS), set(self.m.SUBJECTS))
