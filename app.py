@@ -6476,6 +6476,11 @@ def render_reading_list(state: dict) -> None:
              "All": ("unread", "reading", "read", "dropped")}
     view = st.segmented_control("Show", list(views), default="To read", key="reading_view",
                                 label_visibility="collapsed") or "To read"
+    ss_ = st.session_state  # folded away = the section isn't built, so fall back to whatever was last picked
+    sort = ss_.get("reading_sort") or list(READING_SORTS)[0]
+    search = (ss_.get("reading_search") or "").strip().casefold()
+    picked = {f: ss_.get(f"reading_f_{f}") or [] for f in READING_FILTERS}
+    picked_years = ss_.get("reading_f_year") or []
     with fold("reading_filter", "🔎 Sort and filter", False) as _fo:
         if _open(_fo):  # collapsed = not built (faster page, smaller download)
             c1, c2 = st.columns(2)
