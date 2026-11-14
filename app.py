@@ -1881,8 +1881,13 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         st.markdown(f"<div class='dod-row' style='border:0;padding:2px 0 6px'><span class='dod-dot' "
                     f"style='background:{dot}'></span><div><b>⏱️ {fm:.0f} of {t.get('minutes') or 0} min on the "
                     f"focus timer</b> <span class='m'>{tail}</span></div></div>", unsafe_allow_html=True)
-        if f"note_{k}" not in st.session_state:
-            st.session_state[f"note_{k}"] = f"⏱️ {fm:.0f} min on the focus timer. "
+        auto_ = f"⏱️ {fm:.0f} min on the focus timer. "
+        cur_ = st.session_state.get(f"note_{k}")
+        if cur_ is None:
+            st.session_state[f"note_{k}"] = auto_
+        elif re.match(r"^⏱️ \d+ min on the focus timer\. ", cur_) and not cur_.startswith(auto_):
+            # more timer time since the form first showed: keep the number current (and whatever you typed after it)
+            st.session_state[f"note_{k}"] = re.sub(r"^⏱️ \d+ min on the focus timer\. ", auto_, cur_)
     touch = {"on_change": _proof_touch, "args": (k,)}
     note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.", **touch)
     # 📞 real-world tasks (a call, a booking, an errand): no screenshot, but a detail you could only know by doing it
@@ -5471,7 +5476,7 @@ def render_timer(state: dict, big: bool = False) -> None:
             work, brk = tm.get("work"), tm.get("brk")
             now_ts = now().timestamp()
             if tm.get("paused_at") and PM.paused_for(tm, now_ts) > PM.PAUSE_LIMIT_MIN:
-                mins = min(PM.credited(tm, PM.effective_elapsed(tm, now_ts)), tm["planned"] + 15 + tm.get("over_total", 0.0))
+                mins = session_minutes(tm, PM.effective_elapsed(tm, now_ts))
                 state.pop("timer", None)
                 if mins >= 1 and t:
                     _log_session(state, t, start, mins, tm)
@@ -5612,19 +5617,47 @@ def _timer_controls(state: dict) -> None:
             save_state(state)
             st.toast(f"Flow mode: +{FLOW_STEP} min. Ride it.", icon="🌊")
             st.rerun(scope="app")
+    ot_ = overtime(tm, eff)
+    if st.session_state.get("tm_over_ask") and ot_ > FINISH_GRACE:  # 🏁 long past the flag: were you still at it?
+        with st.container(border=True, key="tm_over"):
+            _all = tm["planned"] + min(ot_, OVERTIME_MAX)
+            st.markdown(f"🏁 **{ot_:.0f} min past the flag.** Were you still working the whole time?"
+                        + (f" (Overtime counts up to {OVERTIME_MAX} min.)" if ot_ > OVERTIME_MAX else ""))
+            o1, o2 = st.columns(2)
+            if o1.button(f"✅ Yes · log {_all:.0f} min", key="tm_over_yes", type="primary", use_container_width=True):
+                timer_stop_log(state, True)
+                st.rerun()
+            if o2.button(f"🤚 No · log {tm['planned'] + FINISH_GRACE} min", key="tm_over_no", use_container_width=True,
+                         help=f"Keeps the first {FINISH_GRACE} min past the flag, drops the rest"):
+                timer_stop_log(state, False)
+                st.rerun()
     c3, c4 = st.columns([3, 1])
     if c3.button("⏹️ Stop & log", type="secondary" if paused or gate_ else "primary", use_container_width=True, key="tm_stop"):
-        mins = min(PM.credited(tm, eff), tm["planned"] + 15 + tm.get("over_total", 0.0))
-        state.pop("timer", None)
-        if mins >= 1 and t:
-            _log_session(state, t, start, mins, tm)
-        else:
-            save_state(state)
+        if not timer_stop_log(state):
+            st.session_state["tm_over_ask"] = True
         st.rerun()
     if c4.button("✖", use_container_width=True, key="tm_cancel", help="Cancel without logging"):
         state.pop("timer", None)
+        st.session_state.pop("tm_over_ask", None)
         save_state(state)
         st.rerun()
+
+
+FINISH_GRACE = 15   # minutes past the chequered flag that count on their own (finishing a thought)
+OVERTIME_MAX = 60   # past that, they count only if you confirm you were still working, up to an hour over
+
+
+def overtime(tm: dict, eff: float) -> float:
+    """Work minutes past the session's planned finish (flow sessions have no finish line)."""
+    if tm.get("flow"):
+        return 0.0
+    return max(0.0, PM.credited(tm, eff) - tm["planned"] - tm.get("over_total", 0.0))
+
+
+def session_minutes(tm: dict, eff: float, confirmed: bool = False) -> float:
+    """What a session logs: up to FINISH_GRACE past the flag on its own, up to OVERTIME_MAX if you confirm."""
+    extra = OVERTIME_MAX if confirmed and not tm.get("flow") else FINISH_GRACE
+    return min(PM.credited(tm, eff), tm["planned"] + extra + tm.get("over_total", 0.0))
 
 
 def timer_keep_going(state: dict) -> None:
@@ -5646,19 +5679,24 @@ def timer_keep_going(state: dict) -> None:
     save_state(state)
 
 
-def timer_stop_log(state: dict) -> None:
-    """⏹️ Stop & log, wherever it's pressed."""
+def timer_stop_log(state: dict, confirmed: bool | None = None) -> bool:
+    """⏹️ Stop & log, wherever it's pressed. Long past the flag it needs your answer first (returns False then):
+    confirmed=True logs the overtime (up to an hour), False logs up to FINISH_GRACE past the flag."""
     tm = state.get("timer")
     if not tm:
-        return
+        return True
     t = next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)
     eff = PM.effective_elapsed(tm, now().timestamp())
-    mins = min(PM.credited(tm, eff), tm["planned"] + 15 + tm.get("over_total", 0.0))
+    if confirmed is None and overtime(tm, eff) > FINISH_GRACE:
+        return False
+    mins = session_minutes(tm, eff, bool(confirmed))
     state.pop("timer", None)
+    st.session_state.pop("tm_over_ask", None)
     if mins >= 1 and t:
         _log_session(state, t, parse_dt(tm["start"]), mins, tm)
     else:
         save_state(state)
+    return True
 
 
 def track_for(tm: dict) -> dict:
@@ -5940,7 +5978,9 @@ f();setInterval(f,500);
                     timer_keep_going(state)
                     st.rerun(scope="app")
                 if st.button("⏹️", key="bar_stop", help="Stop & log"):
-                    timer_stop_log(state)
+                    if not timer_stop_log(state):  # long past the flag: answer on the timer itself
+                        st.session_state["tm_over_ask"] = True
+                        _go_tab("🏁 Today", "timer")
                     st.rerun(scope="app")
 
 
@@ -6113,7 +6153,7 @@ function frame(){{
   else if(e>=PI*c+W&&(PI+1)*W<T){{gate='pitin';over=e-PI*c-W;}}}}
  const pit=(ph==='break'&&gate!=='pitin'||gate==='pitout')&&!PA;
  let lf=f;
- if(ph==='done'){{lf=1;put(ptd(0));}}  // chequered flag: parked on the line
+ if(ph==='done'){{const ov=Math.max(0,e-WALL),ll=ST?W:Math.max(T,5);lf=(ov%ll)/ll;put(ptd(lf*L));}}  // past the flag: still lapping
  else if(ST&&(pit||ph==='break'||gate==='pitin')){{lf=1;put(lq(0));}}  // in the box
  else if(ST){{const n=TICKS.length+1,k=Math.min(Math.floor(wd/W+1e-9),n-1),len=Math.min(W,T-k*W);
   lf=Math.min(1,Math.max(0,(wd-k*W)/len));const d=lf*L;
@@ -6133,7 +6173,10 @@ function frame(){{
   else if(gate==='pitout'){{t.textContent='+'+mmss(over*60000);t.style.fill='#3ddc84';trail.style.stroke=ACC;
     p.textContent='🟢 Pit out?';s.textContent='Break’s up. Pit out to start the next stint.';}}
   else if(ph==='done'){{t.textContent='+'+mmss((e-WALL)*60000);t.style.fill='#ff6a5c';trail.style.stroke=ACC;
-    p.textContent='🏁 Chequered flag';s.textContent='Session complete. Stop & log it.';}}
+    const ov=e-WALL;p.textContent=ov<.5?'🏁 Chequered flag':'🏁 Overtime';
+    s.textContent=ov<{FINISH_GRACE}?'Done! Extra time counts while you finish up. Stop & log when you are.'
+     :ov<{OVERTIME_MAX}?'Still going? When you stop you’ll confirm you were working, then it all counts.'
+     :'An hour over: overtime stops counting here. Stop & log.';}}
   else if(pit){{t.textContent=mmss(left);t.style.fill='#2ec4b6';trail.style.stroke=ACC;
     p.textContent='🔧 Pit stop';s.textContent='Tyres, water, stretch. No phone in the pit lane.';}}
   else if(FL){{t.textContent=mmss(e*60000);t.style.fill=e>=CHK?'#29e3ff':ACC;trail.style.stroke=ACC;
