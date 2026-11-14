@@ -139,12 +139,20 @@ RIVALS = [
 CARS = [  # one ladder in rough real-world performance order; Honda cars kept their levels and prices
     {"id": "civic_si", "name": "Honda Civic Si", "base": 40, "cost": 0, "level": 1, "body": "sedan",
      "blurb": "Where every Honda guy starts. Rev it out."},
+    {"id": "crx", "name": "Honda CR-X SiR", "base": 42, "cost": 150, "level": 1, "body": "crx",
+     "blurb": "Two seats, no weight, all fun. The first cheap thrill."},
     {"id": "tsx", "name": "Acura TSX", "base": 44, "cost": 250, "level": 2, "body": "tsx",
      "blurb": "The grown-up sport sedan. Quietly quick, and a K24 that loves revs."},
     {"id": "rsx", "name": "Acura RSX Type-S", "base": 47, "cost": 320, "level": 2, "body": "rsx",
      "blurb": "A light three-door with a K20 that sings past 8,000 rpm."},
+    {"id": "s660", "name": "Honda S660", "base": 46, "cost": 300, "level": 2, "body": "s660",
+     "blurb": "A mid-engine roadster small enough to park sideways. Grins per horsepower: off the chart."},
     {"id": "integra_r", "name": "Honda Integra Type R (DC2)", "base": 50, "cost": 400, "level": 2, "body": "coupe",
      "blurb": "Hand-ported legend. Earned, not bought."},
+    {"id": "prelude", "name": "Honda Prelude Type SH", "base": 55, "cost": 650, "level": 3, "body": "prelude",
+     "blurb": "A front-wheel-drive coupe that steers its own rear end through corners."},
+    {"id": "legend", "name": "Acura Legend Coupe", "base": 58, "cost": 800, "level": 3, "body": "legend",
+     "blurb": "The car that started Acura. A long-hood V6 grand tourer."},
     {"id": "s2000", "name": "Honda S2000", "base": 60, "cost": 900, "level": 3, "body": "roadster",
      "blurb": "9,000 rpm. Roof down, deadlines done."},
     {"id": "integra_s", "name": "Acura Integra Type S", "base": 66, "cost": 1400, "level": 4, "body": "integra_s",
@@ -159,10 +167,14 @@ CARS = [  # one ladder in rough real-world performance order; Honda cars kept th
      "blurb": "Three motors, one engine, zero excuses."},
     {"id": "nsx_s", "name": "Honda NSX Type S", "base": 100, "cost": 6000, "level": 7, "body": "super2",
      "blurb": "Final form of the road car."},
+    {"id": "ctr_tcr", "name": "Honda Civic Type R TCR", "base": 110, "cost": 8000, "level": 8, "body": "tcr",
+     "blurb": "The Type R, built for touring-car racing. Your first real race car."},
     {"id": "nsx_gt3", "name": "Honda NSX GT3 Evo", "base": 120, "cost": 10000, "level": 9, "body": "gt3",
      "blurb": "The race car. Same class as your rig — park it next to it."},
     {"id": "nsx_evo22", "name": "Acura NSX GT3 Evo22", "base": 150, "cost": 18000, "level": 12, "body": "gt3evo",
      "blurb": "The final evolution of the GT3 car."},
+    {"id": "arx05", "name": "Acura ARX-05", "base": 170, "cost": 28000, "level": 14, "body": "proto05",
+     "blurb": "A three-time endurance champion prototype. One step from the top."},
     {"id": "arx06", "name": "Acura ARX-06", "base": 190, "cost": 40000, "level": 16, "body": "proto",
      "blurb": "A prototype. The top of the ladder — the whole year's work in one car."},
 ]
@@ -170,9 +182,12 @@ CAR_BY_ID = {c["id"]: c for c in CARS}
 SHOWROOM_PAINT = {"civic_si": ("#b3122a", 21), "integra_r": ("#f1f0ea", 11), "s2000": ("#1f4aa8", 2),
                   "ctr": ("#e7e6e1", 1), "nsx": ("#c8102e", 8), "nsx_s": ("#e8a43a", 30), "nsx_gt3": ("#f2f2ee", 30),
                   "rsx": ("#f0b323", 5), "tsx": ("#2b4a8a", 14), "integra_s": ("#2f6fb5", 23), "tlx_s": ("#b71c1c", 35),
-                  "acura_nsx": ("#c9ccd1", 17), "nsx_evo22": ("#ff6a13", 93), "arx06": ("#d7263d", 6)}
+                  "acura_nsx": ("#c9ccd1", 17), "nsx_evo22": ("#ff6a13", 93), "arx06": ("#d7263d", 6),
+                  "crx": ("#c41e2a", 88), "s660": ("#f4c400", 66), "prelude": ("#1d3b6e", 97), "legend": ("#2b2d33", 91),
+                  "ctr_tcr": ("#f2f2ee", 12), "arx05": ("#1a1a1a", 10)}
 # what each one comes with from the factory, so the showroom shows it at its best stock spec
-SHOWROOM_SPEC = {"civic_si": {"tires": 1}, "integra_r": {"tires": 2, "aero": 1, "brakes": 1},
+SHOWROOM_SPEC = {"ctr_tcr": {"tires": 4, "aero": 4, "brakes": 4, "weight": 3},
+                 "arx05": {"tires": 5, "aero": 5, "brakes": 5, "weight": 5}, "civic_si": {"tires": 1}, "integra_r": {"tires": 2, "aero": 1, "brakes": 1},
                  "s2000": {"tires": 2, "brakes": 1}, "ctr": {"tires": 3, "aero": 3, "brakes": 3},
                  "nsx": {"tires": 3, "brakes": 2}, "nsx_s": {"tires": 4, "aero": 2, "brakes": 4},
                  "nsx_gt3": {"tires": 5, "aero": 5, "brakes": 5, "weight": 4},
@@ -1991,6 +2006,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         shield_msgs = SH.on_finish(state, at, reward, bank)
         g_ = t.pop("_guard", 1.0)
         xp_gain = max(1, round(t["xp"] * (min(1.0, g_) if g_ < 1.5 else 2) * float(t.get("prorate") or 1.0)
+                                 * (1.1 if "spotter" in state.get("crew", []) else 1)  # 🔭 Mateo
                                      * float(t.get("time_mult") or 1.0)))
         state["xp"] += xp_gain
         state["streak"] += 1
@@ -2248,6 +2264,10 @@ GP_DAY = 6            # 🏁 Sunday Grand Prix
 INVITE_BANK = 1000    # 🎟️ the Invitational only calls when you're sitting on this much
 
 
+def day_cap(state: dict) -> int:
+    return RACE_DAY_CAP + (1 if "dj" in state.get("crew", []) else 0)  # 🎧 Kai talks the marshals into one more
+
+
 def _tickets_earned(state: dict, d: date) -> int:
     iso = d.isoformat()
     finishes = sum(1 for t in daily.finished_on(state, d) if (t.get("minutes") or 0) >= TICKET_MIN_TASK)
@@ -2277,8 +2297,9 @@ def race_tickets(state: dict) -> tuple[int, str]:
     used = len(_races_on(state, today))
     raced = len(_races_on(state, today, ("race",)))
     left = max(0, min(TICKET_BANK_CAP, carry + earned) - used)
-    if raced >= RACE_DAY_CAP:
-        why = f"That's {RACE_DAY_CAP} races today — the track's closed till tomorrow. Your {left} ticket(s) keep."
+    cap_ = day_cap(state)
+    if raced >= cap_:
+        why = f"That's {cap_} races today — the track's closed till tomorrow. Your {left} ticket(s) keep."
         return 0, why
     if not left:
         why = ("No race tickets. Finish a 30+ min task with proof, or log 25 min of focus on the timer, "
@@ -2286,7 +2307,7 @@ def race_tickets(state: dict) -> tuple[int, str]:
     else:
         why = (f"🎟️ {left} race ticket{'s' if left > 1 else ''} · {carry} banked + {earned} earned today"
                f" · unused ones carry over (max {TICKET_BANK_CAP})"
-               + (f" · up to {RACE_DAY_CAP - raced} more race{'s' * (RACE_DAY_CAP - raced != 1)} today" if left > RACE_DAY_CAP - raced else ""))
+               + (f" · up to {cap_ - raced} more race{'s' * (cap_ - raced != 1)} today" if left > cap_ - raced else ""))
     return left, why
 
 
@@ -3644,6 +3665,9 @@ def render_today(state: dict) -> None:
                         _start_timer(state, t, mins)
                         flash(f"▶️ **{t['title']}** — {mins}-min timer running. Phone face-down.", sound="win")
                         st.rerun()
+                    if not running:
+                        with c2:
+                            render_send_back(state, t, f"m_{t['id']}")
                 else:
                     st.markdown(f"<div class='dod-mrow bad'><span class='dod-dot'></span><div>{html.escape(t['title'])}"
                                 f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
@@ -3785,6 +3809,27 @@ def render_crew_card(state: dict) -> None:
                                        f"as you two get closer.")
 
 
+def crew_strip_html(state: dict) -> str:
+    """🧑‍🔧 Your crew in the header on every tab: their faces, and one of them talking (rotates through the day)."""
+    hired = [k for k in CR.CREW if k in state.get("crew", [])]
+    if not hired:
+        return ("<div class='dod-crewbar ghost'>" + "".join(f"<span class='f'>{CR.avatar_svg(k, 26)}</span>"
+                                                           for k in list(CR.CREW)[:3])
+                + "<span class='say'>No crew yet: hire one in 🔧 Garage</span></div>")
+    try:
+        ctx = crew_ctx(state)
+        mood = CR.mood(ctx)
+        n_ = now()
+        who = hired[(n_.hour // 2 + n_.timetuple().tm_yday) % len(hired)]
+        said = CR.line(who, ctx, n_.date().isoformat())
+    except Exception:  # noqa: BLE001 — the header must never break the page
+        return ""
+    faces = "".join(f"<span class='f{' on' if k == who else ''}' title='{CR.CREW[k]['name']} · {CR.CREW[k]['role']}'>"
+                    f"{CR.avatar_svg(k, 30, mood)}</span>" for k in hired)
+    return (f"<div class='dod-crewbar'><span class='faces'>{faces}</span><span class='say'><b>{CR.CREW[who]['name']}:</b> "
+            f"{html.escape(said)}</span></div>")
+
+
 def render_crew_hire(state: dict) -> None:
     crew = state.setdefault("crew", [])
     with fold("crew_hire", f"🧑‍🔧 Crew — {len(crew)}/{len(CR.CREW)} hired", len(crew) < len(CR.CREW)) as _fo:
@@ -3848,8 +3893,14 @@ def dealer_offer(state: dict) -> dict | None:
     return o
 
 
+def art_price(state: dict, full: int) -> int:
+    return round(full * (0.75 if "artist" in state.get("crew", []) else 1))  # 🎨 Yuki does it at cost
+
+
 def dealer_price(state: dict, kind: str, id_: str, full: int) -> int:
     o = dealer_offer(state)
+    if kind == "theme":
+        full = art_price(state, full)
     return o["deal"] if o and o["kind"] == kind and o["id"] == id_ else full
 
 
@@ -4394,9 +4445,56 @@ def todo_to_task(state: dict, d_: dict, due: datetime) -> dict:
     p_ = Q.parse(d_["title"], now())
     t = make_task(p_.get("title") or d_["title"], d_.get("note", ""), due, None, "", None,
                   category=p_.get("category"), minutes=d_.get("minutes") or p_.get("minutes") or 30)
+    todos = state.get("todos", [])
+    pos = next((i for i, x in enumerate(todos) if x["id"] == d_["id"]), len(todos))
+    t["from_todo"] = dict(d_, pos=pos)  # so it can go back to the same spot (↩️ send back)
     state["tasks"].append(t)
-    state["todos"] = [x for x in state.get("todos", []) if x["id"] != d_["id"]]
+    state["todos"] = [x for x in todos if x["id"] != d_["id"]]
     return t
+
+
+def task_to_todo(state: dict, t: dict) -> dict:
+    """↩️ The reverse: the task leaves (no penalty, no deadline) and the to-do comes back where it was."""
+    d_ = dict(t.get("from_todo") or {"id": uuid.uuid4().hex[:8], "title": t["title"], "minutes": t.get("minutes"),
+                                    "created": t.get("created") or now().isoformat()})
+    pos = d_.pop("pos", None)
+    d_.pop("done", None)
+    d_.pop("done_at", None)
+    todos = state.setdefault("todos", [])
+    open_ = [x for x in todos if not x.get("done")]
+    pos = len(open_) if pos is None else min(int(pos), len(open_))
+    todos.insert(todos.index(open_[pos]) if pos < len(open_) else len(open_), d_)
+    state["tasks"] = [x for x in state["tasks"] if x["id"] != t["id"]]
+    return d_
+
+
+def _returns_to_todo(t: dict) -> bool:
+    """Came from the to-do list, or was made today just to fill the mission (no real deadline of its own)."""
+    return bool(t.get("from_todo")) or (
+        (t.get("created") or "")[:10] == now().date().isoformat() and not t.get("goal_id") and not t.get("block")
+        and t.get("source") in ("manual", "quick", "qualify", "suggest", None) and not t.get("own_deadline"))
+
+
+def render_send_back(state: dict, t: dict, key: str) -> None:
+    """↩️ The send-back control on a mission row: shows the rule that applies right now."""
+    ok, why, cost = daily.send_back_check(state, t, now())
+    dest = "the to-do list" if _returns_to_todo(t) else "your task list (its own deadline stays)"
+    with st.popover("↩️", help="Send it back off today's mission", use_container_width=True):
+        st.markdown(f"**Send back:** {html.escape(t['title'])}")
+        st.caption(f"Goes to {dest}. {why}")
+        if ok:
+            why_ = st.text_input("Why", key=f"sbw_{key}", placeholder="Blocked on someone · wrong day · …")
+            if st.button(f"↩️ Send back{f' · −{cost}' if cost else ''}", key=f"sbgo_{key}", use_container_width=True):
+                done, msg = daily.send_back(state, t, now(), why_ or "", bank)
+                if done and _returns_to_todo(t):
+                    task_to_todo(state, t)
+                    msg += " It's back on your to-do list."
+                if done:
+                    save_state(state)
+                    flash(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
 
 def render_todo(state: dict) -> None:
@@ -6452,6 +6550,16 @@ CSS = """<style>
   line-height:1;margin:0;padding:0;letter-spacing:-.01em}
 .dod-hero{display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;margin-bottom:.7rem}
 .dod-hero p{color:var(--muted);margin:0;font-size:.95rem}
+.dod-crewbar{margin-left:auto;display:flex;align-items:center;gap:10px;max-width:min(520px,100%);min-width:0;
+  padding:5px 12px 5px 6px;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.03)}
+.dod-crewbar .faces{display:flex;flex:0 0 auto}.dod-crewbar .f{line-height:0;margin-left:-8px;border-radius:50%;
+  box-shadow:0 0 0 2px #12151c;transition:transform .2s}.dod-crewbar .f:first-child{margin-left:0}
+.dod-crewbar .f.on{transform:translateY(-2px) scale(1.12);z-index:2}
+.dod-crewbar .say{font-size:.84rem;color:#d6d8dd;line-height:1.3;overflow:hidden;display:-webkit-box;
+  -webkit-line-clamp:2;-webkit-box-orient:vertical}
+.dod-crewbar .say b{color:var(--y)}
+.dod-crewbar.ghost{opacity:.6}.dod-crewbar.ghost .f{filter:grayscale(1)}
+@media (max-width:640px){.dod-crewbar{margin-left:0;width:100%;max-width:100%;border-radius:14px}}
 .dod-cluster{display:grid;grid-template-columns:repeat(4,1fr);background:var(--deep,#101319);border:1px solid var(--line);
   border-radius:14px;overflow:hidden;margin:0 0 1.1rem}
 .dod-cell{padding:8px 16px 6px;border-left:1px solid var(--line)}
@@ -7058,9 +7166,9 @@ def render_kits(state: dict) -> None:
                                 st.rerun()
                         elif lvl_now < kit["level"]:
                             c1.caption(f"🔒 Level {kit['level']}")
-                        elif c1.button(f"{kit['cost']:,} 🪙", key=f"kit_buy_{k}", use_container_width=True,
-                                       disabled=state["coins"] < kit["cost"], help="Buy it and fit it"):
-                            bank(state, -kit["cost"], f"🏁 Kit: {kit['name']}")
+                        elif c1.button(f"{art_price(state, kit['cost']):,} 🪙", key=f"kit_buy_{k}", use_container_width=True,
+                                       disabled=state["coins"] < art_price(state, kit["cost"]), help="Buy it and fit it"):
+                            bank(state, -art_price(state, kit["cost"]), f"🏁 Kit: {kit['name']}")
                             owned.append(k)
                             state["ui_kit"] = k
                             st.session_state.pop("kit_preview", None)
@@ -7350,7 +7458,8 @@ hour = now().hour
 greet = "Late night" if hour < 5 else "Morning" if hour < 12 else "Afternoon" if hour < 18 else "Evening"
 st.markdown(f"<div class='dod-hero'><h1>Deadline or Die</h1><p>{greet}, {html.escape(PLAYER)}. Prove it or pay for it."
             + (" It's a danger day: no one's watching, so everything you finish pays +20%."
-               if now().weekday() in DANGER_DAYS else "") + "</p></div>", unsafe_allow_html=True)
+               if now().weekday() in DANGER_DAYS else "") + "</p>" + crew_strip_html(state) + "</div>",
+            unsafe_allow_html=True)
 if st.session_state.get("nav", "🏁 Today") == "🏁 Today" or os.getenv("DOD_ALL_TABS"):  # the words on the wall: Today only
     _q, _who = CR.quote_of_day(now().date())
     st.markdown(f"<div class='dod-quote top'>“{html.escape(_q)}”<span>— {html.escape(_who)}</span></div>",
@@ -8745,11 +8854,12 @@ with tab_garage:
         st.progress(car["condition"] / 100, text=f"Condition {car['condition']}%")
         missing = 100 - car["condition"]
         if missing:
-            afford = min(missing, max(state["coins"], 0) // REPAIR_COST_PER_PT)
+            rpp = REPAIR_COST_PER_PT * (0.75 if "medic" in state.get("crew", []) else 1)  # 🩺 Noor
+            afford = min(missing, int(max(state["coins"], 0) // rpp))
             if afford:
-                if st.button(f"🔧 Repair +{afford}% ({afford * REPAIR_COST_PER_PT} 🪙)"):
+                if st.button(f"🔧 Repair +{afford}% ({round(afford * rpp)} 🪙)"):
                     car["condition"] += afford
-                    bank(state, -afford * REPAIR_COST_PER_PT, "🔧 Repairs")
+                    bank(state, -round(afford * rpp), "🔧 Repairs")
                     save_state(state)
                     flash("Repaired.")
                     st.rerun()
@@ -8925,6 +9035,7 @@ with tab_race:
                 lo_, hi_ = ai_range(state, g_)
                 st.markdown(f"<div class='dod-tiles'><div><small>Your car</small><b>{track_rating(state, g_):.0f}</b></div>"
                             f"<div><small>Rivals</small><b>{lo_}–{hi_}</b></div>"
+                            f"<div><small>Laps</small><b>{g_['laps']}</b></div>"
                             f"<div><small>Entry + ⛽</small><b>{g_['fee']} + {run_cost(state, g_)} 🪙</b></div>"
                             f"<div><small>Purse</small><b>🥇{g_['prize'][0]} 🥈{g_['prize'][1]} 🥉{g_['prize'][2]}</b></div></div>",
                             unsafe_allow_html=True)
@@ -8940,7 +9051,8 @@ with tab_race:
                 st.markdown(f"### 🎟️ You're invited · {inv_['name']}")
                 st.caption(f"You're sitting on {state['coins']:,} coins, so the Invitational called. A field built "
                            "around your pace: no easy wins, no sandbagging. Once a week, no ticket needed.")
-                st.markdown(f"<div class='dod-tiles'><div><small>Entry + ⛽</small><b>{inv_['fee']} + {run_cost(state, inv_)} 🪙</b></div>"
+                st.markdown(f"<div class='dod-tiles'><div><small>Laps</small><b>{inv_['laps']}</b></div>"
+                            f"<div><small>Entry + ⛽</small><b>{inv_['fee']} + {run_cost(state, inv_)} 🪙</b></div>"
                             f"<div><small>Purse</small><b>🥇{inv_['prize'][0]} 🥈{inv_['prize'][1]} 🥉{inv_['prize'][2]}</b></div>"
                             f"<div><small>Win</small><b>🏆 trophy</b></div></div>", unsafe_allow_html=True)
                 cost_ = inv_["fee"] + run_cost(state, inv_)
@@ -8968,6 +9080,7 @@ with tab_race:
         edge_ = "#2ec4b6" if rating >= hi else "#f5c518" if rating >= lo else "#e10600"
         st.markdown(f"<div class='dod-tiles'><div><small>Your car</small><b style='color:{edge_}'>{rating:.0f}</b></div>"
                     f"<div><small>Rivals</small><b>{lo}–{hi}</b></div>"
+                    f"<div><small>Laps</small><b>{track['laps']}</b></div>"
                     f"<div><small>Entry + ⛽ running</small><b>{track['fee']} + {rc} 🪙</b></div>"
                     f"<div><small>Prizes</small><b>🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}</b></div></div>", unsafe_allow_html=True)
         ff = field_form(state, track["name"])

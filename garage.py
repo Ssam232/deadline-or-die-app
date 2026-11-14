@@ -128,6 +128,18 @@ CHASSIS = {
                      "driving the front wheels and torque-vectoring them. Built in Ohio."),
     "nsx_evo22": (6, "An 'Evo' is a mid-life update kit the series approves: teams can't invent their own parts on a "
                      "customer GT3 car, so improvements arrive as a homologated package."),
+    "crx": (3, "Under 900 kg. Light cars need less power, brake later and wear tyres less: the cheapest speed "
+                "there is."),
+    "s660": (3, "A kei car: Japanese rules cap engine size at 660 cc and the body's footprint, so the fun has to "
+                 "come from balance. The engine sits behind the seats."),
+    "prelude": (3, "ATTS (Active Torque Transfer System) shifts torque between the front wheels, an early cousin of "
+                   "SH-AWD: it helps a front-drive car turn in instead of plowing wide."),
+    "legend": (3, "Acura was the first Japanese luxury brand (1986); the Legend was its flagship, and its V6 sat "
+                  "lengthways in a front-drive car to keep the balance even."),
+    "ctr_tcr": (5, "TCR is a touring-car formula built on production cars: teams buy a homologated kit, and Balance "
+                   "of Performance keeps brands even. It's where many drivers learn to race wheel-to-wheel."),
+    "arx05": (7, "A DPi prototype: a shared chassis (from an approved constructor) with the maker's engine and "
+                 "styling. It won three straight IMSA championships before the hybrid ARX-06 replaced it."),
     "arx06": (7, "An LMDh prototype: the chassis comes from an approved constructor and the hybrid system is a spec "
                  "part shared by every car, while the maker supplies the engine and bodywork."),
 }

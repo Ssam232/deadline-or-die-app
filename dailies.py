@@ -111,7 +111,7 @@ def claim(save: dict, hid: str, d: date, bank, why: str = "") -> int:
     del save["habit_claims"][:-400]
     h["streak"] = h.get("streak", 0) + 1
     h["best"] = max(h.get("best", 0), h["streak"])
-    paid = reward(h)
+    paid = round(reward(h) * (1.25 if "chef" in save.get("crew", []) else 1))  # 🍲 Inês keeps the basics fed
     bank(save, paid, f"🔁 {h['name']}{why}")
     if h["streak"] % STREAK_BONUS_EVERY == 0:
         bank(save, STREAK_BONUS, f"🔥 {h['streak']}-day streak: {h['name']}")

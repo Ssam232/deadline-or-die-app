@@ -123,6 +123,45 @@ PROFILES = {
         FIN=[(2.8, 1.02), (4.55, 1.0), (4.6, 0.84), (3.35, 0.88)],
         INTAKE=[(3.05, 0.62), (3.62, 0.66), (3.6, 0.38), (3.1, 0.36)]),
 }
+PROFILES.update({
+    "crx": dict(  # noqa
+        WHEEL=("spoke", "#c9ccd2", 4), LAMP="slim", EXH="single",   # CR-X SiR (EF8): tiny two-seater, long flat roof, chopped Kamm tail
+        L=3.755, H=1.27, WB=2.30, FO=0.78, TD=0.58, SILL=0.19,
+        OUT=[(0.04, 0.22, "c"), (0.0, 0.38), (0.03, 0.55), (0.2, 0.64), (0.6, 0.72), (1.05, 0.82, "c"),
+             (1.4, 1.04), (1.72, 1.24), (2.2, 1.27), (2.75, 1.24), (3.35, 1.1), (3.62, 1.02, "c"), (3.72, 0.98),
+             (3.755, 0.8), (3.75, 0.45), (3.71, 0.24, "c")],
+        DLO=[(1.1, 0.85), (1.72, 1.19), (2.65, 1.19), (3.2, 1.03), (1.1, 0.83)],
+        B=2.35, DOORS=[1.08, 2.35], BELT=0.85, HEAD=(0.03, 0.36, 0.52, 0.6), TAIL=(3.62, 3.755, 0.78, 0.92),
+        HOOD=(0.2, 0.95), ROOF=(1.85, 2.6), DECK=3.6, CAP=3.3),
+    "s660": dict(  # noqa
+        WHEEL=("twin", "#2e3036", 5), LAMP="slim", EXH="single",   # S660: a kei mid-engine roadster, cockpit forward, hoops, engine cover
+        L=3.395, H=1.18, WB=2.285, FO=0.6, TD=0.58, SILL=0.15, OPEN=True, MID=True,
+        OUT=[(0.04, 0.2, "c"), (0.0, 0.36), (0.04, 0.52), (0.3, 0.62), (0.75, 0.72), (1.1, 0.8, "c"),
+             (1.42, 1.02, "c"), (1.48, 1.02, "c"), (1.6, 0.86, "c"), (2.6, 0.88), (3.0, 0.9), (3.32, 0.86, "c"),
+             (3.395, 0.7), (3.39, 0.4), (3.35, 0.22, "c")],
+        DLO=[(1.15, 0.82), (1.4, 1.0), (1.46, 1.0), (1.25, 0.82)],
+        B=None, DOORS=[1.15, 2.2], BELT=0.82, HEAD=(0.05, 0.38, 0.52, 0.58), TAIL=(3.25, 3.395, 0.72, 0.82),
+        HOOD=(0.3, 1.0), ROOF=None, DECK=3.2, CAP=None, HOOPS=(2.15, 2.35), HOOP_Z=1.1,
+        INTAKE=[(2.3, 0.7), (2.6, 0.74), (2.58, 0.45), (2.32, 0.44)]),
+    "prelude": dict(  # noqa
+        WHEEL=("spoke", "#c9ccd2", 5), LAMP="tall", EXH="single",   # Prelude (5th gen): low notchback coupe, upright tail, short deck
+        L=4.52, H=1.315, WB=2.585, FO=0.95, TD=0.62, SILL=0.2,
+        OUT=[(0.04, 0.23, "c"), (0.0, 0.41), (0.03, 0.6), (0.2, 0.7), (0.65, 0.78), (1.15, 0.9, "c"),
+             (1.5, 1.1), (1.85, 1.29), (2.35, 1.315), (2.9, 1.28), (3.45, 1.1), (3.75, 0.98, "c"), (4.4, 0.96),
+             (4.52, 0.9, "c"), (4.52, 0.75), (4.51, 0.45), (4.47, 0.25, "c")],
+        DLO=[(1.22, 0.92), (1.85, 1.24), (2.85, 1.23), (3.35, 1.06), (1.22, 0.9)],
+        B=2.75, DOORS=[1.2, 2.75], BELT=0.92, HEAD=(0.03, 0.37, 0.6, 0.68), TAIL=(4.35, 4.52, 0.8, 0.92),
+        HOOD=(0.25, 1.05), ROOF=(2.0, 2.85), DECK=4.3, CAP=3.75),
+    "legend": dict(  # noqa
+        WHEEL=("spoke", "#d8d8d8", 7), LAMP="slim", EXH="twin",   # Legend coupe (2nd gen): long hood, formal roof, long flat deck
+        L=4.88, H=1.37, WB=2.83, FO=0.95, TD=0.64, SILL=0.21,
+        OUT=[(0.04, 0.24, "c"), (0.0, 0.42), (0.02, 0.62), (0.15, 0.75), (0.7, 0.83), (1.35, 0.95, "c"),
+             (1.72, 1.15), (2.05, 1.34), (2.55, 1.37), (3.15, 1.35), (3.6, 1.18), (3.95, 1.03, "c"), (4.75, 1.0),
+             (4.88, 0.93, "c"), (4.88, 0.78), (4.87, 0.45), (4.83, 0.26, "c")],
+        DLO=[(1.45, 0.97), (2.05, 1.3), (3.1, 1.3), (3.55, 1.12), (3.72, 1.02), (1.45, 0.96)],
+        B=2.95, DOORS=[1.42, 2.95], BELT=0.97, HEAD=(0.02, 0.34, 0.62, 0.7), TAIL=(4.7, 4.88, 0.82, 0.95),
+        HOOD=(0.25, 1.25), ROOF=(2.15, 3.05), DECK=4.6, CAP=3.95),
+})
 PROFILES["super3"] = PROFILES["super2"]                               # Acura NSX: the same NC1 shape
 
 # Visual tiers per part level (0..5)
@@ -248,6 +287,10 @@ def _scaled(p: dict, fx: float, fz: float, **over) -> dict:
 
 PROFILES["gt3"] = _scaled(PROFILES["super2"], 4.64 / 4.535, 0.955, L=4.64, H=1.16, TD=0.71, SILL=0.14, GT3=True, WING=5)
 PROFILES["gt3evo"] = dict(PROFILES["gt3"])
+# Civic Type R TCR: the FL5 on stilts no more, wider, lower, a big wing; ARX-05: the shorter prototype before the ARX-06
+PROFILES["tcr"] = _scaled(PROFILES["hatch"], 4.6 / 4.59, 1.36 / 1.41, L=4.6, H=1.36, TD=0.68, SILL=0.12, GT3=True,
+                          WING=5, FLARE=True, WHEEL=("spoke", "#1e1f23", 6))
+PROFILES["proto05"] = _scaled(PROFILES["proto"], 4.75 / 5.1, 1.03 / 1.06, L=4.75, H=1.03, WB=3.05, TD=0.70)
 BODIES = PROFILES  # (older name, kept for callers)
 
 K = 65.0          # SVG units per metre: every car is drawn to the same scale
@@ -573,6 +616,8 @@ TOP = {  # length, width, cabin (x0, x1) from the rear, nose taper, open cockpit
     "rsx": (22, 11, (-4, 5), 3, False), "tsx": (24, 11, (-5, 5), 3, False), "integra_s": (24, 11, (-4, 5), 3.2, False),
     "tlx": (26, 12, (-5, 6), 3.5, False), "super3": (25, 12, (-1, 7), 5, False), "gt3evo": (26, 13, (-1, 7), 4.5, False),
     "proto": (30, 13, (1, 8), 7, False),
+    "crx": (19, 10, (-4, 4), 3, False), "s660": (17, 9, (-2, 3), 3, True), "prelude": (23, 11, (-3, 5), 3.2, False),
+    "legend": (25, 11, (-4, 5), 3.2, False), "tcr": (23, 13, (-7, 5), 2.5, False), "proto05": (28, 13, (1, 8), 6.5, False),
 }
 
 

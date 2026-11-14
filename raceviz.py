@@ -150,6 +150,10 @@ def replay_html(track: str, history: list[list[float]], names: list[str], colors
   <path id="line" d="{path}" fill="none" stroke="#555a66" stroke-width="1.2" stroke-dasharray="4 5"/>
   <g id="sf"></g>
   <g id="cars"></g>
+  <g font-family="system-ui,sans-serif" paint-order="stroke" stroke="#0d0f14" stroke-width="4" stroke-linejoin="round">
+    <text id="hudlap" x="314" y="20" text-anchor="end" font-size="17" font-weight="800" fill="#f2efe8">LAP 1/{laps}</text>
+    <text id="hudpos" x="314" y="35" text-anchor="end" font-size="10.5" font-weight="700" fill="#f5c518"></text>
+  </g>
 </svg>
 <div style="flex:0 0 150px;font-size:12px">
   <div id="lap" style="font-weight:700;margin-bottom:4px">LAP 1/{laps}</div><ol id="board" style="margin:0;padding-left:18px"></ol>
@@ -182,7 +186,11 @@ function frame(t){{const f=Math.max(0,Math.min(1,(t-st)/D.ms)),x=f*T,i=Math.floo
  if(D.dnf!==null&&i>=D.dnf){{dots[D.you].setAttribute('fill','#555');}}
  const ord=prog.map((p,k)=>[p,k]).sort((u,v)=>v[0]-u[0]);
  document.getElementById('board').innerHTML=ord.map(([p,k])=>`<li style="color:${{D.colors[k]}};font-weight:${{k===D.you?800:400}}">${{D.names[k]}}</li>`).join('');
- document.getElementById('lap').textContent=f>=1?'🏁 FINISH':`LAP ${{Math.min(D.laps,Math.floor(prog[ord[0][1]]*D.laps)+1)}}/${{D.laps}}`;
+ const lapTxt=f>=1?'🏁 FINISH':`LAP ${{Math.min(D.laps,Math.floor(prog[ord[0][1]]*D.laps)+1)}}/${{D.laps}}`;
+ document.getElementById('lap').textContent=lapTxt;document.getElementById('hudlap').textContent=lapTxt;
+ const myPos=ord.findIndex(o=>o[1]===D.you)+1,myLap=Math.min(D.laps,Math.floor(prog[D.you]*D.laps)+1);
+ document.getElementById('hudpos').textContent=(D.dnf!==null&&i>=D.dnf)?'YOU: OUT':
+   (f>=1?`YOU: P${{myPos}}`:`YOU: P${{myPos}} · lap ${{myLap}}`)+(myPos<ord.length&&f<1?'':'');
  while(shown<D.ticker.length&&D.ticker[shown][0]<=x){{const d=document.createElement('div');d.textContent=D.ticker[shown][1];
   tk.prepend(d);shown++;}}
  if(f<1)requestAnimationFrame(frame);else document.getElementById('again').style.display='inline-block';}}

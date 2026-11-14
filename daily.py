@@ -436,6 +436,59 @@ def lock_in(save: dict, now: datetime, task_ids: list[str], start_at: str | None
     return "🚦 Mission locked in."
 
 
+# ↩️ Sending a task back off today's mission. Plans change; procrastination shouldn't get a free exit:
+#  - the mission can never drop under the qualifying hour (swap something in, or add a slice, first)
+#  - free for SEND_BACK_GRACE min after you lock in (fixing a plan you just made), then it costs half the task's
+#    penalty and you get SEND_BACK_MAX a day
+#  - nothing you've already logged timer time on today, and nothing after SEND_BACK_CUTOFF (the evening is for finishing)
+SEND_BACK_GRACE, SEND_BACK_MAX, SEND_BACK_CUTOFF = 30, 2, 18
+
+
+def mission_minutes(save: dict, d: date, without: str | None = None) -> int:
+    tasks = sum(int(t.get("minutes") or 30) for t in mission(save, d) if t["id"] != without
+                and t.get("status") in ("open", "done", "redeemed"))
+    return tasks + sum(int(s_["min"]) for s_ in slices(save, d))
+
+
+def send_back_check(save: dict, t: dict, now: datetime) -> tuple[bool, str, int]:
+    """(allowed, why not / what it'll cost, cost)."""
+    d = now.date()
+    e = peek_day(save, d)
+    if t.get("mission_day") != d.isoformat() or t.get("status") != "open":
+        return False, "Not in today's open mission.", 0
+    if any(x.get("task") == t["id"] and x.get("date") == d.isoformat() for x in save.get("focus_log", [])):
+        return False, "You've already put timer time into it today: finish it.", 0
+    need = min_mission_minutes(save)
+    if e.get("qualified") and mission_minutes(save, d, without=t["id"]) < need:
+        return False, f"Without it the mission drops under {need} min. Add something (or a ⏱️ slice) first.", 0
+    set_at = datetime.fromisoformat(e["set_at"]) if e.get("set_at") else now
+    if (now - set_at).total_seconds() <= SEND_BACK_GRACE * 60:
+        return True, f"Free: you locked in under {SEND_BACK_GRACE} min ago.", 0
+    if now.hour >= SEND_BACK_CUTOFF:
+        return False, f"After {SEND_BACK_CUTOFF % 12 or 12} PM the mission is locked: finish it or let it ride.", 0
+    used = int(e.get("sent_back", 0))
+    if used >= SEND_BACK_MAX:
+        return False, f"You've already sent {SEND_BACK_MAX} back today.", 0
+    cost = max(5, round(int(t.get("penalty") or 20) * 0.5))
+    return True, f"Costs {cost} (half its penalty) · {SEND_BACK_MAX - used - 1} more allowed today.", cost
+
+
+def send_back(save: dict, t: dict, now: datetime, reason: str, bank) -> tuple[bool, str]:
+    ok, why, cost = send_back_check(save, t, now)
+    if not ok:
+        return False, why
+    if not reason.strip():
+        return False, "Say why (one line)."
+    e = day(save, now.date())
+    if cost:
+        bank(save, -cost, f"↩️ Sent back: {t['title']}")
+        e["sent_back"] = int(e.get("sent_back", 0)) + 1
+    e.setdefault("sent_back_log", []).append({"title": t["title"][:80], "why": reason.strip()[:120], "cost": cost,
+                                             "at": now.isoformat()})
+    t.pop("mission_day", None)
+    return True, f"↩️ **{t['title']}** is off today's mission" + (f" (−{cost})." if cost else " (free).")
+
+
 def pit_stop(save: dict, now: datetime) -> bool:
     today = now.date()
     if is_rest(save, today) or pit_stops_used(save, today) >= cfg(save)["pit_stops_per_week"]:
