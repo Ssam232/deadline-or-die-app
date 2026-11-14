@@ -3555,6 +3555,23 @@ def _pair_paper(state: dict, t: dict, widget: str, proof_key: str, papers: list[
     save_state(state)
 
 
+def paper_links(state: dict, t: dict) -> list[tuple[str, str]]:
+    """📄 (title, link) for each paper a reading task covers, from the (cached) Zotero reading list."""
+    keys = paper_keys(t)
+    zc = zotero_cfg(state) if keys else None
+    if not zc:
+        return []
+    try:
+        by = {p["key"]: p for p in _zotero_reading(*zc)}
+    except Exception:  # noqa: BLE001 — Zotero down: no links, nothing else breaks
+        return []
+    return [(by[k]["title"] or "Paper", by[k]["url"]) for k in keys if k in by and by[k].get("url")]
+
+
+def paper_links_md(links: list[tuple[str, str]], cut: int = 70) -> str:
+    return "  \n".join(f"📄 [{html.escape(ttl[:cut] + ('…' if len(ttl) > cut else ''))}]({u}) ↗" for ttl, u in links)
+
+
 def render_paper_pair(state: dict, t: dict, scope: str) -> None:
     """📄 For reading tasks: pick which papers from your Zotero reading list this one covers."""
     mine = paper_keys(t)
@@ -3589,6 +3606,9 @@ def render_paper_pair(state: dict, t: dict, scope: str) -> None:
                    args=(state, t, widget, f"{scope}open_{t['id']}", opts),
                    help=f"Each paper adds {PAPER_MIN} min to this task (and its timer). It takes their names and links; "
                         "finishing it marks them all read in Zotero.")
+    links_ = [(by[k]["title"] or "Paper", by[k]["url"]) for k in cur if by[k].get("url")]
+    if links_:
+        st.markdown(paper_links_md(links_))
     spares = [x for x in state["tasks"] if x["status"] == "open" and x["id"] != t["id"]
               and paper_keys(x) and set(paper_keys(x)) <= set(mine)]
     for x in spares:  # papers already covered here: drop the spare, no penalty (it's the same reading)
@@ -5525,6 +5545,11 @@ def render_timer(state: dict, big: bool = False) -> None:
                 st.rerun()
             title = (t["title"] if t else "—")
             st.markdown(f"#### ⏱️ {html.escape(title[:42] + ('…' if len(title) > 42 else ''))}")
+            if t and (pl_ := paper_links(state, t)):  # 📄 reading on the clock: the paper's one tap away
+                with st.container(horizontal=True, horizontal_alignment="center", key="tm_papers"):
+                    for i_, (ttl_, u_) in enumerate(pl_):
+                        st.link_button(f"📄 Open {'the paper' if len(pl_) == 1 else f'paper {i_ + 1}'}", u_,
+                                       help=ttl_)
             _timer_ring(state, tm, big=big)
             _timer_controls(state)
 
