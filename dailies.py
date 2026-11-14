@@ -158,17 +158,17 @@ def today_status(save: dict, d: date) -> list[dict]:
 BAIL_GRACE_HOURS = 4  # a bailout day's dailies stay open until 4 AM
 
 
-def day_for(now: datetime, bailed) -> date:
-    """Which day the dailies are on. Normally the calendar day; after a 🪂 bailout that day stays open until 4 AM.
-    bailed(d) → True if d was a bailout day."""
+def day_for(now: datetime, bailed, end: int = 0) -> date:
+    """Which day the dailies are on. The calendar day, until your day ends (🌙 1–3 AM if you've set it); after a 🪂
+    bailout that day stays open until 4 AM. bailed(d) → True if d was a bailout day."""
     y = now.date() - timedelta(days=1)
-    return y if now.hour < BAIL_GRACE_HOURS and bailed(y) else now.date()
+    return y if now.hour < max(end, BAIL_GRACE_HOURS if bailed(y) else 0) else now.date()
 
 
-def closes_at(d: date, tz, bailed) -> datetime:
-    """When day d's dailies lock: midnight, or 4 AM the next morning on a bailout day."""
-    end = datetime.combine(d + timedelta(days=1), datetime.min.time(), tz)
-    return end + timedelta(hours=BAIL_GRACE_HOURS) if bailed(d) else end
+def closes_at(d: date, tz, bailed, end: int = 0) -> datetime:
+    """When day d's dailies lock: when your day ends (midnight by default), or 4 AM the next morning on a bailout day."""
+    end_ = datetime.combine(d + timedelta(days=1), datetime.min.time(), tz)
+    return end_ + timedelta(hours=max(end, BAIL_GRACE_HOURS if bailed(d) else 0))
 
 
 def settle(save: dict, today: date, bank, is_rest) -> list[str]:

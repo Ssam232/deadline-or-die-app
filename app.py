@@ -1363,6 +1363,8 @@ def flash(msg: str, kind: str = "success", celebrate: bool = False, sound: str |
 
 def make_task(title, details, deadline: datetime, difficulty=None, consequence="", goal_id=None,
               source="manual", notion=None, category=None, minutes=None) -> dict:
+    if DAY_END and source not in ("notion", "notion-sync") and deadline.hour == 23 and deadline.minute == 59:
+        deadline = deadline + timedelta(hours=DAY_END)  # 🌙 "tonight" means when your day really ends
     chosen = bool(minutes)
     minutes = int(minutes or V.minutes_for_size(difficulty))
     category = category if category in V.CATEGORIES else V.guess_category(title)
@@ -1863,10 +1865,26 @@ def _toggle_fold(state: dict, k: str, default: bool = True) -> None:
     save_state(state)
 
 
+DAY_END = 0  # 🌙 hours past midnight the day really ends (Settings → Day ends at); set from your save once it's loaded
+
+
+def gtoday() -> date:
+    """🌙 The day you're on (with the day ending at 2 AM, 1:30 AM Saturday is still Friday)."""
+    return (now() - timedelta(hours=DAY_END)).date()
+
+
+def night_day(d: datetime) -> date:
+    """The day a time belongs to: 1:30 AM belongs to the night before when your day ends at 2."""
+    return (d - timedelta(hours=DAY_END)).date() if DAY_END and d.hour < DAY_END else d.date()
+
+
 def _when(d: datetime) -> str:
-    """A due time that doesn't tick: 'today 6:30 PM', 'Sat 11:59 PM'."""
-    day = "today" if d.date() == now().date() else "tomorrow" if d.date() == now().date() + timedelta(days=1) \
-        else f"{d:%a}"
+    """A due time that doesn't tick: 'today 6:30 PM', 'Sat 11:59 PM', 'tonight 1:59 AM'."""
+    nd, td = night_day(d), gtoday()
+    if DAY_END and d.hour < DAY_END:
+        day = "tonight" if nd == td else "tmrw night" if nd == td + timedelta(days=1) else f"{nd:%a} night"
+    else:
+        day = "today" if nd == td else "tomorrow" if nd == td + timedelta(days=1) else f"{d:%a}"
     return f"{day} {d:%I:%M %p}".replace(" 0", " ")
 
 
@@ -2582,11 +2600,13 @@ EVENT_LOOKAHEAD = 60      # the event planner looks this far ahead
 def _rel_day(dt: datetime, today: date) -> str:
     """'tonight' · '2 PM' · 'tmrw 9 AM' · 'Mon' — the shortest way to say when."""
     hm = dt.strftime("%I:%M %p").lstrip("0").replace(":00", "")
-    if dt.date() == today:
-        return "tonight" if dt.hour >= 23 else hm
-    if dt.date() == today + timedelta(days=1):
-        return "tmrw" if dt.hour >= 23 else f"tmrw {hm}"
-    return f"{dt:%a}" if dt.hour >= 23 else f"{dt:%a} {hm}"
+    eod_ = dt.hour >= 23 or (DAY_END and dt.hour < DAY_END)  # the end of that day (🌙 1:59 AM counts as tonight)
+    dd = night_day(dt)
+    if dd == today:
+        return "tonight" if eod_ else hm
+    if dd == today + timedelta(days=1):
+        return "tmrw" if eod_ else f"tmrw {hm}"
+    return f"{dd:%a}" if eod_ else f"{dd:%a} {hm}"
 
 
 def _board_chip(b: dict, today: date) -> str:
@@ -2855,7 +2875,7 @@ def _bailed(state: dict):
 def render_dailies(state: dict) -> None:
     if st.session_state.pop("_dl_full", False):
         st.rerun(scope="app")
-    today = DL.day_for(now(), _bailed(state))  # after a 🪂 bailout, that day's dailies stay open till 4 AM
+    today = DL.day_for(now(), _bailed(state), DAY_END)  # after a 🪂 bailout, that day's dailies stay open till 4 AM
     rows = DL.today_status(state, today)
     _dn = sum(r["done"] for r in rows)
     bail_ = bool(daily.peek_day(state, today).get("bailout"))
@@ -2867,7 +2887,7 @@ def render_dailies(state: dict) -> None:
                 if done == len(rows):
                     note = "<div style='color:#2ec4b6;font-size:.88rem'>All done today ✅</div>"
                 elif bail_:
-                    left_ = (DL.closes_at(today, TZ, _bailed(state)) - now()).total_seconds() / 60
+                    left_ = (DL.closes_at(today, TZ, _bailed(state), DAY_END) - now()).total_seconds() / 60
                     note = (f"<div style='color:#8ab4ff;font-size:.88rem'>🪂 Bailout day"
                             + (f" ({today:%A})" if today != now().date() else "")
                             + f": open till 4 AM · <b>{hmin(max(0, left_))}</b> left. Misses cost nothing and keep "
@@ -3007,12 +3027,12 @@ def _daily_add_form(state: dict, today) -> None:
         st.rerun(scope="app")
 
 
-DUE_CHIPS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 59), "🎡": None}
+DUE_CHIPS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "End of day": dtime(23, 59), "🎡": None}
 
 
 def due_picker(key: str, default: str = "9 PM") -> dtime:
     """'Done by: 6 PM · 9 PM · Midnight · 🎡'. Chips already in the past are hidden."""
-    opts = [k for k, v in DUE_CHIPS.items() if v is None or k == "Midnight"
+    opts = [k for k, v in DUE_CHIPS.items() if v is None or k == "End of day"
             or datetime.combine(now().date(), v, TZ) > now() + timedelta(minutes=20)]
     default = default if default in opts else opts[0]
     pick = st.pills("Done by", opts, default=default, key=f"{key}_chip", selection_mode="single") or default
@@ -3022,23 +3042,23 @@ def due_picker(key: str, default: str = "9 PM") -> dtime:
 
 
 SUG_DUE_KINDS = ("d", "r", "b", "z")  # suggestions that become new tasks today (your own tasks keep their deadlines)
-SUG_DUE_OPTS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "Midnight": dtime(23, 59)}
+SUG_DUE_OPTS = {"6 PM": dtime(18, 0), "9 PM": dtime(21, 0), "End of day": dtime(23, 59)}
 
 
 def _sug_due_picker(keys: list, opts: dict, fk) -> dict:
     """🕛 Picked suggestions are due at midnight; this popover lets you give any one of them its own time."""
     out = {}
-    changed = [k for k in keys if st.session_state.get(f"q_sd_{k}{fk}") not in (None, "Midnight")]
+    changed = [k for k in keys if st.session_state.get(f"q_sd_{k}{fk}") not in (None, "End of day")]
     lbl = (f"🕛 Suggestions due midnight" if not changed else f"🕛 Suggestions due midnight · {len(changed)} changed")
     with st.popover(lbl, use_container_width=False):
         st.caption("Each picked suggestion is due at midnight today. Change any one here.")
         for k in keys:
             ttl = opts[k][0].split(" · ")[0]
-            v = st.pills(ttl, list(SUG_DUE_OPTS) + ["🎡"], default="Midnight", key=f"q_sd_{k}{fk}",
-                         selection_mode="single") or "Midnight"
+            v = st.pills(ttl, list(SUG_DUE_OPTS) + ["🎡"], default="End of day", key=f"q_sd_{k}{fk}",
+                         selection_mode="single") or "End of day"
             if v == "🎡":
                 out[k] = time_wheel("", dtime(23, 59), key=f"q_sdw_{k}{fk}")
-            elif v != "Midnight":
+            elif v != "End of day":
                 out[k] = SUG_DUE_OPTS[v]
     return out
 
@@ -3704,8 +3724,56 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
 
 
 
+DAY_END_OPTS = {0: "Midnight", 1: "1 AM", 2: "2 AM", 3: "3 AM"}
+
+
+def set_day_end(state: dict, h: int) -> tuple[bool, str]:
+    """🌙 Move the end of your day. Once a week at most. Open tasks due at the old end of the day move with it."""
+    global DAY_END
+    s = state["settings"]
+    old, h = DAY_END, max(0, min(daily.DAY_END_MAX, int(h)))
+    if h == old:
+        return False, "That's already when your day ends."
+    last = s.get("day_end_set")
+    if last and now() - parse_dt(last) < timedelta(days=daily.DAY_END_LOCK_DAYS):
+        nxt = parse_dt(last) + timedelta(days=daily.DAY_END_LOCK_DAYS)
+        return False, f"You changed it on {parse_dt(last):%a %b} {parse_dt(last).day}. Next change from {nxt:%a %b} {nxt.day}."
+    end_old = (23 * 60 + 59 + old * 60) % 1440
+    moved = 0
+    for t in state["tasks"]:
+        dl = parse_dt(t["deadline"])
+        if (t["status"] == "open" and t.get("source") not in ("notion", "notion-sync")
+                and dl.hour * 60 + dl.minute == end_old and dl > now()):
+            t["deadline"] = (dl + timedelta(hours=h - old)).isoformat()
+            moved += 1
+    s.update(day_end=h, day_end_set=now().isoformat())
+    DAY_END = h
+    return True, (f"🌙 Your day now ends at **{DAY_END_OPTS[h].lower()}**" + (f". {moved} open task{'s' * (moved != 1)} "
+                  f"due at the old end of the day moved with it." if moved else "."))
+
+
+def render_day_end(state: dict) -> None:
+    with st.container(border=True, key="day_end_box"):
+        st.markdown("#### 🌙 Day ends at")
+        st.caption("For night owls. \"Tonight\" deadlines, the dailies, focus time, and the zero-day check all run until "
+                   "then, so your late hours count for the day you're actually on. Qualifying stays at its usual time. "
+                   f"Change it at most once every {daily.DAY_END_LOCK_DAYS} days.")
+        c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+        pick = c1.segmented_control("Day ends at", list(DAY_END_OPTS), default=DAY_END, format_func=DAY_END_OPTS.get,
+                                    key="day_end_pick", label_visibility="collapsed")
+        if c2.button("Set", key="day_end_go", use_container_width=True, disabled=pick is None or pick == DAY_END):
+            ok_, msg_ = set_day_end(state, pick)
+            if ok_:
+                save_state(state)
+                flash(msg_)
+                st.rerun()
+            else:
+                st.warning(msg_)
+
+
 def render_today(state: dict) -> None:
     n_ = now()
+    gd_ = gtoday()  # 🌙 the day you're on
     stt = daily.status(state, n_)
     c = daily.cfg(state)
     if stt["bailout"]:
@@ -3716,8 +3784,8 @@ def render_today(state: dict) -> None:
         _lab = "🚦 **Qualifying**" + (" :gray[optional today]" if stt["optional"] else "")
     else:
         _m = [t for t in stt["mission"] if t["status"] != "cancelled"]
-        _sl = daily.slices(state, n_.date())
-        _lab = (f"🏁 **Today's mission** :gray[{len(stt['mission_done']) + sum(daily.slice_done(state, x, n_.date()) for x in _sl)}"
+        _sl = daily.slices(state, gd_)
+        _lab = (f"🏁 **Today's mission** :gray[{len(stt['mission_done']) + sum(daily.slice_done(state, x, gd_) for x in _sl)}"
                 f"/{len(_m) + len(_sl)}]")
     with fold("live_card", _lab, card=True) as _fo:
         if _open(_fo):  # collapsed = not built (faster page, smaller download)
@@ -3754,7 +3822,7 @@ def render_today(state: dict) -> None:
                         f"<div class='dod-pills'><span>⛽ <b>+{c['qualify_fuel']}</b> fuel</span>"
                         f"<span>Miss it: the safety car picks (−{c['qualify_penalty']})</span></div>", unsafe_allow_html=True)
                 else:
-                    if daily.peek_day(state, n_.date()).get("excused"):
+                    if daily.peek_day(state, gd_).get("excused"):
                         st.markdown("### 🚦 Lock in today's mission")
                         st.caption(f"Qualifying was excused (the app was down at the deadline). Locking in still pays "
                                    f"+{c['qualify_fuel']}.")
@@ -3775,10 +3843,10 @@ def render_today(state: dict) -> None:
             m, done = stt["mission"], stt["mission_done"]
             m = mission_sorted(state, m)
             open_m = [t for t in m if t["status"] == "open"]
-            sl_ = daily.slices(state, n_.date())
-            sl_ok = [x for x in sl_ if daily.slice_done(state, x, n_.date())]
+            sl_ = daily.slices(state, gd_)
+            sl_ok = [x for x in sl_ if daily.slice_done(state, x, gd_)]
             left_min = sum(t.get("minutes") or 30 for t in open_m) + sum(
-                max(0, x["min"] - daily.slice_logged(state, x["tid"], n_.date())) for x in sl_ if x not in sl_ok)
+                max(0, x["min"] - daily.slice_logged(state, x["tid"], gd_)) for x in sl_ if x not in sl_ok)
             segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
                            "</i>" for t in m) + "".join(f"<i class='{'ok' if x in sl_ok else ''}'></i>" for x in sl_)
             pills = [f"🔥 <b>{stt['day_streak']}</b>-day streak" + ("" if stt["done_today"] else " · +1 on your first finish")]
@@ -3815,7 +3883,7 @@ def render_today(state: dict) -> None:
                             + f" · {t['title']} · {min_label(t.get('minutes') or 30)} · 🗺️ {goal_title(state, t.get('goal_id'))[:28]}"
                             if _bk else (f"⏰ {datetime.strptime(t['start_set'], '%H:%M'):%I:%M %p}".replace("⏰ 0", "⏰ ")
                                          + f" · {t['title']} · {min_label(t.get('minutes') or 30)}") if t.get("start_set")
-                            else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, n_.date())}")
+                            else f"{t['title']} · {min_label(t.get('minutes') or 30)} · {_rel_day(dl, gd_)}")
                     _ch = RK.chips(t)
                     with c1.expander((_ch + " " if _ch else "") + _lbl + f" · +{t['reward']}"
                                      + (f" · ⏱️ {fm_:.0f}m" if fm_ else ""), key=f"exp_m_{t['id']}",
@@ -3834,7 +3902,7 @@ def render_today(state: dict) -> None:
                     st.markdown(f"<div class='dod-mrow bad'><span class='dod-dot'></span><div>{html.escape(t['title'])}"
                                 f" <span class='m'>missed</span></div></div>", unsafe_allow_html=True)
             for x in sl_:  # ⏱️ slices: locked in, finished by the timer
-                lg_ = daily.slice_logged(state, x["tid"], n_.date())
+                lg_ = daily.slice_logged(state, x["tid"], gd_)
                 t_ = next((t for t in state["tasks"] if t["id"] == x["tid"]), None)
                 if x in sl_ok:
                     st.markdown(f"<div class='dod-mrow ok'><span class='dod-dot'></span><div><s>⏱️ {min_label(x['min'])} on "
@@ -3857,7 +3925,7 @@ def render_today(state: dict) -> None:
                     st.rerun()
             if (m or sl_) and len(done) == len(m) and len(sl_ok) == len(sl_):
                 st.success("Mission complete. Anything else today is pure bonus. 🏆")
-            elif not stt["done_today"] and not daily.slice_worked(state, n_.date()) and n_.hour >= 18 \
+            elif not stt["done_today"] and not daily.slice_worked(state, gd_) and n_.hour >= 18 \
                     and n_.weekday() not in daily.WEEKEND:
                 st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
                            "Do the smallest one now.")
@@ -5303,7 +5371,7 @@ def render_scrapbook(state: dict) -> None:
 
 
 def focus_today(state: dict) -> int:
-    today = now().date().isoformat()
+    today = gtoday().isoformat()
     return int(sum(x["min"] for x in state.get("focus_log", []) if x["date"] == today))
 
 
@@ -5524,7 +5592,7 @@ def render_timer(state: dict, big: bool = False) -> None:
                                              f"🔥 <b>LIVE CHALLENGE:</b> {html.escape(ch['label'])} · {left_} left to start",
                                              "live"), unsafe_allow_html=True)
                 drops_left = EV.DROPS_PER_DAY - sum(x.get("drops", 1) for x in state.get("focus_log", [])
-                                                     if x["date"] == now().date().isoformat() and x.get("drop"))
+                                                     if x["date"] == gtoday().isoformat() and x.get("drop"))
                 st.caption(f"Today **{focus_today(state)} min** · timer-verified tasks pay +{int(V.TIMER_BONUS * 100)}% · "
                            f"25+ min sessions drop loot ({max(0, drops_left)} left) · surprise challenges buzz your phone"
                            + (f" Tokens: ⚡×{tok.get('double', 0)} 🔧×{tok.get('upgrade', 0)}"
@@ -6308,13 +6376,13 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
     """Credit a finished/stopped focus session: focus minutes, XP, loot drop, focus challenge."""
     full = mins >= 25 if tm.get("flow") else mins >= tm["planned"]
     t["focus_min"] = round(t.get("focus_min", 0) + mins, 2)
-    state.setdefault("focus_log", []).append({"date": start.date().isoformat(), "task": t["id"],
+    state.setdefault("focus_log", []).append({"date": night_day(start).isoformat(), "task": t["id"],
                                               "min": round(mins, 2), "sec": int(round(mins * 60)), "full": full,
                                               "start": start.isoformat(), "cat": t.get("category")})
     del state["focus_log"][:-500]
     state["xp"] += int(mins // 5)
     drop_msg, snd = "", ("win" if full else None)
-    today_log = [x for x in state["focus_log"] if x["date"] == now().date().isoformat()]
+    today_log = [x for x in state["focus_log"] if x["date"] == gtoday().isoformat()]
     rolls = int(mins // 25) if tm.get("flow") else 1  # a flow run gets a roll per 25 min, like a stack of sessions
     left_today = EV.DROPS_PER_DAY - sum(x.get("drops", 1) for x in today_log if x.get("drop"))
     msgs_ = []
@@ -7838,6 +7906,7 @@ _boot = st.empty() if "_booted" not in st.session_state else None
 if _boot is not None:
     _boot.markdown(_loader(), unsafe_allow_html=True)
 state = load_state()
+DAY_END = daily.day_end(state)
 st.markdown(theme_css(state), unsafe_allow_html=True)
 PROFILE = I.profile(state, now().date(), TZ)  # history before today → steers today's surprises (same in the nagger)
 EV.set_profile(PROFILE)
@@ -7858,7 +7927,7 @@ if st.session_state.pop("_resave", False) or (getattr(_saver(), "dirty", False) 
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
-crash_msgs += DL.settle(state, DL.day_for(now(), _bailed(state)), bank, daily.is_rest)
+crash_msgs += DL.settle(state, DL.day_for(now(), _bailed(state), DAY_END), bank, daily.is_rest)
 crash_msgs += SH.settle(state, now(), bank)
 crash_msgs += CM.settle(state, now(), bank, daily.level_factor(state))  # 📍 flakes and quota weeks
 _made_good = daily.make_good(state, bank, DL)
@@ -9645,6 +9714,8 @@ with tab_set:
                     save_state(state)
                     flash("Rules saved.")
                     st.rerun()
+
+        render_day_end(state)
 
     elif sec == "Boards":
         with st.container(border=True):

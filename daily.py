@@ -26,7 +26,10 @@ DAILY_DEFAULTS = {
     "safety_car_hour": 18,     # safety-car task due by this hour (or +3h if later)
     "pit_stops_per_week": 1,
     "rest_days": [],           # weekday numbers, 0 = Monday
+    "day_end": 0,              # 🌙 hours past midnight your day really ends (0–3): night owls keep their late hours
 }
+DAY_END_MAX = 3
+DAY_END_LOCK_DAYS = 7      # change it at most once a week (no "tonight ends later" every night)
 WEEKEND = (5, 6)            # Sat/Sun: qualifying is optional (still pays fuel, never costs)
 BAILOUTS_PER_WEEK = 1
 BAIL_REASONS = ["🤒 Sick", "😵 Exhausted / burnt out", "🧠 Mental health", "🚨 Emergency", "🧳 Life got in the way",
@@ -59,6 +62,29 @@ def cfg(save: dict) -> dict:
     return c
 
 
+def day_end(save: dict) -> int:
+    return max(0, min(DAY_END_MAX, int(cfg(save).get("day_end") or 0)))
+
+
+def gday(save: dict, now: datetime) -> date:
+    """🌙 The day you're on: with the day ending at 2 AM, 1:30 AM Saturday is still Friday."""
+    return (now - timedelta(hours=day_end(save))).date()
+
+
+def day_close(save: dict, d: date, tz) -> datetime:
+    """When day d really ends: 11:59 PM, or 1:59 AM the next morning with the day ending at 2."""
+    return datetime.combine(d, dtime(23, 59), tz) + timedelta(hours=day_end(save))
+
+
+def _fin_day(save: dict, t: dict) -> str:
+    if t.get("credit_day"):
+        return t["credit_day"]
+    c = t.get("completed_at") or ""
+    if not c or not day_end(save):
+        return c[:10]
+    return (datetime.fromisoformat(c) - timedelta(hours=day_end(save))).date().isoformat()
+
+
 def day(save: dict, d: date) -> dict:
     return save.setdefault("days", {}).setdefault(d.isoformat(), {})
 
@@ -70,7 +96,7 @@ def peek_day(save: dict, d: date) -> dict:
 def finished_on(save: dict, d: date) -> list[dict]:
     key = d.isoformat()
     return [t for t in save.get("tasks", []) if t.get("status") in ("done", "redeemed")
-            and (t.get("credit_day") or (t.get("completed_at") or "")[:10]) == key]  # 🏁 a clutch counts for its own day
+            and _fin_day(save, t) == key]  # 🏁 a clutch counts for its own day; 🌙 1 AM counts for the night before
 
 
 def mission(save: dict, d: date) -> list[dict]:
@@ -105,7 +131,7 @@ def slice_logged(save: dict, tid: str, d: date) -> float:
 
 def slice_done(save: dict, sl: dict, d: date) -> bool:
     t = next((t for t in save.get("tasks", []) if t["id"] == sl["tid"]), None)
-    if t and t.get("status") in ("done", "redeemed") and (t.get("credit_day") or (t.get("completed_at") or "")[:10]) == d.isoformat():
+    if t and t.get("status") in ("done", "redeemed") and _fin_day(save, t) == d.isoformat():
         return True
     return slice_logged(save, sl["tid"], d) >= sl["min"]
 
@@ -161,7 +187,7 @@ def release_moved(save: dict) -> list[dict]:
 def auto_qualify(save: dict, now: datetime, bank) -> str | None:
     """Today's booked roadmap blocks become today's mission and count as qualifying (+fuel, once). Qualifying
     stays open: you can still lock in more. Blocks booked later in the day join the mission too."""
-    today = now.date()
+    today = gday(save, now)
     if is_rest(save, today):
         return None
     bl = [t for t in booked(save, today) if t.get("mission_day") != today.isoformat()]
@@ -214,7 +240,7 @@ def bail_preview(save: dict, now: datetime) -> list[dict]:
             continue
         dl = datetime.fromisoformat(t["deadline"])
         dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
-        if dl.astimezone(now.tzinfo).date() <= now.date():
+        if dl <= day_close(save, gday(save, now), now.tzinfo):
             out.append(t)
     return out
 
@@ -223,7 +249,7 @@ def bail_out(save: dict, now: datetime, reason: str, why: str) -> dict | None:
     """🪂 Pull the cord on today, any time of day. Today stops counting: no zero-day, dailies aren't charged, the
     day streak is frozen (not broken, not grown), today's open work moves to tomorrow at the same time (the
     safety car is cancelled). Once a week. Penalties already taken today stay taken."""
-    today = now.date()
+    today = gday(save, now)
     if bailouts_left(save, today) <= 0 or peek_day(save, today).get("bailout"):
         return None
     moved, cancelled = [], []
@@ -235,7 +261,7 @@ def bail_out(save: dict, now: datetime, reason: str, why: str) -> dict | None:
         dl = datetime.fromisoformat(t["deadline"])
         dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
         new = max(dl + timedelta(days=1), datetime.combine(today + timedelta(days=1), dtime(12, 0), now.tzinfo))
-        t["deadline"] = min(new, datetime.combine(today + timedelta(days=1), dtime(23, 59), now.tzinfo)).isoformat()
+        t["deadline"] = min(new, day_close(save, today + timedelta(days=1), now.tzinfo)).isoformat()
         t["bailed_from"] = today.isoformat()
         if t.get("mission_day") == today.isoformat():
             t.pop("mission_day", None)
@@ -251,7 +277,7 @@ def qualify_deadline(save: dict, d: date, tz) -> datetime:
 
 def status(save: dict, now: datetime) -> dict:
     """Read-only view of today, shared by the app, the nagger and the Notion Pit Wall."""
-    today = now.date()
+    today = gday(save, now)
     e = peek_day(save, today)
     done_today = finished_on(save, today)
     m = mission(save, today)
@@ -280,13 +306,13 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
     bank(state, delta, reason) and make_safety_car(due: datetime) -> task are supplied by the app.
     """
     c, msgs = cfg(save), []
-    today = now.date()
+    today = gday(save, now)
     since = date.fromisoformat(save.setdefault("daily_since", today.isoformat()))
     d = max(since, today - timedelta(days=SETTLE_LOOKBACK_DAYS))
     charged, forgiven = 0, 0
     tm = save.get("timer")
     while d < today:
-        if tm and (tm.get("start") or "")[:10] <= d.isoformat():
+        if tm and tm.get("start") and gday(save, datetime.fromisoformat(tm["start"])) <= d:
             break  # 🏁 a session that started that day is still running: the day settles once it's logged
         e = day(save, d)
         if not e.get("settled"):
@@ -339,7 +365,7 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
         save["rival_heat"] = save.get("rival_heat", 0) + 1
         due = max(datetime.combine(today, dtime(int(c["safety_car_hour"]), 0), now.tzinfo),
                   now + timedelta(hours=3))
-        due = min(due, datetime.combine(today, dtime(23, 59), now.tzinfo))
+        due = min(due, day_close(save, today, now.tzinfo))
         t = make_safety_car(due)
         t["mission_day"] = today.isoformat()
         save["tasks"].append(t)
@@ -426,7 +452,7 @@ def excuse_outages(save: dict, bank) -> list[str]:
 
 
 def lock_in(save: dict, now: datetime, task_ids: list[str], start_at: str | None, bank) -> str:
-    c, today = cfg(save), now.date()
+    c, today = cfg(save), gday(save, now)
     e = day(save, today)
     first = not e.get("qualified")
     e.update({"qualified": True, "set_at": now.isoformat(), "start_at": start_at or e.get("start_at")})
@@ -455,7 +481,7 @@ def mission_minutes(save: dict, d: date, without: str | None = None) -> int:
 
 def send_back_check(save: dict, t: dict, now: datetime) -> tuple[bool, str, int]:
     """(allowed, why not / what it'll cost, cost)."""
-    d = now.date()
+    d = gday(save, now)
     e = peek_day(save, d)
     if t.get("mission_day") != d.isoformat() or t.get("status") != "open":
         return False, "Not in today's open mission.", 0
@@ -482,7 +508,7 @@ def send_back(save: dict, t: dict, now: datetime, reason: str, bank) -> tuple[bo
         return False, why
     if not reason.strip():
         return False, "Say why (one line)."
-    e = day(save, now.date())
+    e = day(save, gday(save, now))
     if cost:
         bank(save, -cost, f"↩️ Sent back: {t['title']}")
         e["sent_back"] = int(e.get("sent_back", 0)) + 1
@@ -508,7 +534,7 @@ def extension_cost(save: dict, t: dict) -> tuple[int, int]:
 
 
 def extension_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
-    d = now.date()
+    d = gday(save, now)
     if t.get("mission_day") == d.isoformat() and peek_day(save, d).get("qualified"):
         need = min_mission_minutes(save)
         if mission_minutes(save, d, without=t["id"]) < need:
@@ -528,7 +554,7 @@ def extend(save: dict, t: dict, now: datetime, hours: int, bank) -> tuple[bool, 
     dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
     t["deadline"] = (dl + timedelta(hours=hours)).isoformat()
     t["extensions"] = int(t.get("extensions") or 0) + 1
-    off = t.get("mission_day") == now.date().isoformat()
+    off = t.get("mission_day") == gday(save, now).isoformat()
     if off:
         t.pop("mission_day", None)
     return True, (f"⏳ Extended to {datetime.fromisoformat(t['deadline']):%a %b %d, %I:%M %p} for {cost} 🪙. "
@@ -545,7 +571,7 @@ BLOCK_MAX, BLOCK_CREDIT, BLOCK_DAYS = 3, 0.25, 7
 def blocked_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
     if t.get("status") != "open":
         return False, "Only open tasks."
-    if t.get("tried_on") == now.date().isoformat():
+    if t.get("tried_on") == gday(save, now).isoformat():
         return False, "Already logged a try today. Retry on the day you picked."
     if int(t.get("retries") or 0) >= BLOCK_MAX:
         return False, f"Tried {BLOCK_MAX} times already. Finish it, extend it, or remove it with a reason."
@@ -559,7 +585,7 @@ def tried_blocked(save: dict, t: dict, now: datetime, did: str, waiting: str, re
         return False, why
     if len(did.strip()) < 10 or len(waiting.strip()) < 3:
         return False, "Say what you did (10+ characters) and what it's waiting on."
-    today = now.date()
+    today = gday(save, now)
     if not today < retry <= today + timedelta(days=BLOCK_DAYS):
         return False, f"Pick a retry day from tomorrow to {BLOCK_DAYS} days out."
     credit = max(1, round(int(t.get("reward") or 0) * BLOCK_CREDIT))
@@ -576,7 +602,7 @@ def tried_blocked(save: dict, t: dict, now: datetime, did: str, waiting: str, re
     save["xp"] = save.get("xp", 0) + 2
     dl = datetime.fromisoformat(t["deadline"])
     dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
-    t["deadline"] = max(dl, datetime.combine(retry, dtime(23, 59), now.tzinfo)).isoformat()
+    t["deadline"] = max(dl, day_close(save, retry, now.tzinfo)).isoformat()
     t["retries"] = int(t.get("retries") or 0) + 1
     t["tried_on"] = today.isoformat()
     t.setdefault("attempts", []).append({"at": now.isoformat(), "did": did.strip()[:200], "waiting": waiting.strip()[:120]})
@@ -587,7 +613,7 @@ def tried_blocked(save: dict, t: dict, now: datetime, did: str, waiting: str, re
 
 
 def pit_stop(save: dict, now: datetime) -> bool:
-    today = now.date()
+    today = gday(save, now)
     if is_rest(save, today) or pit_stops_used(save, today) >= cfg(save)["pit_stops_per_week"]:
         return False
     day(save, today)["pit_stop"] = True
