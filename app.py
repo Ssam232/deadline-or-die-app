@@ -8421,24 +8421,31 @@ def render_stage_editor(state: dict, g: dict, only: str | None = None, kp: str =
 
 
 def render_task_quick_edit(state: dict, g: dict, tid: str) -> None:
-    """A milestone (not a booked block): rename it, move it to a stage, change its due date."""
+    """A milestone (not a booked block): rename it, move it to a stage, change its due date. A finished one keeps its
+    date (it's history), but its name and stage can still change."""
     t = next((x for x in R.goal_tasks(g, state["tasks"]) if x["id"] == tid), None)
-    if not t or t["status"] != "open":
-        st.caption("That one's finished (or gone), so there's nothing to edit.")
+    if not t:
+        st.caption("That one's gone, so there's nothing to edit.")
         return
+    done_ = t["status"] != "open"
     opts = _stage_opts(g)
     k = f"me_{tid}"
     dl = parse_dt(t["deadline"])
+    if done_:
+        st.caption(f"✅ Finished{f' {parse_dt(t[chr(99) + 'ompleted_at']):%a %b} {parse_dt(t['completed_at']).day}' if t.get('completed_at') else ''}"
+                   ". Rename it or move it to another stage; its date stays.")
     with st.form(f"{k}_form", border=False):
         title = st.text_input("What", value=t["title"], key=f"{k}_t")
         c1, c2 = st.columns(2)
         under = c1.selectbox("Part of", list(opts), index=list(opts).index(t.get("node") or "")
                              if (t.get("node") or "") in opts else 0, format_func=opts.get, key=f"{k}_u")
-        due = c2.date_input(togo_label("Due", f"{k}_d", max(now().date(), dl.date())), value=max(now().date(), dl.date()), min_value=now().date(), key=f"{k}_d")
+        due = None if done_ else c2.date_input(togo_label("Due", f"{k}_d", max(now().date(), dl.date())),
+                                               value=max(now().date(), dl.date()), min_value=now().date(), key=f"{k}_d")
         go = st.form_submit_button("💾 Save", type="primary")
     if go and (title or "").strip():
-        t.update(title=title.strip(), node=under or None,
-                 deadline=datetime.combine(due, dl.time().replace(tzinfo=None), TZ).isoformat())
+        t.update(title=title.strip(), node=under or None)
+        if due:
+            t["deadline"] = datetime.combine(due, dl.time().replace(tzinfo=None), TZ).isoformat()
         save_state(state)
         flash(f"✏️ **{t['title']}** saved.")
         st.rerun()
