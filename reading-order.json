@@ -91,23 +91,48 @@
  },
  {
   "code": "C05",
+  "doi": "10.1152/jappl.1996.81.3.1347",
+  "title": "Effects of aging and obesity on respiratory muscle phenotype in Zucker rats"
+ },
+ {
+  "code": "C06",
   "doi": "10.1152/ajpheart.00085.2007",
   "title": "Diaphragm single-fiber weakness and loss of myosin in congestive heart failure rats"
  },
  {
-  "code": "C06",
+  "code": "C07",
   "doi": "10.1016/j.ijcard.2008.12.042",
   "title": "Heart failure decreases passive tension generation of rat diaphragm fibers"
  },
  {
-  "code": "C07",
+  "code": "C08",
   "doi": "10.1371/journal.pone.0006117",
   "title": "Artificial Selection for Whole Animal Low Intrinsic Aerobic Capacity Co-Segregates with Hypoxia-Induced Cardiac Pump Failure"
  },
  {
-  "code": "C08",
+  "code": "C09",
   "doi": "10.3390/ijerph15102301",
   "title": "Exercise Training Attenuates Obesity-Induced Skeletal Muscle Remodeling and Mitochondria-Mediated Apoptosis in the Skeletal Muscle."
+ },
+ {
+  "code": "C10",
+  "doi": "10.1002/jor.70299",
+  "title": "Variation in Intrinsic Aerobic Capacity Reveals Distinct Differences in the Maintenance of Rat Knee Joint Integrity"
+ },
+ {
+  "code": "C11",
+  "doi": "10.1002/jor.23103",
+  "title": "Response to diet‐induced obesity produces time‐dependent induction and progression of metabolic osteoarthritis in rat knees"
+ },
+ {
+  "code": "C12",
+  "doi": "10.1302/2046-3758.74.bjr-2017-0201.r2",
+  "title": "High-fat/high-sucrose diet-induced obesity results in joint-specific development of osteoarthritis-like degeneration in a rat model"
+ },
+ {
+  "code": "C13",
+  "doi": "10.1177/19476035231193090",
+  "title": "Aerobic and Resistance Training Attenuate Differently Knee Joint Damage Caused by a High-Fat–High-Sucrose Diet in a Rat Model"
  },
  {
   "code": "D01",
