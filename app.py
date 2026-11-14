@@ -5915,6 +5915,7 @@ svg{{width:100%;max-width:{660 if big else 340}px;height:auto;display:block}}
  <text x="4" y="9" font-size="7" fill="#5b6070" letter-spacing=".07em">{label}</text>
  <path id="track" d="{trk['d']}" fill="none" stroke="#262b36" stroke-width="9" stroke-linejoin="round"/>
  <path d="{trk['d']}" fill="none" stroke="#3a4050" stroke-width=".7" stroke-dasharray="3 4"/>
+ <g id="lane"></g>
  <path id="trail" d="{trk['d']}" fill="none" stroke="{acc}" stroke-width="2.6" stroke-linecap="round"
    stroke-linejoin="round" stroke-dasharray="0 99999" opacity=".95"/>
  <g id="ticks"></g>
@@ -5980,11 +5981,33 @@ for(let k=-2;k<2;k++)for(let j=0;j<2;j++){{const r=document.createElementNS(NS,'
  r.setAttribute('x',-1+j*1.2);r.setAttribute('y',k*1.2);r.setAttribute('width',1.2);r.setAttribute('height',1.2);
  r.setAttribute('fill',(k+j)%2?'#ece8df':'#14161c');sf.appendChild(r);}}
 sf.setAttribute('transform','translate('+p0.x+','+p0.y+') rotate('+(a0*180/Math.PI)+')');
-const PX=p0.x+nx*11,PY=p0.y+ny*11;
+// 🔧 pit lane: peels off just before the start/finish line, the box sits beside the line, rejoins just after.
+// Every stint is one lap ending at the line, so the car drives into the pit for its break and back out after.
+const O=10,E=Math.min(28,L*.075),ST=!!(W&&B&&!FL);
+function sm(t){{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);}}
+function ptd(d){{d=((d%L)+L)%L;const a=tr.getPointAtLength(d),b=tr.getPointAtLength((d+1)%L);return [a.x,a.y,Math.atan2(b.y-a.y,b.x-a.x)];}}
+// a straight lane beside the start/finish line, on whichever side has more room (real pit lanes don't hug corners)
+const tx=Math.cos(a0),ty=Math.sin(a0);
+function room(sg){{let m=1e9;for(let i=0;i<120;i++){{const p=tr.getPointAtLength(L*i/120);
+ for(let t=-E*.4;t<=E*.4;t+=E*.2){{const lx=p0.x+t*tx+sg*O*nx,ly=p0.y+t*ty+sg*O*ny;m=Math.min(m,Math.hypot(p.x-lx,p.y-ly));}}}}return m;}}
+const SG=room(1)>=room(-1)?1:-1;nx*=SG;ny*=SG;  // nx,ny now point at the pit side
+function lp(t){{const q=ptd(t),w=sm((E-Math.abs(t))/(E*.6));  // on the track at the ends, on the lane in the middle
+ return [q[0]+(p0.x+t*tx+O*nx-q[0])*w,q[1]+(p0.y+t*ty+O*ny-q[1])*w];}}
+function lq(t){{const a=lp(t),b=lp(t+.8);return [a[0],a[1],Math.atan2(b[1]-a[1],b[0]-a[0])];}}
+const [PX,PY]=lp(0);
+if(ST){{let dd='';for(let t=-E;t<=E+.01;t+=1){{const q=lp(t);dd+=(dd?'L':'M')+q[0].toFixed(1)+','+q[1].toFixed(1);}}
+ const ln=document.getElementById('lane');
+ [['#2b303c',5,''],['#4a5162',.6,'2 3']].forEach(([c,wd_,da])=>{{const pp=document.createElementNS(NS,'path');pp.setAttribute('d',dd);
+  pp.setAttribute('fill','none');pp.setAttribute('stroke',c);pp.setAttribute('stroke-width',wd_);pp.setAttribute('stroke-linecap','round');
+  pp.setAttribute('stroke-linejoin','round');if(da)pp.setAttribute('stroke-dasharray',da);ln.appendChild(pp);}});
+ const bx=document.createElementNS(NS,'rect');bx.setAttribute('x',-3.4);bx.setAttribute('y',-2.6);bx.setAttribute('width',6.8);
+ bx.setAttribute('height',5.2);bx.setAttribute('rx',.8);bx.setAttribute('fill','none');bx.setAttribute('stroke','#2ec4b6');
+ bx.setAttribute('stroke-width',.6);bx.setAttribute('opacity',.8);bx.setAttribute('transform','translate('+PX+','+PY+') rotate('+(a0*180/Math.PI)+')');
+ ln.appendChild(bx);}}
 document.getElementById('c1').setAttribute('cx',PX-ny*8);document.getElementById('c1').setAttribute('cy',PY+nx*8);
 document.getElementById('c2').setAttribute('cx',PX+ny*8);document.getElementById('c2').setAttribute('cy',PY-nx*8);
 const pl=document.getElementById('pitl');pl.setAttribute('x',PX+nx*8);pl.setAttribute('y',PY+ny*8+2);
-TICKS.forEach(f=>{{const [a,ang]=at(f),dx=-Math.sin(ang)*5,dy=Math.cos(ang)*5,l=document.createElementNS(NS,'line');
+if(!ST)TICKS.forEach(f=>{{const [a,ang]=at(f),dx=-Math.sin(ang)*5,dy=Math.cos(ang)*5,l=document.createElementNS(NS,'line');
  l.setAttribute('x1',a.x-dx);l.setAttribute('y1',a.y-dy);l.setAttribute('x2',a.x+dx);l.setAttribute('y2',a.y+dy);
  l.setAttribute('stroke','#2ec4b6');l.setAttribute('stroke-width','1.2');l.setAttribute('opacity','.8');
  document.getElementById('ticks').appendChild(l);}});
@@ -5995,9 +6018,7 @@ function beep(n){{try{{ac=ac||new (window.AudioContext||window.webkitAudioContex
 function mmss(ms){{const a=Math.floor(Math.abs(ms)/1000);return String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');}}
 function eff(now){{return Math.max(0,(now-S-PT-(PA?now-PA:0)+SK)/60000);}}
 function wdone(e){{if(!W||!B)return e;const c=W+B;return Math.floor(e/c)*W+Math.min(e%c,W);}}
-function place(f,pit){{
- if(pit){{car.setAttribute('transform','translate('+PX+','+PY+') rotate('+(a0*180/Math.PI)+') scale(.85)');return;}}
- const [a,ang]=at(f);car.setAttribute('transform','translate('+a.x+','+a.y+') rotate('+(ang*180/Math.PI)+') scale(.85)');}}
+function put(q){{car.setAttribute('transform','translate('+q[0]+','+q[1]+') rotate('+(q[2]*180/Math.PI)+') scale(.85)');}}
 function frame(){{
  const now=Date.now()+OFF,e=eff(now),wd=Math.min(wdone(e),T),f=FL?(e%25)/25:wd/T;  // flow: a lap every 25 min
  let ph='work',left=(T-e)*60000;
@@ -6008,8 +6029,14 @@ function frame(){{
   if(PI>PO){{if(e>=PI*c){{gate='pitout';over=e-PI*c;}}}}
   else if(e>=PI*c+W&&(PI+1)*W<T){{gate='pitin';over=e-PI*c-W;}}}}
  const pit=(ph==='break'&&gate!=='pitin'||gate==='pitout')&&!PA;
- place(ph==='done'?0:f,pit);
- trail.setAttribute('stroke-dasharray',(L*Math.min(1,f))+' 99999');
+ let lf=f;
+ if(ph==='done'){{lf=1;put(ptd(0));}}  // chequered flag: parked on the line
+ else if(ST&&(pit||ph==='break'||gate==='pitin')){{lf=1;put(lq(0));}}  // in the box
+ else if(ST){{const n=TICKS.length+1,k=Math.min(Math.floor(wd/W+1e-9),n-1),len=Math.min(W,T-k*W);
+  lf=Math.min(1,Math.max(0,(wd-k*W)/len));const d=lf*L;
+  put(k>0&&d<E?lq(d):k<n-1&&d>L-E?lq(d-L):ptd(d));}}  // out of the pit lane after a break / boxing at the end of a stint
+ else put(ptd(Math.min(.9999,Math.max(0,f))*L));
+ trail.setAttribute('stroke-dasharray',(L*Math.min(1,lf))+' 99999');
  w.className='w'+(PA?' blink':'')+(pit?' pit':'')+(ph==='done'&&!PA?' fin':'');
  pl.setAttribute('opacity',pit?1:0);
  const sec=Math.floor(now/1000);
