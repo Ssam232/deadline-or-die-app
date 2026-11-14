@@ -1781,6 +1781,20 @@ def car_svg(car: dict) -> str:
 
 
 # ─────────────────────────── UI pieces ───────────────────────────
+# the auto-written start of a proof note: "⏱️ 17 min on the focus timer over 2 outings (4 + 13). "
+TIMER_NOTE_RE = r"^\s*(⏱️)?\s*[\d.]+ min on the focus timer( over \d+ outings \([\d + ]+\))?\.\s*"
+
+
+def outings(state: dict, t: dict) -> list[float]:
+    """🏎️ Each timer session on a task is an outing. Their minutes, oldest first ([] if the log can't account for them)."""
+    parts = [float(x.get("min") or 0) for x in state.get("focus_log", []) if x.get("task") == t["id"]]
+    return parts if parts and abs(sum(parts) - float(t.get("focus_min") or 0)) < 1 else []
+
+
+def outings_txt(parts: list[float]) -> str:
+    return f"{len(parts)} outings ({' + '.join(f'{p:.0f}' for p in parts)})" if len(parts) > 1 else ""
+
+
 def timer_proof(t: dict) -> tuple[float, float]:
     """(minutes on the focus timer, minutes needed for the timer alone to count as proof: 80% of honest time)."""
     return float(t.get("focus_min") or 0), float(max(PRORATE_MIN, round(0.8 * (t.get("minutes") or 30))))
@@ -1873,6 +1887,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     partial = not timer_ok and fm >= PRORATE_MIN  # under target: still proof, but it pays its share
     pr_ = max(PRORATE_FLOOR, fm / need) if partial else 1.0
     if fm:
+        ot_ = outings_txt(outings(state, t))
         dot = "#2ec4b6" if timer_ok else "#f5c518" if partial else "#5b6070"
         tail = ("— that's your proof. A file or link is optional." if timer_ok else
                 f"— counts as proof on its own, paying ×{pr_:.2f} ({fm:.0f} of the {need:.0f} min the timer needs). "
@@ -1880,14 +1895,15 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
                 f"— log {PRORATE_MIN - fm:.0f} more min and the timer counts as (pro-rated) proof.")
         st.markdown(f"<div class='dod-row' style='border:0;padding:2px 0 6px'><span class='dod-dot' "
                     f"style='background:{dot}'></span><div><b>⏱️ {fm:.0f} of {t.get('minutes') or 0} min on the "
-                    f"focus timer</b> <span class='m'>{tail}</span></div></div>", unsafe_allow_html=True)
-        auto_ = f"⏱️ {fm:.0f} min on the focus timer. "
+                    f"focus timer{f' · {ot_}' if ot_ else ''}</b> <span class='m'>{tail}</span></div></div>",
+                    unsafe_allow_html=True)
+        auto_ = f"⏱️ {fm:.0f} min on the focus timer{f' over {ot_}' if ot_ else ''}. "
         cur_ = st.session_state.get(f"note_{k}")
         if cur_ is None:
             st.session_state[f"note_{k}"] = auto_
-        elif re.match(r"^⏱️ \d+ min on the focus timer\. ", cur_) and not cur_.startswith(auto_):
+        elif re.match(TIMER_NOTE_RE, cur_) and not cur_.startswith(auto_):
             # more timer time since the form first showed: keep the number current (and whatever you typed after it)
-            st.session_state[f"note_{k}"] = re.sub(r"^⏱️ \d+ min on the focus timer\. ", auto_, cur_)
+            st.session_state[f"note_{k}"] = auto_ + re.sub(TIMER_NOTE_RE, "", cur_)
     touch = {"on_change": _proof_touch, "args": (k,)}
     note = st.text_area("What did you do?", key=f"note_{k}", placeholder="Be specific — the steward reads this.", **touch)
     # 📞 real-world tasks (a call, a booking, an errand): no screenshot, but a detail you could only know by doing it
@@ -2003,7 +2019,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         if not use_pr:  # the timer already sets the pay when it's the proof
             t["time_mult"] = time_mult(actual, t.get("minutes"))
     if pin and g_:  # the write-up becomes a sticky note on this block in the roadmap
-        txt_ = re.sub(r"^⏱️ \d+ min on the focus timer\.\s*", "", note.strip()) or note.strip()
+        txt_ = re.sub(TIMER_NOTE_RE, "", note.strip()) or note.strip()
         g_.setdefault("notes", []).append({"id": uuid.uuid4().hex[:8], "text": txt_[:400], "on": "t_" + t["id"],
                                            "color": "green", "created": at.isoformat()})
     if mode == "open":
@@ -5182,7 +5198,7 @@ def _recap_text(ts: list[dict], period: str) -> str:
         if by.get(cat):
             lines.append(f"\n{V.CATEGORIES[cat]['label']}")
             for t in sorted(by[cat], key=lambda t: t["completed_at"]):
-                note = re.sub(r"^\s*(⏱️)?\s*[\d.]+ min on the focus timer\.\s*", "", t.get("proof_note") or "")
+                note = re.sub(TIMER_NOTE_RE, "", t.get("proof_note") or "")
                 note = note.strip().split("\n")[0][:90]
                 lines.append(f"• {t['title']} ({parse_dt(t['completed_at']):%a}, {min_label(t.get('minutes') or 0)})"
                              + (f" — {note}" if note and not note.lower().startswith(t['title'].lower()) else ""))
@@ -5234,7 +5250,7 @@ def render_scrapbook(state: dict) -> None:
             st.markdown(f"**{html.escape(t['title'])}**  \n<span class='m' style='color:#8b909c;font-size:.85rem'>"
                         f"{d:%a %b} {d.day} · {min_label(t.get('minutes') or 0)} · +{t.get('reward', 0)}"
                         + (" · " + " · ".join(badges) if badges else "") + "</span>", unsafe_allow_html=True)
-            note = re.sub(r"^\s*(⏱️)?\s*[\d.]+ min on the focus timer\.\s*", "", t.get("proof_note") or "").strip()
+            note = re.sub(TIMER_NOTE_RE, "", t.get("proof_note") or "").strip()
             if note:
                 st.caption(note[:180] + ("…" if len(note) > 180 else ""))
             if t.get("proof_link"):
@@ -6003,7 +6019,9 @@ def _timer_ring(state: dict, tm: dict, big: bool = False) -> None:
     sprite = carart.car_topdown(CAR_BY_ID.get(mid, CAR_BY_ID["civic_si"])["body"], car["color"], car["number"],
                                 G.effective(car["parts"], mid))
     ext = int(tm.get("ext", 0))
-    label = html.escape(f"{trk['name'].upper()} · {trk['km']:.3f} KM · {trk['series']}")
+    prev_ = [p for p in outings(state, t_) if p] if (t_ := next((x for x in state["tasks"] if x["id"] == tm["task_id"]), None)) else []
+    out_n, banked = (len(prev_) + 1, sum(prev_)) if prev_ else (0, 0.0)  # 🏎️ outing 2+: time already banked on this task
+    label = html.escape(f"{trk['name'].upper()} · {trk['km']:.3f} KM · {trk['series']}" + (f" · OUTING {out_n}" if out_n else ""))
     pop, hook = _popout_click_js(), _timer_hook_js(_timer_js_state(state, tm))
     _embed(f"""
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@700&display=swap" rel="stylesheet">
@@ -6055,6 +6073,7 @@ try{{if(navigator.audioSession)navigator.audioSession.type='ambient';
  if(parent.navigator.audioSession)parent.navigator.audioSession.type='ambient';}}catch(e){{}}
 const S={start_ms},PT={pt},SK={sk},PA={pa},W={work},B={brk},T={T},WALL={wall},LIM={limit},ACC='{acc}';
 const OFF=(d=>Math.abs(d)>120000?Math.round(d/900000)*900000:0)({int(time.time() // 60 * 60000)}-Date.now());  // a device clock set wrong by hours (e.g. the wrong time zone picked) can't skew the timer
+const OUT={out_n},BANK={round(banked)},OUTS='{"in outing 1" if out_n == 2 else f"in outings 1–{out_n - 1}"}';
 const TICKS=[{ticks}],EXT={ext},FL={'true' if tm.get('flow') else 'false'},CHK={int(tm.get('check', 0))};
 const GT={'true' if 'pins' in tm else 'false'},PI={int(tm.get('pins', 0))},PO={int(tm.get('pouts', 0))};
 function finish(){{  // whole-page "you're done" you can catch from across the room: once per session
@@ -6112,7 +6131,9 @@ function ptd(d){{d=((d%L)+L)%L;const a=tr.getPointAtLength(d),b=tr.getPointAtLen
 // a straight lane beside the start/finish line, on whichever side has more room (real pit lanes don't hug corners)
 const tx=Math.cos(a0),ty=Math.sin(a0);
 function room(sg){{let m=1e9;for(let i=0;i<120;i++){{const p=tr.getPointAtLength(L*i/120);
- for(let t=-E*.4;t<=E*.4;t+=E*.2){{const lx=p0.x+t*tx+sg*O*nx,ly=p0.y+t*ty+sg*O*ny;m=Math.min(m,Math.hypot(p.x-lx,p.y-ly));}}}}return m;}}
+ for(let t=-E;t<=E;t+=E*.2){{const lx=p0.x+t*tx+sg*O*nx,ly=p0.y+t*ty+sg*O*ny;
+  if(lx<4||lx>296||ly<16||ly>140)return -1;  // off the picture, or into the track name: the other side
+  if(Math.abs(t)<=E*.4)m=Math.min(m,Math.hypot(p.x-lx,p.y-ly));}}}}return m;}}
 const SG=room(1)>=room(-1)?1:-1;nx*=SG;ny*=SG;  // nx,ny now point at the pit side
 function lp(t){{const q=ptd(t),w=sm((E-Math.abs(t))/(E*.6));  // on the track at the ends, on the lane in the middle
  return [q[0]+(p0.x+t*tx+O*nx-q[0])*w,q[1]+(p0.y+t*ty+O*ny-q[1])*w];}}
@@ -6184,8 +6205,8 @@ function frame(){{
     s.textContent=e>=CHK?'Still flowing? Tap below to keep going.':'Counting up · check-in at '+CHK+' min · phone face-down';
 }}
   else{{t.textContent=mmss(left);t.style.fill=ACC;trail.style.stroke=ACC;
-    p.textContent=EXT>0?('🌊 Flow · +'+EXT+' min'):stints>1?('Stint '+blk+' of '+stints):'Green flag';
-    s.textContent=Math.round(wd)+' of '+T+' min · phone face-down';}}
+    p.textContent=EXT>0?('🌊 Flow · +'+EXT+' min'):stints>1?('Stint '+blk+' of '+stints+(OUT?' · outing '+OUT:'')):'Green flag';
+    s.textContent=Math.round(wd)+' of '+T+' min'+(OUT&&BANK?' · +'+BANK+' banked '+OUTS:'')+' · phone face-down';}}
   last=PA?'pause':ph;
   if(ph==='done'&&!PA)finish();}}
  requestAnimationFrame(frame);}}
