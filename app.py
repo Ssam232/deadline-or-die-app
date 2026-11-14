@@ -1027,7 +1027,8 @@ def needs_settle(state: dict, n_: datetime) -> bool:
     if DL.habits(state) and (state.get("habits_settled") or "") < y.isoformat():
         return True
     grace = timedelta(minutes=state["settings"].get("grace_minutes", 30))
-    if any(t["status"] == "open" and n_ > parse_dt(t["deadline"]) + grace for t in state.get("tasks", [])):
+    if any(t["status"] == "open" and n_ > parse_dt(t["deadline"]) + grace and not under_the_flag(state, t)
+           for t in state.get("tasks", [])):
         return True
     return any(parse_dt(h["until"]) <= n_ for h in state.get("held", []))
 
@@ -1522,11 +1523,24 @@ SOUNDS = {
 }
 
 
+CLUTCH_PROOF_MIN = 30  # 🏁 under the flag: after a timer that crossed the deadline stops, this long to hand in proof
+
+
+def under_the_flag(state: dict, t: dict) -> bool:
+    """🏁 A timer you started on this task before its deadline is still running (or paused): the deadline waits for it,
+    like a car that crossed the line before the flag gets to finish its lap. After you stop, CLUTCH_PROOF_MIN to prove it."""
+    grace = timedelta(minutes=state["settings"]["grace_minutes"])
+    tm = state.get("timer")
+    if tm and tm.get("task_id") == t["id"] and parse_dt(tm["start"]) < parse_dt(t["deadline"]) + grace:
+        return True
+    return bool(t.get("clutch_until")) and now() < parse_dt(t["clutch_until"])
+
+
 def process_overdue(state: dict) -> list[str]:
     grace = timedelta(minutes=state["settings"]["grace_minutes"])
     msgs = []
     for t in state["tasks"]:
-        if t["status"] == "open" and now() > parse_dt(t["deadline"]) + grace:
+        if t["status"] == "open" and now() > parse_dt(t["deadline"]) + grace and not under_the_flag(state, t):
             msgs.append(fail_task(state, t, "Missed deadline"))
     return msgs
 
@@ -2008,6 +2022,9 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
     old_level = level_of(state["xp"])
     t.update({"completed_at": at.isoformat(), "proof_note": note.strip(), "proof_link": link.strip(),
               "proof_file": proof_path, "verdict": verdict, "proof_timer": round(fm, 1) if timer_ok else None})
+    if mode == "open" and at > parse_dt(t["deadline"]):  # 🏁 finished under the flag: it counts for its own day
+        t.update(credit_day=parse_dt(t["deadline"]).date().isoformat(), clutch=True)
+    t.pop("clutch_until", None)
     if offs:
         t.update(proof_kind="offscreen", proof_detail=detail.strip()[:200])
     t.pop("prorate", None)
@@ -3600,7 +3617,13 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
                      + f" · +{t['reward']}"
                      + (f" · ⏱️ {fm_:.0f}/{t.get('minutes') or 0}m" if fm_ else ""), key=f"exp_{scope}{t['id']}",
                      expanded=proof_open(f"{scope}open_{t['id']}")):
-        st.caption(f"⏳ {fmt_left(dl - now())} left")
+        if now() > dl and under_the_flag(state, t):
+            st.caption("🏁 Under the flag: the timer started before the deadline, so it isn't late"
+                       + (f". Hand in proof by {parse_dt(t['clutch_until']):%I:%M %p}".replace(" 0", " ")
+                          if t.get("clutch_until") and not state.get("timer") else ". Stop the timer, then hand in proof")
+                       + f" and it counts for {dl:%A}.")
+        else:
+            st.caption(f"⏳ {fmt_left(dl - now())} left")
         render_tags(state, t, scope or "row")
         g = goal_title(state, t.get("goal_id"))
         st.markdown(
@@ -6307,6 +6330,13 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
         state["focus_log"][-1]["flow"] = round(fmin, 1)
         save_state(state)
         drop_msg = (drop_msg + "\n\n" if drop_msg else "") + f"🌊 **Flow bonus +{fb}** for {int(fmin)} extra minutes."
+    grace_ = timedelta(minutes=state["settings"]["grace_minutes"])
+    if t.get("status") == "open" and now() > parse_dt(t["deadline"]) + grace_ and start < parse_dt(t["deadline"]) + grace_:
+        t["clutch_until"] = (now() + timedelta(minutes=CLUTCH_PROOF_MIN)).isoformat()  # 🏁 crossed the line before the flag
+        save_state(state)
+        drop_msg = (drop_msg + "\n\n" if drop_msg else "") + (
+            f"🏁 **Under the flag.** You were on it when the deadline hit, so it isn't late: hand in proof in the next "
+            f"{CLUTCH_PROOF_MIN} min and it counts as on time, for {parse_dt(t['deadline']):%A}.")
     flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
           + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),
           sound=snd, celebrate=bool(drop_msg))

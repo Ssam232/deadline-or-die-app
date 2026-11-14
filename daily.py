@@ -70,7 +70,7 @@ def peek_day(save: dict, d: date) -> dict:
 def finished_on(save: dict, d: date) -> list[dict]:
     key = d.isoformat()
     return [t for t in save.get("tasks", []) if t.get("status") in ("done", "redeemed")
-            and (t.get("completed_at") or "")[:10] == key]
+            and (t.get("credit_day") or (t.get("completed_at") or "")[:10]) == key]  # 🏁 a clutch counts for its own day
 
 
 def mission(save: dict, d: date) -> list[dict]:
@@ -105,7 +105,7 @@ def slice_logged(save: dict, tid: str, d: date) -> float:
 
 def slice_done(save: dict, sl: dict, d: date) -> bool:
     t = next((t for t in save.get("tasks", []) if t["id"] == sl["tid"]), None)
-    if t and t.get("status") in ("done", "redeemed") and (t.get("completed_at") or "")[:10] == d.isoformat():
+    if t and t.get("status") in ("done", "redeemed") and (t.get("credit_day") or (t.get("completed_at") or "")[:10]) == d.isoformat():
         return True
     return slice_logged(save, sl["tid"], d) >= sl["min"]
 
@@ -284,7 +284,10 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
     since = date.fromisoformat(save.setdefault("daily_since", today.isoformat()))
     d = max(since, today - timedelta(days=SETTLE_LOOKBACK_DAYS))
     charged, forgiven = 0, 0
+    tm = save.get("timer")
     while d < today:
+        if tm and (tm.get("start") or "")[:10] <= d.isoformat():
+            break  # 🏁 a session that started that day is still running: the day settles once it's logged
         e = day(save, d)
         if not e.get("settled"):
             if not is_rest(save, d) and not e.get("slices_settled") and slices(save, d):
