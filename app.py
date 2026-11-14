@@ -5639,7 +5639,9 @@ def _timer_controls(state: dict) -> None:
         st.rerun()
     if st.session_state.pop("_tm_redraw", False):
         st.rerun(scope="app")  # the clock lives outside these controls: redraw it with the new times
-    if not tm.get("flow") and not gate_:  # at a pit gate, the Pit in / Pit out button is the one to press
+    _nb = math.ceil(tm["planned"] / work) if work and brk else 1  # stints in this session
+    _more_brk = work and brk and (ph == "break" or int(eff // (work + brk)) < _nb - 1)  # a break now or still ahead
+    if not tm.get("flow") and not gate_ and _more_brk:  # at a pit gate, the Pit in / Pit out button is the one to press
         c2.button("☕ Skip break", use_container_width=True, key="tm_skip", on_click=_skip_break, args=(state,),
                   help="Jump straight to the next work block (works whenever you're on a break).")
     wd_now = PM.work_done(eff, work, brk)
@@ -6148,16 +6150,22 @@ for(let k=-2;k<2;k++)for(let j=0;j<2;j++){{const r=document.createElementNS(NS,'
 sf.setAttribute('transform','translate('+p0.x+','+p0.y+') rotate('+(a0*180/Math.PI)+')');
 // 🔧 pit lane: peels off just before the start/finish line, the box sits beside the line, rejoins just after.
 // Every stint is one lap ending at the line, so the car drives into the pit for its break and back out after.
-const O=10,E=Math.min(28,L*.075),ST=!!(W&&B&&!FL);
+const ST=!!(W&&B&&!FL),E0=Math.min(28,L*.075);
 function sm(t){{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);}}
 function ptd(d){{d=((d%L)+L)%L;const a=tr.getPointAtLength(d),b=tr.getPointAtLength((d+1)%L);return [a.x,a.y,Math.atan2(b.y-a.y,b.x-a.x)];}}
-// a straight lane beside the start/finish line, on whichever side has more room (real pit lanes don't hug corners)
+// a straight lane beside the start/finish line: try each side, a few distances and lengths, keep the one with the most
+// clear space around it (real pit lanes don't sit on top of another part of the track)
 const tx=Math.cos(a0),ty=Math.sin(a0);
-function room(sg){{let m=1e9;for(let i=0;i<120;i++){{const p=tr.getPointAtLength(L*i/120);
- for(let t=-E;t<=E;t+=E*.2){{const lx=p0.x+t*tx+sg*O*nx,ly=p0.y+t*ty+sg*O*ny;
-  if(lx<4||lx>296||ly<16||ly>140)return -1;  // off the picture, or into the track name: the other side
-  if(Math.abs(t)<=E*.4)m=Math.min(m,Math.hypot(p.x-lx,p.y-ly));}}}}return m;}}
-const SG=room(1)>=room(-1)?1:-1;nx*=SG;ny*=SG;  // nx,ny now point at the pit side
+function room(sg,o,e){{let m=1e9;for(let i=0;i<240;i++){{const d_=L*i/240;
+ if(d_<e*1.6||d_>L-e*1.6)continue;  // the straight the lane runs beside isn't in the way: other parts of the track are
+ const p=tr.getPointAtLength(d_);
+ for(let t=-e;t<=e;t+=e*.2){{const lx=p0.x+t*tx+sg*o*nx,ly=p0.y+t*ty+sg*o*ny;
+  if(lx<3||lx>297||ly<13||ly>150)return -1;  // off the picture, or into the track name / clock
+  if(Math.abs(t)<=e*.4)m=Math.min(m,Math.hypot(p.x-lx,p.y-ly));}}}}return m;}}
+let best=[-2,1,10,E0];
+for(const e of [E0,E0*.7,E0*.5])for(const o of [10,8,12,14])for(const sg of [1,-1]){{const r=room(sg,o,e);
+ if(r>best[0]+.5)best=[r,sg,o,e];}}
+const SG=best[1],O=best[2],E=best[3];nx*=SG;ny*=SG;  // nx,ny now point at the pit side
 function lp(t){{const q=ptd(t),w=sm((E-Math.abs(t))/(E*.6));  // on the track at the ends, on the lane in the middle
  return [q[0]+(p0.x+t*tx+O*nx-q[0])*w,q[1]+(p0.y+t*ty+O*ny-q[1])*w];}}
 function lq(t){{const a=lp(t),b=lp(t+.8);return [a[0],a[1],Math.atan2(b[1]-a[1],b[0]-a[0])];}}
