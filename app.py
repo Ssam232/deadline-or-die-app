@@ -4667,7 +4667,7 @@ def render_todo(state: dict) -> None:
                 st.caption("Nothing here. Park anything without a deadline: it'll be offered when you plan your day.")
             qual = daily.peek_day(state, now().date()).get("qualified")
             for d_ in open_:
-                c1, c2, c3 = st.columns([6, 1.6, .8], vertical_alignment="center")
+                c1, c2, ce, c3 = st.columns([6, 1.6, .8, .8], vertical_alignment="center")
                 if c1.checkbox(d_["title"] + (f" · {min_label(d_['minutes'])}" if d_.get("minutes") else ""),
                                key=f"todo_ck_{d_['id']}"):
                     d_.update(done=True, done_at=now().isoformat())
@@ -4683,6 +4683,17 @@ def render_todo(state: dict) -> None:
                     save_state(state)
                     flash(f"➕ **{t['title']}** is a task now, due tonight" + (" · in today's mission." if qual else "."))
                     st.rerun()
+                with ce.popover("✏️", help="Edit the text", use_container_width=True):
+                    with st.form(f"todo_ed_{d_['id']}", border=False):
+                        new_ = st.text_input("Edit", value=d_["title"] + (f" {d_['minutes']}m" if d_.get("minutes") else ""),
+                                             key=f"todo_edt_{d_['id']}", label_visibility="collapsed",
+                                             help="Add or change a length with “45m”")
+                        if st.form_submit_button("Save", use_container_width=True) and new_.strip():
+                            p_ = Q.parse(new_.strip(), now())
+                            d_["title"] = (p_.get("title") or new_).strip()
+                            d_["minutes"] = p_.get("minutes") if re.search(r"\d\s*(m|min|h|hr)", new_, re.I) else None
+                            save_state(state)
+                            st.rerun()
                 if c3.button("✕", key=f"todo_x_{d_['id']}", help="Remove (no penalty)"):
                     state["todos"] = [x for x in todos if x["id"] != d_["id"]]
                     save_state(state)
