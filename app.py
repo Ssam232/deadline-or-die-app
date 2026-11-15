@@ -4302,7 +4302,16 @@ def render_commitments(state: dict) -> None:
                                     + (f" · −{r['cost']}" if r.get("cost") else " · free"))
                         continue
                     st.markdown(head)
-                    if t.date() == n_.date() and opens <= n_ <= end:
+                    if CM.proof(c) == "tick" and opens <= n_ <= CM.closes(state, c, t):  # ✅ a checklist
+                        st.caption("Tick it when you're there, or once you're home (until your day ends)."
+                                   + (" 🌱 Warm-up: a miss is free." if CM.warming_up(c, t.date()) else ""))
+                        with st.container(horizontal=True, key=f"cmtk_{c['id']}_{t.date()}"):
+                            if st.button("✅ Went · on time", key=f"cmok_{c['id']}_{t.date()}", type="primary"):
+                                _cm_done(*CM.check_in(state, c, n_, "tick", None, bank, lf, late=False, day=t.date()))
+                            if st.button("⏰ Went · late", key=f"cmlt_{c['id']}_{t.date()}",
+                                         help="Half pay. Once a month it keeps the streak."):
+                                _cm_done(*CM.check_in(state, c, n_, "tick", None, bank, lf, late=True, day=t.date()))
+                    elif CM.proof(c) != "tick" and t.date() == n_.date() and opens <= n_ <= end:
                         late = n_ > on_time
                         st.caption(("⏰ Late now: half pay." if late else
                                     f"Check-in is open · on time until {on_time:%I:%M %p}".replace(" 0", " ")))
@@ -4353,6 +4362,9 @@ def render_commitments(state: dict) -> None:
                         if st.button("👋 Tap out", key=f"cmout_{c['id']}", disabled=stayed < c["stay"],
                                      help=None if stayed >= c["stay"] else f"Counts after {hmin(c['stay'])}"):
                             _cm_done(*CM.check_out(state, c, n_, bank, lf))
+                    elif today_ok and need and CM.proof(c) == "tick":  # ✅ a checklist
+                        if st.button("✅ Went today", key=f"cmqok_{c['id']}", type="primary"):
+                            _cm_done(*CM.check_in(state, c, n_, "tick", None, bank, lf))
                     elif today_ok and need:
                         fix = _geo("📍 I'm here", f"cmqgeo_{c['id']}_{n_.date()}")
                         if fix:
@@ -4412,8 +4424,8 @@ def render_commitments_manage(state: dict) -> None:
                 CM.add(state, name, kind, stakes, n_, days=dsel, time=t_.strftime("%H:%M"), minutes=mins, on=on,
                        per_week=per, stay=stay, travel=travel)
                 save_state(state)
-                flash(f"📍 Added **{name.strip()}**. Drop a pin the first time you're there, so check-ins can be "
-                      "verified by location.")
+                flash(f"📍 Added **{name.strip()}**. Tick it off each time you go (or switch it to location check-ins "
+                      "under Add & manage).")
                 st.rerun(scope="app")
     for c in CM.items(state):
         got, tot = CM.rate(state, c, n_.date())
@@ -4422,10 +4434,16 @@ def render_commitments_manage(state: dict) -> None:
         with st.container(border=True, key=f"cmm_{c['id']}"):
             st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {when}"
                         + (f" · {got}/{tot} shown up" if tot else "")
-                        + (" · 📌 pinned" if c.get("pin") else " · no pin yet"))
+                        + ("" if CM.proof(c) == "tick" else " · 📌 pinned" if c.get("pin") else " · no pin yet"))
+            pf = st.segmented_control("Check-in", list(CM.PROOF), default=CM.proof(c), format_func=CM.PROOF.get,
+                                      key=f"cmpf_{c['id']}", label_visibility="collapsed")
+            if pf and pf != CM.proof(c):
+                c["proof"] = pf
+                save_state(state)
+                st.rerun(scope="app")
             c1, c2, c3 = st.columns(3)
             with c1:
-                fix = _geo("📌 Pin = here" if not c.get("pin") else "📌 Re-pin here", f"cmpin_{c['id']}", alt=True)
+                fix = None if CM.proof(c) == "tick" else _geo("📌 Pin = here" if not c.get("pin") else "📌 Re-pin here", f"cmpin_{c['id']}", alt=True)
                 if fix and not fix.get("err"):
                     c["pin"] = {"lat": round(fix["lat"], 5), "lon": round(fix["lon"], 5)}
                     save_state(state)

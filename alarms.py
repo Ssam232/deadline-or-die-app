@@ -318,9 +318,18 @@ def _commitments(save: dict, now: datetime) -> list[dict]:
                 if c.get("travel"):
                     out.append(_alarm(("cm", c["id"], d, "leave"), lv, f"🚗 Leave now: {c['name']}",
                                       f"It starts at {t12}. {c['travel']} min to get there.", 4, ["red_car"], open_))
-                out.append(_alarm(("cm", c["id"], d, "in"), st_ + timedelta(minutes=5), f"📍 Check in: {c['name']}",
-                                  f"Tap “I'm here” in the app. On time until {st_ + timedelta(minutes=C.ON_TIME_MIN):%I:%M %p}."
-                                  .replace(" 0", " "), 5 if stakes == "red" else 4, ["round_pushpin"], open_))
+                if C.proof(c) == "tick":  # ✅ a checklist: a nudge at the start, and one before the day closes
+                    out.append(_alarm(("cm", c["id"], d, "in"), st_ + timedelta(minutes=5), f"✅ {c['name']}",
+                                      "There? Tick it off in the app while you remember.", 4, ["white_check_mark"], open_))
+                    cl = C.closes(save, c, st_) - timedelta(minutes=45)
+                    if cl > st_ + timedelta(minutes=30):
+                        out.append(_alarm(("cm", c["id"], d, "tick"), cl, f"✅ Did you go to {c['name']}?",
+                                          "Tick it before your day ends, or it counts as a no-show.",
+                                          5 if stakes == "red" else 4, ["white_check_mark"], open_))
+                else:
+                    out.append(_alarm(("cm", c["id"], d, "in"), st_ + timedelta(minutes=5), f"📍 Check in: {c['name']}",
+                                      f"Tap “I'm here” in the app. On time until {st_ + timedelta(minutes=C.ON_TIME_MIN):%I:%M %p}."
+                                      .replace(" 0", " "), 5 if stakes == "red" else 4, ["round_pushpin"], open_))
             elif c["kind"] == "quota" and not rest and (not c.get("days") or d.weekday() in c["days"]):
                 need, left = C.quota_pace(save, c, d)
                 behind = need > 0 and need >= left

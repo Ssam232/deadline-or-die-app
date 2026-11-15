@@ -13,7 +13,11 @@ Stakes, per commitment:
   yellow  🟡  normal: a flake costs 1×
   green   🟢  bonus only: coins if you go, nothing if you don't (fun plans never turn into chores)
 
-Proof is a check-in. With a pin dropped at the venue, the phone's location is compared to it right then: only the
+Check-in, two ways (per commitment):
+  tick  ✅  the default: a checklist. Tick "went · on time" or "went · late" any time from 20 min before it starts
+            until your day ends (so you can tick it once you're home). Honour system.
+  pin   📍  location or photo, as below.
+Proof by pin: with a pin dropped at the venue, the phone's location is compared to it right then: only the
 distance is kept, never your coordinates. No pin, or no location: a photo works. Cancelling 3+ h ahead with a reason
 is free (3 a month); later than that costs half. A flake (no check-in, no notice) costs and resets the streak.
 Everything that costs or pays scales with your level factor, so it never gets easier the better you get.
@@ -38,6 +42,21 @@ LATE_FORGIVE_DAYS = 30    # one late check-in in this window keeps the streak
 PIN_RADIUS_M = 250
 STAY_DEFAULT = 120        # quota visits: minutes you have to stay (0 = the tap-in counts)
 WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+PROOF = {"tick": "✅ Just tick it", "pin": "📍 Location or photo"}
+
+
+def proof(c: dict) -> str:
+    return c.get("proof") if c.get("proof") in PROOF else "tick"
+
+
+def closes(save: dict, c: dict, start: datetime) -> datetime:
+    """When this slot can no longer be checked in (and a no-show settles): when it ends, or, for a ✅ tick commitment,
+    when your day ends (midnight, or the 🌙 Day-ends-at hour)."""
+    end = window(c, start)[2]
+    if proof(c) != "tick":
+        return end
+    eod = datetime.combine(start.date() + timedelta(days=1), datetime.min.time(), start.tzinfo)
+    return max(end, eod + timedelta(hours=max(0, min(3, int((save.get("settings") or {}).get("day_end") or 0)))))
 
 
 def items(save: dict, active_only: bool = True) -> list[dict]:
@@ -147,9 +166,11 @@ def _streak_after(c: dict, status: str, when: datetime) -> None:
     c["best"] = max(int(c.get("best", 0)), int(c.get("streak", 0)))
 
 
-def check_in(save: dict, c: dict, now: datetime, how: str, dist: float | None, bank, lf: float) -> tuple[bool, str]:
-    """📍 For weekly / one-off: on time or late (half pay). For quotas: tap in (and the stay clock starts)."""
-    d = now.date()
+def check_in(save: dict, c: dict, now: datetime, how: str, dist: float | None, bank, lf: float,
+             late: bool | None = None, day: date | None = None) -> tuple[bool, str]:
+    """📍 For weekly / one-off: on time or late (half pay). For quotas: tap in (and the stay clock starts).
+    ✅ A tick says itself whether you were on time (late=…), and can be for a slot earlier today (day=…)."""
+    d = day or now.date()
     if c["kind"] == "quota":
         r = rec(save, c["id"], d) or {}
         if r.get("status") in ("in", "visit"):
@@ -157,7 +178,7 @@ def check_in(save: dict, c: dict, now: datetime, how: str, dist: float | None, b
         if c.get("days") and d.weekday() not in c["days"]:
             return False, f"{c['name']} only counts on {', '.join(WD[i] for i in c['days'])}."
         _set(save, c["id"], d, status="in", at=now.isoformat(), how=how, dist=dist)
-        if not int(c.get("stay") or 0):
+        if not int(c.get("stay") or 0) or how == "tick":  # ✅ a tick counts the visit straight away
             return check_out(save, c, now, bank, lf)
         return True, f"📍 Checked in at {c['name']}. Stay {c['stay']} min and tap out to count the visit."
     start = start_on(c, d, now.tzinfo)
@@ -169,9 +190,9 @@ def check_in(save: dict, c: dict, now: datetime, how: str, dist: float | None, b
         return False, f"Already {r['status']} for today."
     if now < opens:
         return False, f"Check-in opens at {opens:%I:%M %p}".replace(" 0", " ") + "."
-    if now > end:
+    if now > closes(save, c, start):
         return False, "It's over: too late to check in."
-    status = "attended" if now <= on_time else "late"
+    status = ("late" if late else "attended") if late is not None else "attended" if now <= on_time else "late"
     pay = round(STAKES[c["stakes"]]["pay"] * lf * (1 if status == "attended" else 0.5))
     _set(save, c["id"], d, status=status, at=now.isoformat(), how=how, dist=dist, paid=pay)
     _streak_after(c, status, now)
@@ -189,7 +210,7 @@ def check_out(save: dict, c: dict, now: datetime, bank, lf: float) -> tuple[bool
     if r.get("status") != "in":
         return False, "Not checked in."
     stayed = (now - datetime.fromisoformat(r["at"])).total_seconds() / 60
-    need = int(c.get("stay") or 0)
+    need = 0 if r.get("how") == "tick" else int(c.get("stay") or 0)
     if stayed < need:
         return False, f"{stayed:.0f} of {need} min so far: stay a bit longer for it to count."
     pay = round(STAKES[c["stakes"]]["pay"] * lf)
@@ -254,7 +275,7 @@ def settle(save: dict, now: datetime, bank, lf: float) -> list[str]:
             while d <= now.date():
                 st_ = start_on(c, d, now.tzinfo)
                 if st_ and st_ >= made:
-                    _, _, end = window(c, st_)
+                    end = closes(save, c, st_)  # ✅ tick commitments stay open until your day ends
                     if last < end <= now and not (rec(save, c["id"], d) or {}).get("status") and warming_up(c, d):
                         _set(save, c["id"], d, status="warmup", at=end.isoformat())  # 🌱 doesn't count yet
                     elif last < end <= now and not (rec(save, c["id"], d) or {}).get("status"):
@@ -309,7 +330,7 @@ def upcoming(save: dict, now: datetime, days: int = 7) -> list[tuple[dict, datet
         for i in range(days + 1):
             d = now.date() + timedelta(days=i)
             st_ = start_on(c, d, now.tzinfo)
-            if st_ and window(c, st_)[2] >= now:
+            if st_ and closes(save, c, st_) >= now:
                 out.append((c, st_))
     return sorted(out, key=lambda x: x[1])
 
