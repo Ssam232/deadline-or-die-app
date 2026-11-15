@@ -3849,7 +3849,9 @@ def render_today(state: dict) -> None:
                 max(0, x["min"] - daily.slice_logged(state, x["tid"], gd_)) for x in sl_ if x not in sl_ok)
             segs = "".join(f"<i class='{'ok' if t['status'] in ('done', 'redeemed') else 'bad' if t['status'] != 'open' else ''}'>"
                            "</i>" for t in m) + "".join(f"<i class='{'ok' if x in sl_ok else ''}'></i>" for x in sl_)
-            pills = [f"🔥 <b>{stt['day_streak']}</b>-day streak" + ("" if stt["done_today"] else " · +1 on your first finish")]
+            act_ = CM.active_on(state, gd_)  # 🏃 showing up for a real session counts as activity
+            pills = [f"🔥 <b>{stt['day_streak']}</b>-day streak" + ("" if stt["done_today"] else
+                     f" · 🏃 {html.escape(act_[0]['name'])} counts today" if act_ else " · +1 on your first finish")]
             if stt["start_at"]:
                 pills.append(f"🚦 Start <b>{datetime.strptime(stt['start_at'], '%H:%M'):%I:%M %p}</b>".replace("<b>0", "<b>"))
             pills.append(f"⏱️ <b>{focus_today(state)}</b> min focused")
@@ -3925,7 +3927,7 @@ def render_today(state: dict) -> None:
                     st.rerun()
             if (m or sl_) and len(done) == len(m) and len(sl_ok) == len(sl_):
                 st.success("Mission complete. Anything else today is pure bonus. 🏆")
-            elif not stt["done_today"] and not daily.slice_worked(state, gd_) and n_.hour >= 18 \
+            elif not stt["done_today"] and not daily.slice_worked(state, gd_) and not act_ and n_.hour >= 18 \
                     and n_.weekday() not in daily.WEEKEND:
                 st.warning(f"⚠️ Zero finishes so far. Midnight = −{c['zero_day_penalty']} coins and your day streak dies. "
                            "Do the smallest one now.")
@@ -4435,6 +4437,13 @@ def render_commitments_manage(state: dict) -> None:
             st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {when}"
                         + (f" · {got}/{tot} shown up" if tot else "")
                         + ("" if CM.proof(c) == "tick" else " · 📌 pinned" if c.get("pin") else " · no pin yet"))
+            ct = st.toggle("🏃 Counts as an activity", value=CM.counts(c), key=f"cmct_{c['id']}",
+                           help="On: showing up keeps the day from being a zero day (a shift, training, the gym). "
+                                "Off: it's only attendance, and the day still needs real work (the office).")
+            if ct != CM.counts(c):
+                c["counts"] = ct
+                save_state(state)
+                st.rerun(scope="app")
             pf = st.segmented_control("Check-in", list(CM.PROOF), default=CM.proof(c), format_func=CM.PROOF.get,
                                       key=f"cmpf_{c['id']}", label_visibility="collapsed")
             if pf and pf != CM.proof(c):

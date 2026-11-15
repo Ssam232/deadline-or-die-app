@@ -316,11 +316,24 @@ def settle(save: dict, now: datetime, bank, lf: float) -> list[str]:
     return msgs
 
 
+def counts(c: dict) -> bool:
+    """🏃 Does showing up count as an activity for the day (keeps it from being a zero day)? Real sessions do by
+    default (a shift, coaching, taekwondo, the gym); a weekly quota like "the office 3×" doesn't: being at a desk
+    means nothing until actual work happens. Switchable per commitment."""
+    return bool(c["counts"]) if "counts" in c else c.get("kind") != "quota"
+
+
+def active_on(save: dict, d: date) -> list[dict]:
+    """The commitments you showed up for on d that count as an activity."""
+    iso, by = d.isoformat(), {c["id"]: c for c in save.get("commitments", [])}
+    return [by[k.split("|")[0]] for k, r in save.get("attendance", {}).items()
+            if k.endswith("|" + iso) and r.get("status") in ("attended", "late", "visit")
+            and k.split("|")[0] in by and counts(by[k.split("|")[0]])]
+
+
 def attended_on(save: dict, d: date) -> bool:
-    """Showing up counts as a finish for the day streak (not toward qualifying)."""
-    iso = d.isoformat()
-    return any(k.endswith("|" + iso) and r.get("status") in ("attended", "late", "visit")
-               for k, r in save.get("attendance", {}).items())
+    """Showing up (for a commitment that counts as an activity) is a finish for the day streak (not toward qualifying)."""
+    return bool(active_on(save, d))
 
 
 def upcoming(save: dict, now: datetime, days: int = 7) -> list[tuple[dict, datetime]]:
