@@ -1,0 +1,56 @@
+{
+ "added": "2026-11-16",
+ "papers": [
+  {
+   "doi": "10.1161/JAHA.117.006416",
+   "title": "Exercise Training Reveals Inflexibility of the Diaphragm in an Animal Model of Patients With Obesity-Driven Heart Failure With a Preserved Ejection Fraction",
+   "tags": [
+    "heart-diaphragm",
+    "exercise-obese-muscle",
+    "remodeling"
+   ],
+   "species": "rat",
+   "sex": "male",
+   "type": "study",
+   "level": "core"
+  },
+  {
+   "doi": "10.1371/journal.pone.0011494",
+   "title": "Upregulation of PPARβ/δ Is Associated with Structural and Functional Changes in the Type I Diabetes Rat Diaphragm",
+   "tags": [
+    "strip-testing",
+    "remodeling"
+   ],
+   "species": "rat",
+   "sex": "male",
+   "type": "study",
+   "level": "specialized",
+   "before": "Artificial Selection for Whole Animal Low Intrinsic Aerobic Capacity Co-Segregates with Hypoxia-Induced Cardiac Pump Failure"
+  },
+  {
+   "doi": "10.3389/fcvm.2021.751864",
+   "title": "Influence of Intrinsic Aerobic Exercise Capacity and Sex on Cardiac Injury Following Acute Myocardial Ischemia and Reperfusion",
+   "tags": [
+    "hcr-lcr"
+   ],
+   "species": "rat",
+   "sex": "both",
+   "type": "study",
+   "level": "specialized",
+   "before": "Exercise Training Attenuates Obesity-Induced Skeletal Muscle Remodeling and Mitochondria-Mediated Apoptosis in the Skeletal Muscle."
+  },
+  {
+   "doi": "10.1113/EP092015",
+   "title": "High-intensity interval training improves cardiomyocyte contractile function and myofilament sensitivity to intracellular Ca2+ in obese rats",
+   "tags": [
+    "exercise-obese-muscle",
+    "remodeling"
+   ],
+   "species": "rat",
+   "sex": "male",
+   "type": "study",
+   "level": "specialized",
+   "before": "Variation in Intrinsic Aerobic Capacity Reveals Distinct Differences in the Maintenance of Rat Knee Joint Integrity"
+  }
+ ]
+}
