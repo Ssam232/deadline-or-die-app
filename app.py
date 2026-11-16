@@ -2933,6 +2933,20 @@ def render_dailies(state: dict) -> None:
                     else:
                         c3.button("+1", key=f"dl_tap_{h['id']}", use_container_width=True,
                                   on_click=_dl_tap, args=(state, h, today, 1))
+            if rows:  # 🧊 freezes: save a daily's streak from one miss (the miss still costs)
+                fz_, fp_ = state.get("daily_freezes", 0), DL.freeze_price(state)
+                with st.container(horizontal=True, vertical_alignment="center", key="dl_freeze"):
+                    st.caption(f"🧊 Freezes **{fz_}/{DL.FREEZE_MAX}** · each saves your longest daily streak from one "
+                               "miss (the miss is still charged)")
+                    if st.button(f"🧊 Buy · {fp_} 🪙", key="dl_freeze_buy", disabled=fz_ >= DL.FREEZE_MAX,
+                                 help="Price follows your longest daily streak"):
+                        ok_, msg_ = DL.buy_freeze(state, bank)
+                        if ok_:
+                            save_state(state)
+                            flash(msg_)
+                            st.rerun(scope="app")
+                        else:
+                            st.warning(msg_)
             with fold("dl_manage", "⚙️ Manage dailies" if rows else
                       "🔁 Dailies — water, prayers, brushing… (low reward, big penalty)", False) as _fo:
                 if _open(_fo):  # collapsed = not built (faster page, smaller download)

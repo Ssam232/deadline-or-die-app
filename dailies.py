@@ -35,6 +35,26 @@ MAX_CHARGED_DAYS = 3
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 STREAK_BONUS_EVERY, STREAK_BONUS = 7, 15   # every 7 days in a row on one daily: +15
 DAILY_PENALTY_CAP = 60                      # most the dailies can cost you in one day, however many you miss
+# 🧊 Freezes: bought, not earned (your 🛡️ shields stay for the day streak). Hold up to 2. At settle each one saves the
+# streak of a missed daily, longest streak first, but the miss is still charged: the penalty is about the day, the
+# streak is about the habit. Price follows the longest streak you'd be protecting.
+FREEZE_MAX, FREEZE_BASE, FREEZE_PER_DAY, FREEZE_TOP = 2, 30, 4, 250
+
+
+def freeze_price(save: dict) -> int:
+    top = max((h.get("streak", 0) for h in habits(save)), default=0)
+    return min(FREEZE_TOP, FREEZE_BASE + FREEZE_PER_DAY * top)
+
+
+def buy_freeze(save: dict, bank) -> tuple[bool, str]:
+    if save.get("daily_freezes", 0) >= FREEZE_MAX:
+        return False, f"You're holding {FREEZE_MAX} already."
+    p = freeze_price(save)
+    if save.get("coins", 0) < p:
+        return False, f"A freeze costs {p} 🪙."
+    bank(save, -p, "🧊 Daily freeze")
+    save["daily_freezes"] = save.get("daily_freezes", 0) + 1
+    return True, f"🧊 Freeze bought ({save['daily_freezes']}/{FREEZE_MAX}). It'll save your longest daily streak from one miss."
 
 
 def _n(h_or_target) -> int:
@@ -185,6 +205,13 @@ def settle(save: dict, today: date, bank, is_rest) -> list[str]:
         rest = is_rest(save, d)
         if habits(save):  # every day settles; rest / bailout days just waive the misses
             missed, day_total = [], 0
+            to_charge = [h for h in habits(save) if active_on(h, d) and count(save, h["id"], d) < h["target"]
+                         and not rest and h["start"] != d.isoformat() and charged < MAX_CHARGED_DAYS]
+            frozen = set()
+            for h in sorted(to_charge, key=lambda x: -x.get("streak", 0)):  # 🧊 longest streak first
+                if save.get("daily_freezes", 0) > 0 and h.get("streak", 0) > 0:
+                    save["daily_freezes"] -= 1
+                    frozen.add(h["id"])
             for h in habits(save):
                 if not active_on(h, d):
                     continue
@@ -193,14 +220,16 @@ def settle(save: dict, today: date, bank, is_rest) -> list[str]:
                 elif rest or h["start"] == d.isoformat():
                     pass  # rest / pit stop / 🪂 bailout days and the day you added it: a miss is free, streak kept
                 elif charged < MAX_CHARGED_DAYS:
-                    lost = h.get("streak", 0)
-                    h["streak"] = 0
+                    lost = 0 if h["id"] in frozen else h.get("streak", 0)
+                    if h["id"] not in frozen:
+                        h["streak"] = 0
                     hit = min(penalty(h), DAILY_PENALTY_CAP - day_total)
                     if hit > 0:
                         day_total += hit
                         bank(save, -hit, f"🔁 Missed daily: {h['name']} ({d:%a})")
                     missed.append(f"{h['name']} {count(save, h['id'], d)}/{h['target']} → **−{max(hit, 0)}**"
                                   + (f" (streak {lost} lost)" if lost else "")
+                                  + (f" (🧊 freeze saved the {h.get('streak', 0)}-day streak)" if h["id"] in frozen else "")
                                   + (" (capped)" if hit < penalty(h) else ""))
                 else:
                     h["streak"] = 0
