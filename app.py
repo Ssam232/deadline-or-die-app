@@ -2969,7 +2969,11 @@ def render_dailies(state: dict) -> None:
 def _daily_card(state: dict, h: dict, today) -> None:
     """One daily: name, what it's worth, when it runs, and its reminders. Remove lives behind ⋯ (no fat-finger)."""
     ended = h.get("end") == today.isoformat()
-    days = "every day" if len(h["days"]) == 7 else " ".join(DL.WEEKDAYS[i] for i in h["days"])
+    _dn = DL.days_on(h, today)
+    days = "every day" if len(_dn) == 7 else " ".join(DL.WEEKDAYS[i] for i in _dn)
+    _nx = DL.days_on(h, today + timedelta(days=1))
+    if _nx != _dn:  # a change waiting for tomorrow
+        days += " → from tomorrow: " + ("every day" if len(_nx) == 7 else " ".join(DL.WEEKDAYS[i] for i in _nx))
     is_pr = PR.is_prayer_daily(h)
     times = DL.remind_times(h)
     if is_pr:
@@ -2992,6 +2996,16 @@ def _daily_card(state: dict, h: dict, today) -> None:
                     save_state(state)
                     st.rerun(scope="app")
             else:
+                cur_ = DL.days_on(h, today + timedelta(days=1))
+                new_ = st.pills("Days", DL.WEEKDAYS, selection_mode="multi", default=[DL.WEEKDAYS[i] for i in cur_],
+                                key=f"dl_days_{h['id']}")
+                if st.button("🗓️ Save days", key=f"dl_dsave_{h['id']}", use_container_width=True,
+                             disabled=not new_ or sorted(DL.WEEKDAYS.index(x) for x in new_) == cur_,
+                             help="Takes effect tomorrow, so today still counts"):
+                    flash(DL.set_days(state, h["id"], [DL.WEEKDAYS.index(x) for x in new_], today))
+                    save_state(state)
+                    st.rerun(scope="app")
+                st.divider()
                 st.caption("Stops tomorrow; today still counts.")
                 if st.button("🗑 Remove", key=f"dl_rm_{h['id']}", use_container_width=True):
                     DL.remove(state, h["id"], today)

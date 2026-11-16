@@ -98,9 +98,30 @@ def remove(save: dict, hid: str, today: date) -> None:
                 h["end"] = today.isoformat()
 
 
+def days_on(h: dict, d: date) -> list[int]:
+    """The weekdays a daily runs on, as of day d (a change of days applies from the day after it was made)."""
+    nx = h.get("days_next")
+    return nx["days"] if nx and d.isoformat() >= nx["from"] else h["days"]
+
+
+def set_days(save: dict, hid: str, days: list[int], today: date) -> str:
+    """Change which weekdays a daily runs on. Takes effect tomorrow, so today can't be dodged."""
+    h = next(x for x in habits(save) if x["id"] == hid)
+    nx = h.get("days_next")
+    if nx and nx["from"] <= today.isoformat():
+        h["days"] = nx["days"]  # an earlier change already in force: make it the base
+    days = sorted(set(days))
+    if days == h["days"]:
+        h.pop("days_next", None)
+        return "Back to the days it had: nothing changes."
+    h["days_next"] = {"from": (today + timedelta(days=1)).isoformat(), "days": days}
+    names = "every day" if len(days) == 7 else " ".join(WEEKDAYS[i] for i in days)
+    return f"🗓️ **{h['name']}** runs {names} from tomorrow. Today still counts as it was."
+
+
 def active_on(h: dict, d: date) -> bool:
     iso = d.isoformat()
-    return h["start"] <= iso and (not h.get("end") or iso <= h["end"]) and d.weekday() in h["days"]
+    return h["start"] <= iso and (not h.get("end") or iso <= h["end"]) and d.weekday() in days_on(h, d)
 
 
 def log(save: dict, d: date) -> dict:
