@@ -63,24 +63,37 @@ LOSE_PHRASES = ["on the brakes into turn 1", "with more traction out of the hair
 
 
 def narrate(history: list[list[float]], names: list[str], you_idx: int, laps: int, track: str,
-            dnf_tick: int | None, rng: random.Random) -> list[tuple[int, str]]:
-    ticks = len(history)
+            dnf_tick: int | None, rng: random.Random, ticks: int | None = None,
+            fin: list | None = None) -> list[tuple[int, str]]:
+    """ticks = the scheduled race length (the leader crosses the line on its last tick); the history may run a little
+    longer while the rest of the field comes home. fin = when each car crossed (None = didn't)."""
+    total = len(history)
+    ticks = ticks or total
+    fin = fin or [None] * len(names)
     per_lap = max(1, ticks // laps)
     out = [(0, f"🚦 Lights out at {track}! {len(names)} cars, {laps} laps.")]
 
-    def order(i):
-        return sorted(range(len(names)), key=lambda k: history[i][k], reverse=True)
+    def order(i):  # by distance; cars already home keep the order they crossed in
+        return sorted(range(len(names)), key=lambda k: (-history[i][k], fin[k] if fin[k] is not None else 1e9))
 
     first = order(0)
     p = first.index(you_idx) + 1
     out.append((1, f"Great launch — P{p} into turn 1!" if p <= 2 else f"Bogged the start — P{p} after turn 1."))
-    prev, prev_leader, lines = first, first[0], []
-    for i in range(1, ticks):
+    prev, prev_leader, lines, flag, home = first, first[0], [], None, []
+    for i in range(1, total):
         if dnf_tick is not None and i == dnf_tick:
             out.append((i, f"💥 Lap {i // per_lap + 1}: smoke pouring from your car — it's over."))
             break
         cur = order(i)
         lap = min(laps, i // per_lap + 1)
+        if i == ticks - 1:
+            w = "YOU" if cur[0] == you_idx else names[cur[0]]
+            flag = (i, f"🏁 {w} take{'s' if w != 'YOU' else ''} the checkered flag!")
+        if i >= ticks:  # the winner's home: the rest are racing to the line
+            if fin[you_idx] is not None and i - 1 < fin[you_idx] <= i and cur[0] != you_idx:
+                home.append((i, f"🏁 You cross the line P{cur.index(you_idx) + 1}."))
+            prev = cur
+            continue
         if cur[0] != prev_leader:
             who = "YOU take" if cur[0] == you_idx else f"{names[cur[0]]} takes"
             lines.append((i, f"Lap {lap}: {who} the lead!"))
@@ -97,10 +110,9 @@ def narrate(history: list[list[float]], names: list[str], you_idx: int, laps: in
         keep = sorted(rng.sample(range(len(lines)), 9))
         lines = [lines[k] for k in keep]
     out += lines
-    if dnf_tick is None:
-        fin = order(ticks - 1)
-        w = "YOU" if fin[0] == you_idx else names[fin[0]]
-        out.append((ticks - 1, f"🏁 {w} take{'s' if w != 'YOU' else ''} the checkered flag!"))
+    if flag:
+        out.append(flag)
+    out += home
     return out
 
 
@@ -134,12 +146,14 @@ def explain(pos: int | str, gap: float, track: str, cond: int, heat: int, eff: d
 
 def replay_html(track: str, history: list[list[float]], names: list[str], colors: list[str], you_idx: int,
                 laps: int, ticker: list[tuple[int, str]], dnf_tick: int | None, seconds: float = 10,
-                start_ms: int | None = None) -> str:
+                start_ms: int | None = None, fin: list | None = None, sched: int | None = None,
+                cars: list[str] | None = None, down: list[int] | None = None) -> str:
     """The race plays against the wall clock from `start_ms`, so a page refresh resumes it (or shows the finish)
     instead of starting over."""
     finish = max(max(row) for row in history) or 1
     data = {"h": [[round(d / finish, 4) for d in row] for row in history], "names": names, "colors": colors,
             "you": you_idx, "laps": laps, "ticker": ticker, "dnf": dnf_tick, "ms": int(seconds * 1000),
+            "fin": fin or [None] * len(names), "down": down or [0] * len(names), "sched": (sched or len(history)) - 1, "cars": cars or [""] * len(names),
             "start": int(start_ms) if start_ms else None, "srv": int(__import__("time").time() // 60 * 60000)}
     path = (TOP_LAYOUTS[(SEASON - 1) % len(TOP_LAYOUTS)][1] if track == TOP_TRACK
             else TRACK_SHAPES.get(track, TRACK_SHAPES["Parking Lot Sprint"]))
@@ -155,7 +169,7 @@ def replay_html(track: str, history: list[list[float]], names: list[str], colors
     <text id="hudpos" x="314" y="35" text-anchor="end" font-size="10.5" font-weight="700" fill="#f5c518"></text>
   </g>
 </svg>
-<div style="flex:0 0 150px;font-size:12px">
+<div style="flex:1 1 170px;min-width:150px;font-size:12px">
   <div id="lap" style="font-weight:700;margin-bottom:4px">LAP 1/{laps}</div><ol id="board" style="margin:0;padding-left:18px"></ol>
 </div></div>
 <div id="tick" style="font-size:12.5px;line-height:1.45;margin-top:6px;max-height:120px;overflow:auto"></div>
@@ -182,15 +196,19 @@ g.appendChild(c);dots.push(c);}});
 const T=D.h.length-1;let shown=0;const tk=document.getElementById('tick');
 function frame(t){{const f=Math.max(0,Math.min(1,(t-st)/D.ms)),x=f*T,i=Math.floor(x),a=x-i,j=Math.min(T,i+1);
  const prog=D.names.map((_,k)=>D.h[i][k]+(D.h[j][k]-D.h[i][k])*a);
- prog.forEach((p,k)=>{{const pt=line.getPointAtLength(((p*D.laps)%1)*L);dots[k].setAttribute('cx',pt.x);dots[k].setAttribute('cy',pt.y);}});
+ const home=k=>D.fin[k]!==null&&x>=D.fin[k];  // crossed the line
+ const ord=prog.map((p,k)=>[home(k)?1-D.down[k]/D.laps:Math.min(p,.99999),k]).sort((u,v)=>v[0]-u[0]||(D.fin[u[1]]??1e9)-(D.fin[v[1]]??1e9));
+ ord.forEach(([p,k],r)=>{{  // finished cars park just past the line, in the order they came home
+  const pt=line.getPointAtLength(home(k)?(8+r*9)%L:((p*D.laps)%1)*L);dots[k].setAttribute('cx',pt.x);dots[k].setAttribute('cy',pt.y);}});
  if(D.dnf!==null&&i>=D.dnf){{dots[D.you].setAttribute('fill','#555');}}
- const ord=prog.map((p,k)=>[p,k]).sort((u,v)=>v[0]-u[0]);
- document.getElementById('board').innerHTML=ord.map(([p,k])=>`<li style="color:${{D.colors[k]}};font-weight:${{k===D.you?800:400}}">${{D.names[k]}}</li>`).join('');
- const lapTxt=f>=1?'🏁 FINISH':`LAP ${{Math.min(D.laps,Math.floor(prog[ord[0][1]]*D.laps)+1)}}/${{D.laps}}`;
- document.getElementById('lap').textContent=lapTxt;document.getElementById('hudlap').textContent=lapTxt;
+ document.getElementById('board').innerHTML=ord.map(([p,k])=>`<li style="color:${{D.colors[k]}};font-weight:${{k===D.you?800:400}};margin-bottom:3px">${{home(k)?'🏁 ':''}}${{D.names[k]}}${{home(k)&&D.down[k]?` <span style="color:#8b909c;font-weight:400">+${{D.down[k]}} lap${{D.down[k]>1?'s':''}}</span>`:''}}`+
+  (D.cars[k]?`<div style="color:#8b909c;font-weight:400;font-size:10.5px;line-height:1.25">${{D.cars[k]}}</div>`:'')+`</li>`).join('');
+ const led=x>=D.sched,out=D.dnf!==null&&i>=D.dnf,me=home(D.you);
  const myPos=ord.findIndex(o=>o[1]===D.you)+1,myLap=Math.min(D.laps,Math.floor(prog[D.you]*D.laps)+1);
- document.getElementById('hudpos').textContent=(D.dnf!==null&&i>=D.dnf)?'YOU: OUT':
-   (f>=1?`YOU: P${{myPos}}`:`YOU: P${{myPos}} · lap ${{myLap}}`)+(myPos<ord.length&&f<1?'':'');
+ const lapTxt=f>=1?'🏁 FINISH':led?'🏁 Leader home':`LAP ${{Math.min(D.laps,Math.floor(prog[ord[0][1]]*D.laps)+1)}}/${{D.laps}}`;
+ document.getElementById('lap').textContent=lapTxt;
+ document.getElementById('hudlap').textContent=out?'OUT':me?'🏁 FINISHED':`LAP ${{myLap}}/${{D.laps}}`;
+ document.getElementById('hudpos').textContent=out?'YOU: OUT':me?`YOU: P${{myPos}}`:`YOU: P${{myPos}}`+(led?' · racing to the line':'');
  while(shown<D.ticker.length&&D.ticker[shown][0]<=x){{const d=document.createElement('div');d.textContent=D.ticker[shown][1];
   tk.prepend(d);shown++;}}
  if(f<1)requestAnimationFrame(frame);else document.getElementById('again').style.display='inline-block';}}

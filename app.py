@@ -141,6 +141,8 @@ CARS = [  # one ladder in rough real-world performance order; Honda cars kept th
      "blurb": "Where every Honda guy starts. Rev it out."},
     {"id": "crx", "name": "Honda CR-X SiR", "base": 42, "cost": 150, "level": 1, "body": "crx",
      "blurb": "Two seats, no weight, all fun. The first cheap thrill."},
+    {"id": "mx5", "name": "Mazda MX-5 Miata", "base": 43, "cost": 180, "level": 1, "body": "s660",
+     "blurb": "Light, simple, rear-drive. The answer to most questions."},
     {"id": "tsx", "name": "Acura TSX", "base": 44, "cost": 250, "level": 2, "body": "tsx",
      "blurb": "The grown-up sport sedan. Quietly quick, and a K24 that loves revs."},
     {"id": "rsx", "name": "Acura RSX Type-S", "base": 47, "cost": 320, "level": 2, "body": "rsx",
@@ -149,42 +151,73 @@ CARS = [  # one ladder in rough real-world performance order; Honda cars kept th
      "blurb": "A mid-engine roadster small enough to park sideways. Grins per horsepower: off the chart."},
     {"id": "integra_r", "name": "Honda Integra Type R (DC2)", "base": 50, "cost": 400, "level": 2, "body": "coupe",
      "blurb": "Hand-ported legend. Earned, not bought."},
+    {"id": "gr86", "name": "Toyota GR86", "base": 52, "cost": 480, "level": 2, "body": "coupe",
+     "blurb": "A flat-four up front, drive at the back, and not much weight between."},
     {"id": "prelude", "name": "Honda Prelude Type SH", "base": 55, "cost": 650, "level": 3, "body": "prelude",
      "blurb": "A front-wheel-drive coupe that steers its own rear end through corners."},
     {"id": "legend", "name": "Acura Legend Coupe", "base": 58, "cost": 800, "level": 3, "body": "legend",
      "blurb": "The car that started Acura. A long-hood V6 grand tourer."},
     {"id": "s2000", "name": "Honda S2000", "base": 60, "cost": 900, "level": 3, "body": "roadster",
      "blurb": "9,000 rpm. Roof down, deadlines done."},
+    {"id": "wrx_sti", "name": "Subaru WRX STI", "base": 62, "cost": 1050, "level": 3, "body": "sedan",
+     "blurb": "A turbo flat-four and all four wheels driven. Rally roots."},
+    {"id": "evo9", "name": "Mitsubishi Lancer Evolution IX", "base": 64, "cost": 1200, "level": 4, "body": "tsx",
+     "blurb": "The other rally sedan. Boost, grip, and a long rivalry."},
     {"id": "integra_s", "name": "Acura Integra Type S", "base": 66, "cost": 1400, "level": 4, "body": "integra_s",
      "blurb": "The Integra name, back with a turbo and three pedals."},
+    {"id": "nissan_z", "name": "Nissan Z", "base": 69, "cost": 1600, "level": 4, "body": "prelude",
+     "blurb": "A twin-turbo V6 in a long-hood, short-deck coupe."},
     {"id": "ctr", "name": "Honda Civic Type R (FL5)", "base": 72, "cost": 1800, "level": 4, "body": "hatch",
      "blurb": "The wing says it all."},
+    {"id": "supra", "name": "Toyota GR Supra", "base": 76, "cost": 2300, "level": 5, "body": "legend",
+     "blurb": "A turbo straight-six and a famous name. Quick out of the box."},
     {"id": "tlx_s", "name": "Acura TLX Type S", "base": 78, "cost": 2600, "level": 5, "body": "tlx",
      "blurb": "Turbo V6 and a rear axle that pushes you through the corner."},
     {"id": "nsx", "name": "Honda NSX (NA1)", "base": 85, "cost": 3500, "level": 5, "body": "super",
      "blurb": "The one that embarrassed Ferrari."},
+    {"id": "gtr", "name": "Nissan GT-R (R35)", "base": 90, "cost": 4200, "level": 6, "body": "tlx",
+     "blurb": "Heavy, all-wheel drive, and faster than it has any right to be."},
     {"id": "acura_nsx", "name": "Acura NSX", "base": 94, "cost": 4800, "level": 6, "body": "super3",
      "blurb": "Three motors, one engine, zero excuses."},
+    {"id": "z06", "name": "Chevrolet Corvette Z06", "base": 97, "cost": 5400, "level": 7, "body": "super2",
+     "blurb": "A mid-engine V8 that revs like a race engine, because it nearly is one."},
     {"id": "nsx_s", "name": "Honda NSX Type S", "base": 100, "cost": 6000, "level": 7, "body": "super2",
      "blurb": "Final form of the road car."},
+    {"id": "gt3rs", "name": "Porsche 911 GT3 RS", "base": 104, "cost": 6800, "level": 7, "body": "super",
+     "blurb": "A road car that's mostly wing. The track-day benchmark."},
     {"id": "ctr_tcr", "name": "Honda Civic Type R TCR", "base": 110, "cost": 8000, "level": 8, "body": "tcr",
      "blurb": "The Type R, built for touring-car racing. Your first real race car."},
     {"id": "nsx_gt3", "name": "Honda NSX GT3 Evo", "base": 120, "cost": 10000, "level": 9, "body": "gt3",
      "blurb": "The race car. Same class as your rig — park it next to it."},
+    {"id": "m4_gt3", "name": "BMW M4 GT3", "base": 122, "cost": 10500, "level": 9, "body": "gt3",
+     "blurb": "A front-engine GT3 car: the same class as the NSX GT3, a different way of getting there."},
+    {"id": "911_gt3r", "name": "Porsche 911 GT3 R", "base": 126, "cost": 11500, "level": 10, "body": "gt3evo",
+     "blurb": "The customer race car half the GT3 grid shows up in."},
     {"id": "nsx_evo22", "name": "Acura NSX GT3 Evo22", "base": 150, "cost": 18000, "level": 12, "body": "gt3evo",
      "blurb": "The final evolution of the GT3 car."},
     {"id": "arx05", "name": "Acura ARX-05", "base": 170, "cost": 28000, "level": 14, "body": "proto05",
      "blurb": "A three-time endurance champion prototype. One step from the top."},
+    {"id": "vseries_r", "name": "Cadillac V-Series.R", "base": 180, "cost": 33000, "level": 15, "body": "proto05",
+     "blurb": "A V8 hybrid prototype. You hear it before you see it."},
+    {"id": "p963", "name": "Porsche 963", "base": 186, "cost": 37000, "level": 15, "body": "proto",
+     "blurb": "The other top-class prototype. The ARX-06's direct rival."},
     {"id": "arx06", "name": "Acura ARX-06", "base": 190, "cost": 40000, "level": 16, "body": "proto",
      "blurb": "A prototype. The top of the ladder — the whole year's work in one car."},
 ]
 CAR_BY_ID = {c["id"]: c for c in CARS}
+for _c in CARS:
+    _c["make"] = _c["name"].split()[0]
+HOUSE_MAKES = ("Honda", "Acura")  # ⭐ prestige is about the Honda/Acura ladder; the others are there to buy and to race
 SHOWROOM_PAINT = {"civic_si": ("#b3122a", 21), "integra_r": ("#f1f0ea", 11), "s2000": ("#1f4aa8", 2),
                   "ctr": ("#e7e6e1", 1), "nsx": ("#c8102e", 8), "nsx_s": ("#e8a43a", 30), "nsx_gt3": ("#f2f2ee", 30),
                   "rsx": ("#f0b323", 5), "tsx": ("#2b4a8a", 14), "integra_s": ("#2f6fb5", 23), "tlx_s": ("#b71c1c", 35),
                   "acura_nsx": ("#c9ccd1", 17), "nsx_evo22": ("#ff6a13", 93), "arx06": ("#d7263d", 6),
                   "crx": ("#c41e2a", 88), "s660": ("#f4c400", 66), "prelude": ("#1d3b6e", 97), "legend": ("#2b2d33", 91),
-                  "ctr_tcr": ("#f2f2ee", 12), "arx05": ("#1a1a1a", 10)}
+                  "ctr_tcr": ("#f2f2ee", 12), "arx05": ("#1a1a1a", 10),
+                  "mx5": ("#a8201a", 4), "gr86": ("#2a6fb0", 86), "wrx_sti": ("#1f3f9c", 7), "evo9": ("#c9ccd1", 9),
+                  "nissan_z": ("#e0b21c", 23), "supra": ("#b8bcc4", 90), "gtr": ("#5a5f6a", 35), "z06": ("#d4611a", 6),
+                  "gt3rs": ("#2f8f4e", 3), "m4_gt3": ("#f2f2ee", 46), "911_gt3r": ("#d8dade", 92),
+                  "vseries_r": ("#c9a227", 2), "p963": ("#f2f2ee", 7)}
 # what each one comes with from the factory, so the showroom shows it at its best stock spec
 SHOWROOM_SPEC = {"ctr_tcr": {"tires": 4, "aero": 4, "brakes": 4, "weight": 3},
                  "arx05": {"tires": 5, "aero": 5, "brakes": 5, "weight": 5}, "civic_si": {"tires": 1}, "integra_r": {"tires": 2, "aero": 1, "brakes": 1},
@@ -1317,9 +1350,10 @@ def car_rating(state: dict) -> float:
 def prestige_ready(state: dict) -> tuple[bool, int, int]:
     """(ready, cars owned, parts maxed): the whole ladder owned and every part tuned to the top."""
     car = state["car"]
-    owned = sum(1 for c in CARS if c["id"] in car.get("owned", []))
+    house = [c for c in CARS if c["make"] in HOUSE_MAKES]
+    owned = sum(1 for c in house if c["id"] in car.get("owned", []))
     maxed = sum(1 for k in PARTS if int(car["parts"].get(k, 0)) >= MAX_PART_LEVEL)
-    return owned == len(CARS) and maxed == len(PARTS), owned, maxed
+    return owned == len(house) and maxed == len(PARTS), owned, maxed
 
 
 def prestige_mult(state: dict) -> float:
@@ -2499,6 +2533,32 @@ def _race_boosts(state: dict) -> float:
     return b + (3 if "strategist" in state.get("crew", []) else 0)
 
 
+TUNES = [(0.0, "tired"), (0.12, "stock"), (0.4, "Stage 1"), (0.68, "Stage 2"), (0.9, "Stage 3"), (1.0001, "overtuned")]
+
+
+def car_ceiling(c: dict) -> float:
+    """The fastest a car can be built: its base plus every part at this chassis's cap (the same rule your car obeys)."""
+    return c["base"] + G.cap(c["id"]) * sum(v["weight"] for v in PARTS.values())
+
+
+def rival_car(rating: float, rng=random) -> tuple[str, str]:
+    """(car, tune) for a rival of this pace, so the grid makes sense: the car is one that can really run that pace
+    under the garage's own rules, and the tune says how far it's been pushed. A small car only beats a big one by
+    being built harder (or the big one being tired)."""
+    fits = [c for c in CARS if c["base"] * 0.86 <= rating <= car_ceiling(c)]
+    if not fits:  # quicker than anything can be built: a factory special on one of the top prototypes
+        return rng.choice([c for c in CARS if c["base"] >= 170])["name"], "works special"
+
+    def frac(c):
+        return (rating - c["base"]) / max(1.0, car_ceiling(c) - c["base"])
+
+    def odds(f):  # mostly cars near their natural pace; a heavily built small car is the rare one on the grid
+        return 0.4 if f < 0 else 1.0 if f < 0.4 else 0.3 if f < 0.68 else 0.08
+    c = rng.choices(fits, weights=[odds(frac(x)) for x in fits])[0]
+    f = frac(c)
+    return c["name"], next(lbl for cut, lbl in TUNES if f < cut)
+
+
 def race_seconds(track: dict) -> int:
     return 8 + 5 * track["laps"]  # 23 s for a 3-lap sprint … 68 s for the 12-lap Ring
 
@@ -2526,23 +2586,49 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
         for r_ in rivals[:2]:
             r_["rating"] = you["rating"] * random.uniform(0.9, 1.06) + random.gauss(0, 5)
     field = [you] + rivals
+    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    you["car"], you["tune"] = CAR_BY_ID[mid]["name"], ""
+    for r_ in rivals:
+        r_["car"], r_["tune"] = rival_car(r_["rating"])
     for f in field:
-        f["dist"], f["dnf"] = 0.0, False
+        f["dist"], f["dnf"], f["fin"], f["goal"] = 0.0, False, None, None
     ticks = track["laps"] * 6
     dnf_risk = 0.004 if car["condition"] < 40 else 0.0
-    history, dnf_tick = [], None
-    for i in range(ticks):
+    history, dnf_tick, line_at = [], None, None
+    # 🏁 a real finish: the leader sets the race distance at the scheduled length; everyone else finishes the next
+    # time they cross the line (so nobody freezes mid-track when the winner's home, and a car that's been lapped is
+    # classified a lap down, like a real race). Places = most laps first, then the order they crossed.
+    i = 0
+    while i < ticks * 2:
         for f in field:
-            if f["dnf"]:
+            if f["dnf"] or f["fin"] is not None:
                 continue
-            if f["you"] and random.random() < dnf_risk:
+            if f["you"] and line_at is None and random.random() < dnf_risk:
                 f["dnf"], dnf_tick = True, i
                 continue
-            f["dist"] += max(0, f["rating"] + random.gauss(0, 9))
+            step = max(0, f["rating"] + random.gauss(0, 9))
+            if line_at is not None and f["dist"] + step >= f["goal"]:
+                f["fin"] = i - 1 + (f["goal"] - f["dist"]) / max(step, 1e-6)  # the moment it crosses, within this tick
+                f["dist"] = f["goal"]
+            else:
+                f["dist"] += step
+        if i == ticks - 1:  # scheduled distance done: the leader's on the line
+            lead = max((f for f in field if not f["dnf"]), key=lambda f: f["dist"])
+            line_at, lead["fin"] = lead["dist"], float(i)
+            lap_len = line_at / track["laps"]
+            for f in field:  # the lap each car is on when the flag falls is its last
+                f["goal"] = line_at if f is lead else min(line_at, (int(f["dist"] // lap_len) + 1) * lap_len)
+                f["laps"] = round(f["goal"] / lap_len)
         history.append([f["dist"] for f in field])
+        i += 1
+        if line_at is not None and all(f["dnf"] or f["fin"] is not None for f in field):
+            break
+    for f in field:  # a straggler still out there when the marshals call it: classified by distance
+        if f["fin"] is None and not f["dnf"]:
+            f["fin"] = i + (f["goal"] - f["dist"]) / max(f["rating"], 1)
 
-    order = sorted(field, key=lambda f: (not f["dnf"], f["dist"]), reverse=True)
-    pos = next(i for i, f in enumerate(order, 1) if f["you"])
+    order = sorted(field, key=lambda f: (f["dnf"], -(f.get("laps") or 0), f["fin"] if f["fin"] is not None else 1e9))
+    pos = next(k for k, f in enumerate(order, 1) if f["you"])
     payout = 0 if you["dnf"] else (round(track["prize"][pos - 1] * mult * (1.05 if "chief" in state.get("crew", []) else 1))
                                    if pos <= 3 else 0)
     wear = 2 + track["laps"] // 3
@@ -2561,11 +2647,13 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
     del state["races"][100:]
     save_state(state)
     winner = order[0]
-    gap = (winner["dist"] - you["dist"]) / max(you["rating"], 1) * 1.7  # pseudo-seconds
+    gap = ((you["fin"] or len(history)) - winner["fin"]) * 1.7  # pseudo-seconds between crossing the line
+    down = track["laps"] - (you.get("laps") or track["laps"])  # laps behind the winner
+    gap += down * 6 * 1.7  # a lap down is a lap's worth of seconds
     names = [html.escape(f["name"]) for f in field]
     title_ = {"gp": f"🏁 Sunday Grand Prix · {track['name']}", "inv": f"🎟️ Invitational · {track['name']}"}.get(kind, track["name"])
-    ticker = RV.narrate(history, [f["name"] for f in field], 0, track["laps"], track["name"], dnf_tick, random.Random())
-    mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    ticker = RV.narrate(history, [f["name"] for f in field], 0, track["laps"], track["name"], dnf_tick, random.Random(),
+                        ticks=ticks, fin=[f["fin"] for f in field])
     why = RV.explain("DNF" if you["dnf"] else pos, gap, track["name"], cond_before, heat_lvl,
                      G.effective(car["parts"], mid), G.cap(mid), G.PART_INFO, G.installed, G.next_upgrade)
     if mult < 1:
@@ -2573,18 +2661,26 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
                 f"×{mult:.2f}. Move up a track for full prizes.")
     elif fast_:
         why += f"\n- 🪜 You're quicker than the {track['name']} grid, so two fast rivals joined to keep it honest."
-    secs = race_seconds(track)
+    secs = race_seconds(track) * len(history) / ticks  # same pace; a little longer while the field comes home
+    why += "\n- 🏎️ The grid: " + " · ".join(
+        f"P{k} {f['name']} ({f['car']}{', ' + f['tune'] if f['tune'] else ''})"
+        + (f" +{track['laps'] - f['laps']} lap{'s' * (track['laps'] - f['laps'] != 1)}" if f.get("laps") and f["laps"] < track["laps"] else "")
+        for k, f in enumerate(order, 1))
+    off_ = f"{down} lap{'s' * (down != 1)}" if down else f"{gap:.1f}s"
     if you["dnf"]:
         res = ("error", f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "fail", False)
     elif pos == 1:
         res = ("success", f"🏆 **WIN** at {track['name']}! +{payout} coins. Tomorrow Tom eats your dust.", "jackpot", True)
     elif payout:
-        res = ("success", f"P{pos} at {track['name']} — +{payout} coins. **{gap:.1f}s** off {winner['name']}.", "win", False)
+        res = ("success", f"P{pos} at {track['name']} — +{payout} coins. **{off_}** off {winner['name']}.", "win", False)
     else:
-        res = ("warning", f"P{pos} at {track['name']}, **{gap:.1f}s** off the win.", "fail", False)
+        res = ("warning", f"P{pos} at {track['name']}, **{off_}** off the win.", "fail", False)
     st.session_state["race_replay"] = {
         "html": RV.replay_html(track["name"], history, names, [f["color"] for f in field], 0, track["laps"],
-                               ticker, dnf_tick, seconds=secs, start_ms=time.time() * 1000),
+                               ticker, dnf_tick, seconds=secs, start_ms=time.time() * 1000,
+                               fin=[f["fin"] for f in field], sched=ticks,
+                               down=[track["laps"] - (f.get("laps") or track["laps"]) for f in field],
+                               cars=[html.escape(f["car"] + (" · " + f["tune"] if f["tune"] else "")) for f in field]),
         "why": why, "title": title_, "result": res, "payout": payout,
         "reveal_at": time.time() + secs + 1, "revealed": False,
     }
@@ -9649,12 +9745,13 @@ with tab_garage:
     pres = int(state.get("prestige", 0))
     with fold("prestige", f"⭐ Prestige{f' ×{pres}' if pres else ''}", False) as _fo:
         if _open(_fo):  # collapsed = not built (faster page, smaller download)
-            st.caption(f"Own the whole ladder ({len(CARS)} cars) and tune every part to L{MAX_PART_LEVEL}, then retire the "
+            _nh = sum(c["make"] in HOUSE_MAKES for c in CARS)
+            st.caption(f"Own the whole Honda and Acura ladder ({_nh} cars) and tune every part to L{MAX_PART_LEVEL}, then retire the "
                        f"build: all parts go back to stock, you keep every car, your paint and your coins, and you get a "
                        f"permanent ⭐ badge plus **+{int(PRESTIGE_STEP * 100)}% coins on every task** "
                        f"(stacks to +{int(PRESTIGE_STEP * PRESTIGE_MAX * 100)}%).")
-            st.progress(min(1.0, (n_own + n_max) / (len(CARS) + len(PARTS))),
-                        text=f"🚗 {n_own}/{len(CARS)} cars owned · 🔧 {n_max}/{len(PARTS)} parts at L{MAX_PART_LEVEL}"
+            st.progress(min(1.0, (n_own + n_max) / (_nh + len(PARTS))),
+                        text=f"🚗 {n_own}/{_nh} Honda/Acura cars owned · 🔧 {n_max}/{len(PARTS)} parts at L{MAX_PART_LEVEL}"
                              + (f" · ⭐ ×{pres} (+{int((prestige_mult(state) - 1) * 100)}% coins now)" if pres else ""))
             if ready_:
                 sure = st.checkbox("I'm retiring this build: every part back to stock", key="pres_sure")

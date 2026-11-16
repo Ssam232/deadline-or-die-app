@@ -142,6 +142,31 @@ CHASSIS = {
                  "styling. It won three straight IMSA championships before the hybrid ARX-06 replaced it."),
     "arx06": (7, "An LMDh prototype: the chassis comes from an approved constructor and the hybrid system is a spec "
                  "part shared by every car, while the maker supplies the engine and bodywork."),
+    # the rest of the paddock: same rules, same caps for the same kind of car
+    "mx5": (3, "The best-selling two-seat sports car ever made. Small engine, low weight, rear-wheel drive: proof "
+               "that balance beats power on a twisty road."),
+    "gr86": (4, "A boxer (flat-four) engine sits low in the chassis, which lowers the centre of gravity and helps "
+                "the car change direction."),
+    "wrx_sti": (4, "A turbocharged flat-four with symmetrical all-wheel drive, developed through years of rallying."),
+    "evo9": (4, "Built to homologate a rally car: a turbo four, all-wheel drive, and an active centre differential "
+                "that shuffles torque between the axles."),
+    "nissan_z": (4, "A twin-turbo V6 up front driving the rear wheels: the long-hood sports-car layout in its "
+                    "simplest form."),
+    "supra": (4, "A turbocharged straight-six: six cylinders in a line are naturally balanced, which is why the "
+                 "layout is so smooth."),
+    "gtr": (5, "A twin-turbo V6 with an all-wheel-drive system that can send drive forward when the rears slip. Its "
+               "gearbox sits at the back for weight balance."),
+    "z06": (5, "Its V8 uses a flat-plane crankshaft, like a race engine: lighter and quicker to rev, at the cost of "
+               "more vibration."),
+    "gt3rs": (5, "Rear-engined: the weight over the driven wheels gives huge traction out of corners. The wing and "
+                 "underbody make real downforce at speed."),
+    "m4_gt3": (5, "GT3 cars are balanced against each other by the rule-makers (Balance of Performance), so a "
+                  "front-engine car can race a mid-engine one fairly."),
+    "911_gt3r": (5, "The customer GT3 car: sold to private teams, who race it in the same class as factory-backed "
+                    "entries."),
+    "vseries_r": (7, "An LMDh prototype: a spec hybrid system and a chassis from an approved constructor, with the "
+                     "maker's own engine and bodywork."),
+    "p963": (7, "An LMDh prototype built to race at both Le Mans and Daytona under one rule set."),
 }
 
 
