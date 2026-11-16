@@ -1020,11 +1020,14 @@ def _saver() -> _Saver:
 
 def needs_settle(state: dict, n_: datetime) -> bool:
     """Is this run about to charge or settle anything (a past day, a missed deadline, an expired hold)?"""
-    y = n_.date() - timedelta(days=1)
+    y = daily.gday(state, n_) - timedelta(days=1)  # 🌙 the day before the one you're on (not the calendar's)
     since = state.get("daily_since")
-    if since and since <= y.isoformat() and not (state.get("days", {}).get(y.isoformat()) or {}).get("settled"):
+    tm = state.get("timer")
+    held_ = bool(tm and tm.get("start") and daily.gday(state, parse_dt(tm["start"])) <= y)  # 🏁 settles once logged
+    if since and since <= y.isoformat() and not held_ and not (state.get("days", {}).get(y.isoformat()) or {}).get("settled"):
         return True
-    if DL.habits(state) and (state.get("habits_settled") or "") < y.isoformat():
+    yd = DL.day_for(n_, _bailed(state), DAY_END) - timedelta(days=1)
+    if DL.habits(state) and (state.get("habits_settled") or "") < yd.isoformat():
         return True
     grace = timedelta(minutes=state["settings"].get("grace_minutes", 30))
     if any(t["status"] == "open" and n_ > parse_dt(t["deadline"]) + grace and not under_the_flag(state, t)
@@ -1052,7 +1055,8 @@ def _safe(fn, *a):
 def fresh_for_settle(state: dict, fresh: bool) -> dict:
     """Before anything is charged: make sure we're settling from your newest save, not a stale copy, and take a
     backup first (once a day) so anything that goes wrong can be undone from Settings → Backup."""
-    if not fresh:
+    if not fresh and time.time() - st.session_state.get("_settle_checked", 0) > 60:  # at most once a minute
+        st.session_state["_settle_checked"] = time.time()
         _saver().flush(15)
         try:
             n, ids = notion_ctx()
@@ -3508,15 +3512,17 @@ def render_blocked(state: dict, t: dict, scope: str) -> None:
             return
         st.caption(f"The try counts today (+{max(1, round(int(t.get('reward') or 0) * daily.BLOCK_CREDIT))} 🪙, a quarter "
                    f"of the reward) and the task comes back on the day you pick, no fee. {why}")
-        did = st.text_input("What you did", key=f"{scope}bkdid_{t['id']}", max_chars=200,
-                            placeholder="e.g. Paid online, card got declined; called the shop, no answer")
-        wait = st.text_input("Waiting on", key=f"{scope}bkw_{t['id']}", max_chars=120,
-                             placeholder="e.g. their reply · the bank · office opens Monday")
         days = {"Tomorrow": 1, "In 2 days": 2, "In 3 days": 3, "Next week": 7}
-        when_ = st.segmented_control("Retry", list(days), default="Tomorrow", key=f"{scope}bkr_{t['id']}") or "Tomorrow"
-        good = len(did.strip()) >= 10 and len(wait.strip()) >= 3
-        if st.button("🔁 Log the try", key=f"{scope}bkgo_{t['id']}", type="primary", disabled=not good,
-                     use_container_width=True):
+        with st.form(f"{scope}bkf_{t['id']}", border=False):  # one submit: no page reload while you type
+            did = st.text_input("What you did", key=f"{scope}bkdid_{t['id']}", max_chars=200,
+                                placeholder="e.g. Paid online, card got declined; called the shop, no answer")
+            wait = st.text_input("Waiting on", key=f"{scope}bkw_{t['id']}", max_chars=120,
+                                 placeholder="e.g. their reply · the bank · office opens Monday")
+            when_ = st.segmented_control("Retry", list(days), default="Tomorrow", key=f"{scope}bkr_{t['id']}") or "Tomorrow"
+            go_ = st.form_submit_button("🔁 Log the try", type="primary", use_container_width=True)
+        if go_ and (len(did.strip()) < 10 or len(wait.strip()) < 3):
+            st.error("Say what you did (10+ characters) and what it's waiting on.")
+        elif go_:
             done_, msg_ = daily.tried_blocked(state, t, now(), did, wait, now().date() + timedelta(days=days[when_]),
                                               bank, uuid.uuid4().hex[:10])
             if done_:
@@ -3533,14 +3539,17 @@ def render_remove(state: dict, t: dict, scope: str) -> None:
         if left <= 0:
             st.caption(f"You've used your {REMOVALS_PER_WEEK} free removals this week. Abandon it (penalty) or finish it.")
             return
-        why = st.selectbox("Why are you removing it?", REMOVE_REASONS, index=None, key=f"{scope}rmwhy_{t['id']}",
-                           placeholder="Pick a reason")
-        note = st.text_input("In a few words", key=f"{scope}rmnote_{t['id']}", max_chars=200,
-                             placeholder="e.g. same paper as the Read: Development… task")
-        ok = bool(why) and len(note.strip()) >= 8
-        if not ok:
-            st.caption("A reason and a short note (8+ characters) are required. No penalty; it goes in your ledger.")
-        if st.button("Remove it", key=f"{scope}rm_{t['id']}", type="primary", disabled=not ok, use_container_width=True):
+        with st.form(f"{scope}rmf_{t['id']}", border=False):  # one submit: no page reload while you type
+            why = st.selectbox("Why are you removing it?", REMOVE_REASONS, index=None, key=f"{scope}rmwhy_{t['id']}",
+                               placeholder="Pick a reason")
+            note = st.text_input("In a few words", key=f"{scope}rmnote_{t['id']}", max_chars=200,
+                                 placeholder="e.g. same paper as the Read: Development… task")
+            st.caption("A reason and a short note (8+ characters). No penalty; it goes in your ledger.")
+            go_ = st.form_submit_button("Remove it", type="primary", use_container_width=True)
+        ok = bool(why) and len((note or "").strip()) >= 8
+        if go_ and not ok:
+            st.error("Pick a reason and write a short note (8+ characters).")
+        if go_ and ok:
             remove_task(state, t, why, note.strip())
             save_state(state)
             flash(f"🗑️ Removed **{t['title'][:60]}** · {why}. No penalty ({left - 1} free removal"
@@ -7854,6 +7863,7 @@ def render_cluster(state: dict) -> None:
 # ─────────────────────────── app ───────────────────────────
 st.set_page_config(page_title="Deadline or Die", page_icon="🏁", layout="wide")
 _T_SESSION = st.session_state.setdefault("_t_session", time.time())  # when this visit started (login timing)
+_T_RUN = time.time()  # when this tap's run started (slow-tap log)
 
 
 @st.cache_resource
@@ -7979,6 +7989,7 @@ if notion_cfg() and needs_settle(state, now()):
 st.session_state.pop("_fresh_this_run", None)
 if st.session_state.pop("_resave", False) or (getattr(_saver(), "dirty", False) and not _saver().pending()):
     st.session_state["_needs_save"] = True  # a save that didn't reach Notion goes again
+_T_SETTLE = time.time()
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)
@@ -10100,6 +10111,12 @@ try:
     goals_to_notion(state)
 except Exception:  # noqa: BLE001
     pass
+_run_s = time.time() - _T_RUN
+if _boot is None and _run_s > 3:  # 🐢 a slow tap: keep where the time went (load / settle check / the page), last 20
+    _sl = state.setdefault("slow_taps", [])
+    _sl.append({"at": now().isoformat()[:16], "total": round(_run_s, 1), "load": round(_T_LOADED - _T_RUN, 1),
+                "settle": round(_T_SETTLE - _T_LOADED, 1), "page": round(time.time() - _T_SETTLE, 1)})
+    del _sl[:-20]
 if _boot is not None and notion_cfg():  # how long this login took, by stage (read by the health check)
     _pl = state.setdefault("perf_log", [])
     _pl.append({"at": now().isoformat()[:16], "cold": bool(st.session_state.get("_cold")),
