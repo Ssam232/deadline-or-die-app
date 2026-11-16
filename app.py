@@ -2936,8 +2936,8 @@ def render_dailies(state: dict) -> None:
             if rows:  # 🧊 freezes: save a daily's streak from one miss (the miss still costs)
                 fz_, fp_ = state.get("daily_freezes", 0), DL.freeze_price(state)
                 with st.container(horizontal=True, vertical_alignment="center", key="dl_freeze"):
-                    st.caption(f"🧊 Freezes **{fz_}/{DL.FREEZE_MAX}** · each saves your longest daily streak from one "
-                               "miss (the miss is still charged)")
+                    st.caption(f"🧊 Freezes **{fz_}/{DL.FREEZE_MAX}** · each saves the streak of a daily you miss "
+                               "(longest streak first). The miss is still charged.")
                     if st.button(f"🧊 Buy · {fp_} 🪙", key="dl_freeze_buy", disabled=fz_ >= DL.FREEZE_MAX,
                                  help="Price follows your longest daily streak"):
                         ok_, msg_ = DL.buy_freeze(state, bank)

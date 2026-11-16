@@ -54,7 +54,7 @@ def buy_freeze(save: dict, bank) -> tuple[bool, str]:
         return False, f"A freeze costs {p} 🪙."
     bank(save, -p, "🧊 Daily freeze")
     save["daily_freezes"] = save.get("daily_freezes", 0) + 1
-    return True, f"🧊 Freeze bought ({save['daily_freezes']}/{FREEZE_MAX}). It'll save your longest daily streak from one miss."
+    return True, f"🧊 Freeze bought ({save['daily_freezes']}/{FREEZE_MAX}). If a daily misses, it saves that streak (longest first)."
 
 
 def _n(h_or_target) -> int:
