@@ -331,7 +331,10 @@ def _merge(defaults: dict, loaded: dict) -> dict:
     return out
 
 
-SESSION_TTL = 90  # seconds before re-reading the save from Notion (and pulling new Notion tasks)
+# This server is the only thing that writes your save, and every tab/device shares its newest copy in memory, so the
+# blocking re-read from Notion is just a safety net: every 15 min, not every 90 s (it used to stall a tap each time).
+SESSION_TTL = 900  # seconds before re-reading the save from Notion
+SYNC_TTL = 300     # seconds between pulls of new Notion tasks / assignments (runs after the page is drawn)
 
 
 def _load_local() -> dict | None:
@@ -583,6 +586,9 @@ def load_state() -> dict:
         return _scrub(latest[1])
     if cached is not None and (time.time() - st.session_state.get("_state_ts", 0) < SESSION_TTL
                                or _saver().pending()):
+        if time.time() - st.session_state.get("_sync_ts", 0) > SYNC_TTL:  # time to look for new Notion tasks
+            st.session_state["_sync_ts"] = time.time()
+            st.session_state["_fresh_load"] = True
         return _scrub(cached)
     _saver().flush(5)  # never read Notion while our own write is still landing
     try:
@@ -627,6 +633,7 @@ def load_state() -> dict:
     _offer_latest(state)
     st.session_state["_fresh_load"] = True
     st.session_state["_fresh_this_run"] = True
+    st.session_state["_sync_ts"] = time.time()
     return state
 
 
@@ -7653,6 +7660,45 @@ html[data-dod-switch] [role="tabpanel"]:not([hidden])::before{top:14px}
   .dod-cell:nth-child(n+3){border-top:1px solid var(--line)}
   .dod-hero h1{font-size:2.2rem}
 }
+/* ── ✨ 2026 polish: feedback on every press, steady numbers, balanced text, glass surfaces ── */
+html{-webkit-tap-highlight-color:transparent}
+.dod-v,.dod-tiles b,[data-testid="stMetricValue"],.dod-cast .q b{font-variant-numeric:tabular-nums}
+h1,h2,h3,h4,.dod-next .t,[data-testid="stExpander"] summary p{text-wrap:balance}
+[data-testid="stMarkdownContainer"] p,[data-testid="stCaptionContainer"] p{text-wrap:pretty}
+[data-testid^="stBaseButton"]{transition:transform .12s ease,box-shadow .18s ease,background-color .18s ease,border-color .18s ease}
+[data-testid^="stBaseButton"]:active{transform:scale(.97)}
+[data-testid^="stBaseButton"]:focus-visible,[role="tab"]:focus-visible,[data-testid="stExpander"] summary:focus-visible{
+  outline:2px solid var(--y)!important;outline-offset:2px}
+[data-testid="stBaseButton-primary"],[data-testid="stBaseButton-primaryFormSubmit"]{
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 8px 20px -10px var(--y)}
+[data-testid="stExpander"] details{transition:border-color .2s ease,background-color .2s ease}
+@media (hover:hover){
+  [data-testid="stBaseButton-secondary"]:hover{border-color:color-mix(in srgb,var(--y) 55%,var(--line))!important}
+  [data-testid="stExpander"] details:hover{border-color:color-mix(in srgb,var(--y) 26%,var(--line))}
+}
+*{scrollbar-width:thin;scrollbar-color:#3a4050 transparent}
+[data-testid="stToast"]{backdrop-filter:blur(14px) saturate(1.3);background:rgba(27,31,39,.84)!important;
+  border:1px solid var(--line);border-radius:14px!important;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+@media (max-width:640px){
+  /* 📱 the tabs become a bottom bar: always under your thumb, wherever you've scrolled */
+  .st-key-nav > div > [role="tablist"]{position:fixed;left:0;right:0;bottom:0;z-index:999990;margin:0!important;gap:2px!important;
+    padding:6px 92px calc(6px + env(safe-area-inset-bottom)) 8px;background:rgba(18,21,28,.88);
+    backdrop-filter:blur(16px) saturate(1.4);border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+  .st-key-nav > div > [role="tablist"]::-webkit-scrollbar{display:none}
+  .st-key-nav > div > [role="tablist"] [role="tab"]{flex:0 0 auto;height:44px;padding:0 12px!important;border-radius:12px;
+    border:0!important;margin:0!important}
+  .st-key-nav > div > [role="tablist"] [role="tab"] p{font-size:.86rem;white-space:nowrap}
+  .st-key-nav > div > [role="tablist"] [role="tab"][aria-selected="true"]{background:color-mix(in srgb,var(--y) 18%,transparent)}
+  [data-testid="stMainBlockContainer"]{padding-bottom:5.5rem!important}
+  body.dod-focus .st-key-nav > div > [role="tablist"]{display:none}
+  .dod-zone{flex-wrap:nowrap}.dod-zone b{white-space:nowrap;flex:none}.dod-zone span{min-width:0}
+  .st-key-nav > [data-testid^="stTabsScroll"]{display:none!important}
+  .st-key-nav > div > [role="tablist"] .react-aria-SelectionIndicator{display:none!important}
+  [data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] p,
+  [data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] p *{font-size:1.02rem!important}
+  .dod-cell.carcell{overflow:hidden!important}
+  .dod-mini-car{top:auto!important;bottom:2px!important;right:2px!important;width:62%!important;opacity:.32!important}
+}
 </style>"""
 
 
@@ -8125,8 +8171,16 @@ if rust_msg:
 TOAST_ICON = {"success": "✅", "info": "💬"}
 while _bg_notes():  # a background finish-line job hit a snag since your last tap
     flash(f"⚠️ {_bg_notes().pop(0)}", "warning")
-for kind, m in st.session_state.pop("flash", []):
-    if kind in TOAST_ICON and len(m) <= 170 and "\n" not in m:
+_fl = st.session_state.pop("flash", [])
+_is_toast = lambda k_, m_: k_ in TOAST_ICON and len(m_) <= 170 and "\n" not in m_  # noqa: E731
+_tq = [x for x in _fl if _is_toast(*x)]
+if len(_tq) > 3:  # a pile of updates at once (back after a few days): two toasts, the rest folded into one list
+    _more = _tq[2:]
+    _fl = [x for x in _fl if x not in _more]
+    with st.expander(f"🔔 {len(_more)} more updates"):
+        st.markdown("\n".join(f"- {m_}" for _, m_ in _more))
+for kind, m in _fl:
+    if _is_toast(kind, m):
         lead = m.split(" ", 1)
         icon = lead[0] if len(lead) == 2 and not lead[0][:1].isalnum() and len(lead[0]) <= 3 and "*" not in lead[0] else None
         st.toast(lead[1] if icon else m, icon=icon or TOAST_ICON[kind], duration="long" if len(m) > 90 else "short")

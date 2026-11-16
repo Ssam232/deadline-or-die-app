@@ -113,6 +113,10 @@ Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5
 
 **🧊 Daily freezes.** Your 🛡️ shields protect the day streak only. For dailies, buy a 🧊 freeze on the Dailies card (hold up to 2; the price follows your longest daily streak: 30 + 4 per day, max 250). At settle, each freeze saves the streak of a missed daily, longest streak first. The miss is still charged: the penalty is for the day, the streak is your history. There's no late claim: dailies close when your day ends.
 
+**📱 Phone navigation and feel.** On a phone the tabs are a bottom bar that stays under your thumb (swipe it sideways for the later tabs). Buttons respond to presses, numbers don't jitter as they change, and a pile of updates after time away shows as two toasts plus one "🔔 more updates" list instead of a stack.
+
+**⚡ Notion pacing.** This server is the only writer of your save, so the full re-read from Notion happens every 15 min (it was every 90 s and stalled a tap each time), and new Notion tasks are pulled every 5 min, after the page is drawn.
+
 **🏃 Activity vs attendance.** Each commitment has a "Counts as an activity" switch (Add & manage). On (the default for sessions like a shift, coaching, taekwondo, the gym): showing up keeps the day from being a zero day, and Today says so. Off (the default for quotas like the office): it's attendance only, and the day still needs real work. Neither counts toward qualifying.
 
 **✅ Ticking commitments off.** By default a commitment is a checklist: tick ✅ Went · on time or ⏰ Went · late any time from 20 min before it starts until your day ends, so you can do it once you're home (honour system). Quotas like the office take one ✅ Went today. A miss only settles when the day ends. The phone nudges you at the start and 45 min before the day closes. Want proof instead? Switch a commitment to 📍 Location or photo under Add & manage.
