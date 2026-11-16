@@ -70,6 +70,11 @@
   "title": "Skeletal Muscle Composition and the Effects of Exercise and/or Prebiotic Fiber in Preventing Diet Related Morbidities"
  },
  {
+  "code": "B09",
+  "doi": "10.1161/jaha.117.006416",
+  "title": "Exercise Training Reveals Inflexibility of the Diaphragm in an Animal Model of Patients With Obesity‐Driven Heart Failure With a Preserved Ejection Fraction"
+ },
+ {
   "code": "C01",
   "doi": "10.1038/s41598-023-38487-x",
   "title": "Alterations in skeletal muscle morphology and mechanics in juvenile male Sprague Dawley rats exposed to a high-fat high-sucrose diet"
@@ -116,41 +121,56 @@
  },
  {
   "code": "C10",
+  "doi": "10.1371/journal.pone.0011494",
+  "title": "Upregulation of PPARβ/δ Is Associated with Structural and Functional Changes in the Type I Diabetes Rat Diaphragm"
+ },
+ {
+  "code": "C11",
   "doi": "10.1371/journal.pone.0006117",
   "title": "Artificial Selection for Whole Animal Low Intrinsic Aerobic Capacity Co-Segregates with Hypoxia-Induced Cardiac Pump Failure"
  },
  {
-  "code": "C11",
+  "code": "C12",
+  "doi": "10.3389/fcvm.2021.751864",
+  "title": "Influence of Intrinsic Aerobic Exercise Capacity and Sex on Cardiac Injury Following Acute Myocardial Ischemia and Reperfusion"
+ },
+ {
+  "code": "C13",
   "doi": "10.3390/ijerph15102301",
   "title": "Exercise Training Attenuates Obesity-Induced Skeletal Muscle Remodeling and Mitochondria-Mediated Apoptosis in the Skeletal Muscle."
  },
  {
-  "code": "C12",
+  "code": "C14",
+  "doi": "10.1113/ep092015",
+  "title": "High‐intensity interval training improves cardiomyocyte contractile function and myofilament sensitivity to intracellular Ca 2+ in obese rats"
+ },
+ {
+  "code": "C15",
   "doi": "10.1002/jor.70299",
   "title": "Variation in Intrinsic Aerobic Capacity Reveals Distinct Differences in the Maintenance of Rat Knee Joint Integrity"
  },
  {
-  "code": "C13",
+  "code": "C16",
   "doi": "10.1002/jor.23103",
   "title": "Response to diet‐induced obesity produces time‐dependent induction and progression of metabolic osteoarthritis in rat knees"
  },
  {
-  "code": "C14",
+  "code": "C17",
   "doi": "10.1302/2046-3758.74.bjr-2017-0201.r2",
   "title": "High-fat/high-sucrose diet-induced obesity results in joint-specific development of osteoarthritis-like degeneration in a rat model"
  },
  {
-  "code": "C15",
+  "code": "C18",
   "doi": "10.1177/19476035231193090",
   "title": "Aerobic and Resistance Training Attenuate Differently Knee Joint Damage Caused by a High-Fat–High-Sucrose Diet in a Rat Model"
  },
  {
-  "code": "C16",
+  "code": "C19",
   "doi": "10.1038/352536a0",
   "title": "The mdx mouse diaphragm reproduces the degenerative changes of Duchenne muscular dystrophy"
  },
  {
-  "code": "C17",
+  "code": "C20",
   "doi": "",
   "title": "The role of fibrosis in Duchenne muscular dystrophy."
  },
