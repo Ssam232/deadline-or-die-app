@@ -256,6 +256,9 @@ def _wheel(cx: float, cy: float, tires: int, brakes: int, gt3: bool, uid: str = 
             for k in range(5):
                 a = math.radians(k * 72 + 36)
                 out.append(f'<circle cx="{cx + 2 * math.cos(a):.1f}" cy="{cy + 2 * math.sin(a):.1f}" r=".5" fill="{deep}"/>')
+    out.append(f'<circle cx="{cx}" cy="{cy}" r="{r_rim + .2}" fill="none" stroke="{lite}" stroke-opacity=".55" stroke-width=".7"/>'
+               f'<circle cx="{cx}" cy="{cy}" r="{(rt + r_rim) / 2 + 1:.1f}" fill="none" stroke="#000" stroke-opacity=".5" stroke-width=".6"/>'
+               f'<circle cx="{cx}" cy="{cy}" r="{rt - .6}" fill="none" stroke="#3a3c42" stroke-opacity=".7" stroke-width=".5"/>')
     out.append(f'<ellipse cx="{cx - 4}" cy="{cy - 6}" rx="{r_rim * .55:.1f}" ry="{r_rim * .25:.1f}" fill="#ffffff" '
                f'opacity=".07" transform="rotate(-35 {cx - 4} {cy - 6})"/>')  # glint on the rim
     return "".join(out)
@@ -284,6 +287,20 @@ def _scaled(p: dict, fx: float, fz: float, **over) -> dict:
     q.update(over)
     return q
 
+
+def _blunt(name: str, dz: float) -> None:
+    """A modern front end: pedestrian-safety rules made noses taller and blunter than the 80s/90s wedges."""
+    p = PROFILES[name]
+    o = [tuple(r) for r in p["OUT"]]
+    o[2] = (o[2][0], o[2][1] + dz) + o[2][2:]
+    o[3] = (o[3][0] * 0.8, o[3][1] + dz * 0.9) + o[3][2:]
+    o[4] = (o[4][0], o[4][1] + dz * 0.6) + o[4][2:]
+    a, b, c, d = p["HEAD"]
+    p.update(OUT=o, HEAD=(a, b, c + dz * 0.85, d + dz * 0.85))
+
+
+for _n, _dz in (("sedan", .07), ("hatch", .08), ("tlx", .08), ("integra_s", .08), ("tsx", .04)):
+    _blunt(_n, _dz)
 
 PROFILES["gt3"] = _scaled(PROFILES["super2"], 4.64 / 4.535, 0.955, L=4.64, H=1.16, TD=0.71, SILL=0.14, GT3=True, WING=5)
 PROFILES["gt3evo"] = dict(PROFILES["gt3"])
@@ -412,7 +429,7 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
     drop = min(5, (tires + aero) // 2 + (2 if gt3 else 0))
     num = html.escape(str(number))
     dark = "#15161a"
-    u = _uid(model_body, color, str(sorted(lv.items())), condition, studio, "v3")
+    u = _uid(model_body, color, str(sorted(lv.items())), condition, studio, "v4")
     hi, lo, sh = _mix(color, "#ffffff", .16), _mix(color, "#000000", .34), _mix(color, "#000000", .6)  # the light does the rest
     out_pts = [P(r[0], r[1]) + tuple(r[2:]) for r in p["OUT"]]
     top = _spline(out_pts)
@@ -492,7 +509,8 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
     # glass with glare
     dlo = _spline([P(*r[:2]) + ("c",) for r in p["DLO"]], closed=True)
     g.append(f'<path d="{dlo}" fill="#0b0c0f" stroke="#0b0c0f" stroke-width="3.2" stroke-linejoin="round"/>'
-             f'<path d="{dlo}" fill="url(#{u}g)" stroke="#2b2f37" stroke-width=".7"/>')
+             f'<path d="{dlo}" fill="url(#{u}g)" stroke="#2b2f37" stroke-width=".7"/>'
+             f'<path d="{dlo}" fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width=".5" transform="translate(0,-.7)"/>')
     g.append(f'<clipPath id="{u}w"><path d="{dlo}"/></clipPath><g clip-path="url(#{u}w)">'
              f'<path d="M{CX - 30},{roof_y - 4:.1f} L{CX - 12},{roof_y - 4:.1f} L{CX - 52},{belt_y + 2:.1f} L{CX - 70},{belt_y + 2:.1f} Z" fill="#ffffff" opacity=".2"/>'
              f'<path d="M{CX - 2},{roof_y - 4:.1f} L{CX + 6},{roof_y - 4:.1f} L{CX - 34},{belt_y + 2:.1f} L{CX - 42},{belt_y + 2:.1f} Z" fill="#ffffff" opacity=".1"/>'
@@ -531,7 +549,9 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
     g.append(f'<rect x="{hx:.1f}" y="{belt_y + 6:.1f}" width="10" height="2.4" rx="1.2" fill="#000" opacity=".45"/>'
              f'<rect x="{hx:.1f}" y="{belt_y + 6:.1f}" width="10" height=".9" rx=".45" fill="#fff" opacity=".22"/>')
     mx, my = P(p["DOORS"][0] + .12, p["BELT"] + .05)
-    g.append(f'<path d="M{mx:.1f},{my:.1f} l8,-3 q3,0 2.4,3.6 l-8,2.6 Z" fill="url(#{u}b)" stroke="#0b0c0e" stroke-width=".8"/>')
+    g.append(f'<path d="M{mx - 1:.1f},{my + 1.5:.1f} l5,-2" stroke="#0b0c0e" stroke-width="1.6"/>'
+             f'<path d="M{mx + 2:.1f},{my - 1:.1f} l8.5,-3.4 q3.6,.2 2.8,4.4 l-9,2.8 q-2.6,-.6 -2.3,-3.8 Z" fill="url(#{u}b)" '
+             f'stroke="#0b0c0e" stroke-width=".8"/><path d="M{mx + 3.2:.1f},{my - .6:.1f} l7.6,-3" stroke="#fff" stroke-opacity=".35" stroke-width=".7"/>')
     if not p.get("PROTO"):
         g.append(f'<circle cx="{rx + arch + 9:.1f}" cy="{belt_y + 7:.1f}" r="3" fill="none" stroke="#000" stroke-opacity=".35"/>')
         g.append(f'<rect x="{fx + arch + 3:.1f}" y="{belt_y + 10:.1f}" width="6" height="2.2" rx="1" fill="#ff9f1c" opacity=".85"/>')
@@ -544,10 +564,21 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
         for k_ in range(4):
             xx = a_ + (b_ - a_) * (k_ + 1) / 5
             g.append(f'<path d="M{xx:.1f},{ty - 5:.1f} l-3,10" stroke="#2a2c31" stroke-width="1.2"/>')
+    fby = fb[1]
     # front intake / grille shadow and rear reflector, placed from the bumper heights
     gx, gy = P(0.02, 0.36)
     g.append(f'<path d="M{gx - 26:.1f},{gy - 3:.1f} L{gx + 1:.1f},{gy - 2:.1f} L{gx:.1f},{gy + 8:.1f} L{gx - 30:.1f},{gy + 8:.1f} Z" fill="#0c0d10" opacity=".9"/>'
              f'<path d="M{gx - 24:.1f},{gy:.1f} L{gx - 1:.1f},{gy + .5:.1f} M{gx - 26:.1f},{gy + 3:.1f} L{gx - 1:.1f},{gy + 3.5:.1f}" stroke="#3a3d44" stroke-width=".8"/>')
+    bz = P(0, p["HEAD"][2] - .05)[1]  # bumper line: just under the lamps, round to the front arch
+    g.append(f'<g clip-path="url(#{u}c)">'
+             f'<path d="M{front + 2:.1f},{bz:.1f} Q{(front + fx + arch) / 2:.1f},{bz + 2.5:.1f} {fx + arch + 1:.1f},{bz + 5:.1f}" '
+             f'stroke="#000" stroke-opacity=".4" stroke-width=".9" fill="none"/>'
+             f'<path d="M{front + 2:.1f},{bz + 1:.1f} Q{(front + fx + arch) / 2:.1f},{bz + 3.5:.1f} {fx + arch + 1:.1f},{bz + 6:.1f}" '
+             f'stroke="#fff" stroke-opacity=".12" stroke-width=".6" fill="none"/>'
+             f'<rect x="{fx + arch:.1f}" y="{fby - 5:.1f}" width="{front - fx - arch + 4:.1f}" height="7" fill="#08090b" opacity=".55"/>'
+             f'<path d="M{rear - 2:.1f},{P(0, p["TAIL"][2] - .07)[1]:.1f} L{rx - arch - 1:.1f},{P(0, p["TAIL"][2] - .1)[1]:.1f}" '
+             f'stroke="#000" stroke-opacity=".4" stroke-width=".9"/>'
+             f'<rect x="{rear - 4:.1f}" y="{rb[1] - 6:.1f}" width="{rx - arch - rear + 4:.1f}" height="8" fill="#08090b" opacity=".6"/></g>')
     ex, ey = P(L - .02, 0.42)
     g.append(f'<rect x="{ex + 1:.1f}" y="{ey:.1f}" width="7" height="2" rx="1" fill="#b3121f" opacity=".85"/>')
     # engine: hood vents → stripe → bulge → carbon hood
@@ -580,14 +611,22 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
         hw, hh = hx1 - hx0, hy1 - hy0
     elif lamp == "slim":
         g.append(f'<path d="M{hx0 - 3:.1f},{hy0 + hh * .2:.1f} L{hx1:.1f},{hy0 + hh * .55:.1f}" stroke="#fff6d8" stroke-width="1.1" opacity=".9"/>')
-    g.append(f'<ellipse cx="{hx1 + 2:.1f}" cy="{(hy0 + hy1) / 2:.1f}" rx="{hw * .45 + 4:.1f}" ry="{hh + 3:.1f}" fill="url(#{u}h)" opacity=".5"/>'
-             f'<path d="M{hx0:.1f},{hy0 + hh * .35:.1f} L{hx1 - 1:.1f},{hy0:.1f} Q{hx1 + 1:.1f},{hy0:.1f} {hx1:.1f},{hy1 - 1:.1f} '
-             f'L{hx0 + 2:.1f},{hy1:.1f} Z" fill="#eef1f5" stroke="#0b0c0e" stroke-width=".6"/>'
-             f'<path d="M{hx0 + 3:.1f},{hy1 - 1.2:.1f} L{hx1 - 2:.1f},{hy1 - 1.8:.1f}" stroke="#ffffff" stroke-width="1"/>')
+    lens = (f'M{hx0:.1f},{hy0 + hh * .35:.1f} L{hx1 - 1:.1f},{hy0:.1f} Q{hx1 + 1:.1f},{hy0:.1f} {hx1:.1f},{hy1 - 1:.1f} '
+            f'L{hx0 + 2:.1f},{hy1:.1f} Z')
+    g.append(f'<ellipse cx="{hx1 - hw * .25:.1f}" cy="{(hy0 + hy1) / 2:.1f}" rx="{hw * .3 + 3:.1f}" ry="{hh * .5 + 2.5:.1f}" fill="url(#{u}h)" opacity=".4"/>'
+             f'<path d="{lens}" fill="#15171c" stroke="#0b0c0e" stroke-width=".7"/>'
+             f'<path d="{lens}" fill="#dfe8f2" opacity=".18"/>')
+    if lamp == "tall":  # a round projector and a marker lamp behind the glass
+        g.append(f'<circle cx="{hx1 - hw * .32:.1f}" cy="{(hy0 + hy1) / 2 + .3:.1f}" r="{max(1.6, hh * .3):.1f}" fill="#f4f8ff" stroke="#6b7280" stroke-width=".5"/>'
+                 f'<circle cx="{hx0 + hw * .3:.1f}" cy="{(hy0 + hy1) / 2 + hh * .12:.1f}" r="{max(1.1, hh * .2):.1f}" fill="#ffd9a0" opacity=".85"/>')
+    else:  # a light blade along the top of the lens
+        g.append(f'<path d="M{hx0 + 2:.1f},{hy0 + hh * .42:.1f} L{hx1 - 1.5:.1f},{hy0 + hh * .2:.1f}" stroke="#f6fbff" stroke-width="1.5" stroke-linecap="round"/>'
+                 f'<circle cx="{hx1 - hw * .3:.1f}" cy="{hy0 + hh * .68:.1f}" r="{max(1.1, hh * .2):.1f}" fill="#eef4ff" opacity=".9"/>')
+    g.append(f'<path d="{lens}" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width=".5" transform="translate(0,.5)"/>')
     a, b, c, d = p["TAIL"]
     (tx0, ty0), (tx1, ty1) = P(b, d), P(a, c)
-    g.append(f'<ellipse cx="{tx0 + 2:.1f}" cy="{(ty0 + ty1) / 2:.1f}" rx="{tx1 - tx0 + 5:.1f}" ry="{ty1 - ty0 + 4:.1f}" fill="url(#{u}t)" opacity=".7"/>'
-             f'<rect x="{tx0:.1f}" y="{ty0:.1f}" width="{max(3, tx1 - tx0):.1f}" height="{ty1 - ty0:.1f}" rx="1.5" fill="#c1121f" stroke="#5a0710" stroke-width=".5"/>'
+    g.append(f'<ellipse cx="{tx0 + 2:.1f}" cy="{(ty0 + ty1) / 2:.1f}" rx="{tx1 - tx0 + 5:.1f}" ry="{ty1 - ty0 + 4:.1f}" fill="url(#{u}t)" opacity=".42"/>'
+             f'<rect x="{tx0:.1f}" y="{ty0:.1f}" width="{max(3, tx1 - tx0):.1f}" height="{ty1 - ty0:.1f}" rx="1.5" fill="#a80f1b" stroke="#0b0c0e" stroke-width=".7"/>'
              f'<rect x="{tx0 + .8:.1f}" y="{ty0 + .8:.1f}" width="{max(1.5, tx1 - tx0 - 1.6):.1f}" height="{max(1, (ty1 - ty0) * .3):.1f}" rx=".6" fill="#ff6b6b"/>')
     # number roundel on the door
     rnx = P((p["DOORS"][0] + (p["B"] or p["DOORS"][-1])) / 2 if p.get("B") else (p["DOORS"][0] + p["DOORS"][-1]) / 2, 0)[0]
@@ -596,7 +635,6 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
              f'<text x="{rnx:.1f}" y="{rny + 3.8:.1f}" font-size="10.5" font-family="Arial,sans-serif" font-weight="700" '
              f'text-anchor="middle" fill="#111">{num}</text>')
     # aero: splitter → skirts → canards → diffuser → rear wing tiers (factory wing on some cars)
-    fby = fb[1]
     if aero >= 1 or gt3:
         ext = 10 if (aero >= 5 or gt3) else 5
         g.append(f'<path d="M{front - 40:.1f},{fby:.1f} L{front + ext:.1f},{fby:.1f} L{front + ext - 2:.1f},{fby + 3:.1f} L{front - 40:.1f},{fby + 3:.1f} Z" fill="{dark}"/>')
