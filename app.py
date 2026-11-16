@@ -1404,6 +1404,8 @@ def make_task(title, details, deadline: datetime, difficulty=None, consequence="
 def fail_task(state: dict, t: dict, reason: str) -> str:
     t["status"] = "failed"
     t["failed_at"] = now().isoformat()
+    t["miss"] = {"penalty": t["penalty"], "streak": state["streak"], "shield": bool(state["shields"] > 0 and state["streak"]),
+                 "reason": f"💀 {reason}: {t['title']}"}  # what a reversal (🔁 late try) puts back
     t["penalty"] = round(t["penalty"] * daily.level_factor(state))  # pros pay more for misses
     bank(state, -t["penalty"], f"💀 {reason}: {t['title']}")
     state["car"]["condition"] = max(0, state["car"]["condition"] - MISS_DAMAGE)
@@ -3498,9 +3500,58 @@ def remove_task(state: dict, t: dict, reason: str, note: str) -> None:
     bank(state, 0, f"🗑️ Removed: {t['title'][:50]} ({reason}{': ' + note[:60] if note else ''})")
 
 
+LATE_TRY_HOURS, LATE_TRY_PER_WEEK = 2, 1  # 🔁 a try logged just after a miss reverses it (you were blocked, not idle)
+
+
+def late_try_check(state: dict, t: dict) -> tuple[bool, str]:
+    if t.get("status") != "failed" or t.get("abandoned") or not t.get("failed_at"):
+        return False, ""
+    hrs = LATE_TRY_HOURS if t.get("miss") else 12  # a miss from before reversals existed: a wider, one-off window
+    if now() - parse_dt(t["failed_at"]) > timedelta(hours=hrs):
+        return False, ""
+    used = [x for x in state.get("late_tries", []) if now() - parse_dt(x) < timedelta(days=7)]
+    if len(used) >= LATE_TRY_PER_WEEK:
+        return False, "You've used this week's late try. Redeem it (half back) or let it go."
+    return True, ""
+
+
+def unfail_task(state: dict, t: dict) -> int:
+    """Undo a miss: what it actually charged comes back, the held part is dropped, car / heat / streak restored,
+    the penalty box entry goes. Returns the coins refunded."""
+    m = t.pop("miss", None) or {  # a miss from before this was recorded: rebuild it from the ledger
+        "penalty": max(1, round(t["penalty"] / max(daily.level_factor(state), 0.01))), "streak": 0, "shield": False,
+        "reason": f"💀 Missed deadline: {t['title']}"}
+    paid = sum(-x["delta"] for x in state.get("ledger", []) if x.get("reason") == m["reason"] and x.get("delta", 0) < 0
+               and parse_dt(x["ts"]) >= parse_dt(t["failed_at"]) - timedelta(minutes=1))
+    state["held"] = [h for h in state.get("held", []) if h.get("reason") != m["reason"]]
+    if paid:
+        state["coins"] += paid
+        state["ledger"].insert(0, {"ts": now().isoformat(), "delta": paid, "reason": f"↩️ Miss reversed (late try): {t['title']}"})
+    state["car"]["condition"] = min(100, state["car"]["condition"] + MISS_DAMAGE)
+    state["rival_heat"] = max(0, state["rival_heat"] - 1)
+    state["dnfs"] = max(0, state.get("dnfs", 0) - 1)
+    if m.get("shield"):
+        state["shields"] = state.get("shields", 0) + 1
+    else:
+        state["streak"] = max(state["streak"], int(m.get("streak") or 0))
+    state["penalty_box"] = [p for p in state.get("penalty_box", []) if p.get("task_id") != t["id"]]
+    t.update(status="open", penalty=m["penalty"])
+    t.pop("failed_at", None)
+    state.setdefault("late_tries", []).append(now().isoformat())
+    del state["late_tries"][:-10]
+    return paid
+
+
 def render_blocked(state: dict, t: dict, scope: str) -> None:
-    """🔁 You tried; it's stuck on someone or something else. Log the try, pick a retry day."""
-    ok, why = daily.blocked_check(state, t, now())
+    """🔁 You tried; it's stuck on someone or something else. Log the try, pick a retry day.
+    Just missed it (within LATE_TRY_HOURS)? Logging the try now reverses the miss, once a week."""
+    late_ = t.get("status") == "failed"
+    if late_:
+        ok, why = late_try_check(state, t)
+        if not ok and not why:
+            return
+    else:
+        ok, why = daily.blocked_check(state, t, now())
     if t.get("attempts"):
         a_ = t["attempts"][-1]
         st.caption(f"🔁 Tried {len(t['attempts'])}× · last: {html.escape(a_['did'][:80])} · waiting on "
@@ -3523,8 +3574,16 @@ def render_blocked(state: dict, t: dict, scope: str) -> None:
         if go_ and (len(did.strip()) < 10 or len(wait.strip()) < 3):
             st.error("Say what you did (10+ characters) and what it's waiting on.")
         elif go_:
+            back_ = 0
+            if late_:
+                snap_ = json.loads(json.dumps(state, default=str))
+                back_ = unfail_task(state, t)
             done_, msg_ = daily.tried_blocked(state, t, now(), did, wait, now().date() + timedelta(days=days[when_]),
                                               bank, uuid.uuid4().hex[:10])
+            if late_ and not done_:  # the try didn't go through: the miss stands
+                state.clear(); state.update(snap_)
+            elif late_:
+                msg_ = f"↩️ **Miss reversed** (+{back_} 🪙 back, car and streak restored). " + msg_
             if done_:
                 save_state(state)
                 flash(msg_)
@@ -6585,6 +6644,7 @@ def render_task_board(state: dict, open_tasks: list[dict]) -> None:
                         left = parse_dt(t["failed_at"]) + timedelta(hours=REDEEM_WINDOW_H) - now()
                         with st.expander(f"💀 {t['title']} · by {_when(now() + left)}", key=f"exp_tb_{t['id']}",
                                          expanded=proof_open(f"tb_redeem_{t['id']}")):
+                            render_blocked(state, t, "tb_")  # 🔁 just missed and you'd tried: reverse it (once a week)
                             render_proof_form(state, t, "redeem", scope="tb_")
 
 

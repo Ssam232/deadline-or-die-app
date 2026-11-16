@@ -253,6 +253,7 @@ Once you own all 14 cars and every part is at L7, Garage → ⭐ Prestige lets y
 | Redemption | Finish a missed task within 72h for half the penalty back |
 | Extensions | Cost a share of your **bank**: 5% for the first on a task, 10% for the second (never less than 30% of the task's penalty, never more than its penalty + reward, so extending never costs more than giving up would), and cut the reward 15% (max 2). An extended task leaves today's mission, unless that would drop the mission under the qualifying hour. The only way a deadline moves. |
 | 🔁 Tried, but blocked | For tasks you can't finish alone (a payment that bounced, no reply, office closed). Write what you did and what it's waiting on, pick a retry day (tomorrow up to a week): the try counts today as a small finished item (a quarter of the reward, counts for the mission and day streak) and the task comes back on that day, no fee. Once a day per task, 3 tries per task. |
+| ↩️ Late try | Just missed a task you'd been blocked on (or the app was too slow to log the try)? Within 2 h of the miss, log the try from the 🩹 Missed box on Tasks: the miss is reversed in full (coins, car, streak, rival heat) and the task comes back on your retry day. Once a week. |
 | Abandon | = taking the penalty (free only for 10 min after creating, for typos) |
 
 Tune the numbers at the top of `app.py` and `nag.py`.
