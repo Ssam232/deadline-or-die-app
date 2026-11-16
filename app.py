@@ -207,7 +207,16 @@ CARS = [  # one ladder in rough real-world performance order; Honda cars kept th
 CAR_BY_ID = {c["id"]: c for c in CARS}
 for _c in CARS:
     _c["make"] = _c["name"].split()[0]
-HOUSE_MAKES = ("Honda", "Acura")  # ⭐ prestige is about the Honda/Acura ladder; the others are there to buy and to race
+HOUSE_MAKES = ("Honda", "Acura")
+# 🏷️ Classes, like real racing: you race cars of your own kind. Street (hot hatches and small coupes) · Sport (the
+# quick road cars) · Super (supercars) · Race (touring and GT3 race cars) · Prototype.
+CLASSES = [("street", "🚗 Street", 0), ("sport", "🏁 Sport", 56), ("super", "⚡ Super", 80), ("race", "🏆 Race", 108),
+           ("proto", "🔺 Prototype", 165)]
+CLASS_LABEL = {k: lbl for k, lbl, _ in CLASSES}
+
+
+def car_class(c: dict) -> str:
+    return [k for k, _, lo in CLASSES if c["base"] >= lo][-1]  # ⭐ prestige is about the Honda/Acura ladder; the others are there to buy and to race
 SHOWROOM_PAINT = {"civic_si": ("#b3122a", 21), "integra_r": ("#f1f0ea", 11), "s2000": ("#1f4aa8", 2),
                   "ctr": ("#e7e6e1", 1), "nsx": ("#c8102e", 8), "nsx_s": ("#e8a43a", 30), "nsx_gt3": ("#f2f2ee", 30),
                   "rsx": ("#f0b323", 5), "tsx": ("#2b4a8a", 14), "integra_s": ("#2f6fb5", 23), "tlx_s": ("#b71c1c", 35),
@@ -2365,12 +2374,15 @@ RACE_DAY_CAP = 3  # races a day, max — however rich you are
 TICKET_MIN_TASK = 30  # a finish earns a ticket only if the task was worth 30+ honest minutes
 
 
+GRID_SPREAD = 0.06  # the field runs within ±6% of the grid's pace: close racing, nobody lapped twice by a midfielder
+
+
 def rivals_shown(state: dict, track: dict) -> tuple[int, int]:
-    """The grid you'll actually face: the track's field, sped up by what it's learned about you (📈) and by your
-    misses (🔥 rival heat)."""
+    """The grid you'll actually face: the track's field pace (its band's middle), sped up by what it's learned about
+    you (📈) and by your misses (🔥 rival heat), ±GRID_SPREAD."""
     lo, hi = ai_range(state, track)
-    h = 3 * state.get("rival_heat", 0)
-    return lo + h, hi + h
+    c = (lo + hi) / 2 + 3 * state.get("rival_heat", 0)
+    return round(c * (1 - GRID_SPREAD)), round(c * (1 + GRID_SPREAD))
 
 
 def outclass(state: dict, track: dict) -> bool:
@@ -2388,7 +2400,7 @@ def higher_open(state: dict, track: dict) -> dict | None:
 def sandbag(state: dict, track: dict) -> float:
     """Prize multiplier: 1.0 on a fair track. Only when you outclass a track AND a harder one is open to you do
     prizes shrink (to 0.3): staying down is a choice then. On your top track there's nowhere to go, so full prizes
-    (the fast rivals still show up)."""
+    (the grid still steps up to your pace)."""
     if not outclass(state, track) or not higher_open(state, track):
         return 1.0
     r, hi = track_rating(state, track), rivals_shown(state, track)[1]
@@ -2476,7 +2488,7 @@ def best_track(state: dict) -> int:
     ok = [i for i, t in enumerate(TRACKS) if lv >= t["level"]]
     if not ok:
         return 0
-    win = [i for i in ok if track_rating(state, TRACKS[i]) >= ai_range(state, TRACKS[i])[0]]
+    win = [i for i in ok if track_rating(state, TRACKS[i]) >= rivals_shown(state, TRACKS[i])[0]]
     return win[-1] if win else ok[0]
 
 
@@ -2537,17 +2549,21 @@ TUNES = [(0.0, "tired"), (0.12, "stock"), (0.4, "Stage 1"), (0.68, "Stage 2"), (
 
 
 def car_ceiling(c: dict) -> float:
-    """The fastest a car can be built: its base plus every part at this chassis's cap (the same rule your car obeys)."""
-    return c["base"] + G.cap(c["id"]) * sum(v["weight"] for v in PARTS.values())
+    """The fastest a car can be built: its base plus every part at this chassis's cap (the same rule your car obeys),
+    on a track that rewards half its parts (those count 30% more, as they do for yours)."""
+    return c["base"] + G.cap(c["id"]) * sum(v["weight"] for v in PARTS.values()) * 1.15
 
 
-def rival_car(rating: float, rng=random) -> tuple[str, str]:
-    """(car, tune) for a rival of this pace, so the grid makes sense: the car is one that can really run that pace
-    under the garage's own rules, and the tune says how far it's been pushed. A small car only beats a big one by
-    being built harder (or the big one being tired)."""
-    fits = [c for c in CARS if c["base"] * 0.86 <= rating <= car_ceiling(c)]
-    if not fits:  # quicker than anything can be built: a factory special on one of the top prototypes
-        return rng.choice([c for c in CARS if c["base"] >= 170])["name"], "works special"
+def rival_car(rating: float, rng=random, cls: str | None = None) -> tuple[str, str]:
+    """(car, tune) for a rival of this pace, from your class: the car is one that can really run that pace under the
+    garage's own rules, and the tune says how far it's been pushed."""
+    pool = [c for c in CARS if cls is None or car_class(c) == cls]
+    fits = [c for c in pool if c["base"] * 0.86 <= rating <= car_ceiling(c)]
+    if not fits:  # faster than this class can be built (or slower than its slowest car)
+        if rating > max(car_ceiling(c) for c in pool):
+            near = [c for c in pool if car_ceiling(c) >= rating * 0.92]  # the class's top cars, pushed past the limit
+            return rng.choice(near or [max(pool, key=car_ceiling)])["name"], "overtuned"
+        return min(pool, key=lambda c: c["base"])["name"], "tired"
 
     def frac(c):
         return (rating - c["base"]) / max(1.0, car_ceiling(c) - c["base"])
@@ -2572,24 +2588,23 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
     you = {"name": f"#{car['number']} {car['name']}", "you": True,
            "rating": track_rating(state, track) + boost + random.gauss(0, 5), "color": car["color"]}
     heat = 3 * heat_lvl  # your misses literally make them faster
-    lo_, hi_ = ai_range(state, track)  # 📈 …and so do your wins
-    if kind == "inv":
-        base_r = track_rating(state, track) + boost
-        rivals = [{"name": n, "you": False, "rating": base_r + random.uniform(-6, 6) + heat + random.gauss(0, 5),
-                   "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
-    else:
-        rivals = [{"name": n, "you": False, "rating": random.uniform(lo_, hi_) + heat + random.gauss(0, 5),
-                   "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
     mult = sandbag(state, track) if kind != "inv" else 1.0
     fast_ = kind != "inv" and outclass(state, track)
-    if fast_:  # you outclass the grid: the fast guys show up too
-        for r_ in rivals[:2]:
-            r_["rating"] = you["rating"] * random.uniform(0.9, 1.06) + random.gauss(0, 5)
+    yr = track_rating(state, track) + boost
+    if kind == "inv":  # 🎟️ a field built around your pace
+        lo_, hi_ = yr - 6 + heat, yr + 6 + heat
+    elif fast_:  # you outclass the grid: the whole grid steps up to your pace (not two cars and three backmarkers)
+        lo_, hi_ = yr * 0.94, yr * 1.05
+    else:  # 📈 the track's field (with what it's learned about you and your 🔥 heat already in)
+        lo_, hi_ = rivals_shown(state, track)
+    rivals = [{"name": n, "you": False, "rating": random.uniform(lo_, hi_) + random.gauss(0, 2.5),
+               "color": RV.RIVAL_COLORS[i]} for i, n in enumerate(random.sample(RIVALS, 5))]
     field = [you] + rivals
     mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
+    cls_ = car_class(CAR_BY_ID[mid])  # 🏷️ you race your own class
     you["car"], you["tune"] = CAR_BY_ID[mid]["name"], ""
     for r_ in rivals:
-        r_["car"], r_["tune"] = rival_car(r_["rating"])
+        r_["car"], r_["tune"] = rival_car(r_["rating"], cls=cls_)
     for f in field:
         f["dist"], f["dnf"], f["fin"], f["goal"] = 0.0, False, None, None
     ticks = track["laps"] * 6
@@ -2657,11 +2672,12 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
     why = RV.explain("DNF" if you["dnf"] else pos, gap, track["name"], cond_before, heat_lvl,
                      G.effective(car["parts"], mid), G.cap(mid), G.PART_INFO, G.installed, G.next_upgrade)
     if mult < 1:
-        why += (f"\n- 🪜 Your car outclasses {track['name']}, so two fast rivals joined and prizes paid "
+        why += (f"\n- 🪜 Your car outclasses {track['name']}, so the grid stepped up to your pace and prizes paid "
                 f"×{mult:.2f}. Move up a track for full prizes.")
     elif fast_:
-        why += f"\n- 🪜 You're quicker than the {track['name']} grid, so two fast rivals joined to keep it honest."
+        why += f"\n- 🪜 You're quicker than the {track['name']} grid, so it stepped up to your pace to keep it honest."
     secs = race_seconds(track) * len(history) / ticks  # same pace; a little longer while the field comes home
+    why += f"\n- 🏷️ {CLASS_LABEL[cls_]} class: everyone's in a {CLASS_LABEL[cls_].split(' ', 1)[1]} car."
     why += "\n- 🏎️ The grid: " + " · ".join(
         f"P{k} {f['name']} ({f['car']}{', ' + f['tune'] if f['tune'] else ''})"
         + (f" +{track['laps'] - f['laps']} lap{'s' * (track['laps'] - f['laps'] != 1)}" if f.get("laps") and f["laps"] < track["laps"] else "")
@@ -9743,7 +9759,7 @@ with tab_garage:
                                 + carart.car_svg(m["body"], paint_, num_, SHOWROOM_SPEC.get(m["id"], {}), 100, width=640,
                                                  studio=True) + "</div>", unsafe_allow_html=True)
                     c1, c2 = st.columns([3, 2], vertical_alignment="center")
-                    c1.markdown(f"<div class='dod-sr-n'>{m['name']}</div><div class='dod-sr-s'>Base {m['base']} · tunes to "
+                    c1.markdown(f"<div class='dod-sr-n'>{m['name']}</div><div class='dod-sr-s'>{CLASS_LABEL[car_class(m)]} · Base {m['base']} · tunes to "
                                 f"L{G.cap(m['id'])} · {m['blurb']}</div>", unsafe_allow_html=True)
                     if m["id"] == car.get("model"):
                         c2.caption(tag)
@@ -9906,10 +9922,13 @@ with tab_race:
         pz = [round(x * m_) for x in track["prize"]]
         rc = run_cost(state, track)
         edge_ = "#2ec4b6" if rating >= hi else "#f5c518" if rating >= lo else "#e10600"
-        st.markdown(f"<div class='dod-tiles'><div><small>Your car</small><b style='color:{edge_}'>{rating:.0f}</b></div>"
-                    f"<div><small>Rivals</small><b>{lo}–{hi}</b>"
-                    + (f"<small style='text-transform:none;margin-top:2px'>+2 fast ~{rating * .9:.0f}–{rating * 1.06:.0f}</small>" if fast_ else "") + "</div>"
-                    f"<div><small>Laps</small><b>{track['laps']}</b></div>"
+        _cls = car_class(CAR_BY_ID[car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]])
+        st.markdown(f"<div class='dod-tiles'><div><small>Your car</small><b style='color:{edge_}'>{rating:.0f}</b>"
+                    f"<small style='text-transform:none;margin-top:2px'>{CLASS_LABEL[_cls]} class</small></div>"
+                    + (f"<div><small>Rivals</small><b>{rating * .94:.0f}–{rating * 1.05:.0f}</b>"
+                       f"<small style='text-transform:none;margin-top:2px'>stepped up from {lo}–{hi}</small></div>" if fast_
+                       else f"<div><small>Rivals</small><b>{lo}–{hi}</b></div>")
+                    + f"<div><small>Laps</small><b>{track['laps']}</b></div>"
                     f"<div><small>Entry + ⛽ running</small><b>{track['fee']} + {rc} 🪙</b></div>"
                     f"<div><small>Prizes</small><b>🥇{pz[0]} 🥈{pz[1]} 🥉{pz[2]}</b></div></div>", unsafe_allow_html=True)
         ff = field_form(state, track["name"])
@@ -9918,11 +9937,11 @@ with tab_race:
                        "Win more and they get faster; move up a tier to keep the money flowing.")
         up_ = higher_open(state, track)
         if m_ < 1:
-            st.caption(f"🪜 You outclass this track: two fast rivals join and prizes pay ×{m_:.2f}. "
+            st.caption(f"🪜 You outclass this track: the grid steps up to your pace and prizes pay ×{m_:.2f}. "
                        f"**{up_['name']}** is open to you, so move up for full prizes.")
         elif fast_:
             nxt_ = next((t for t in TRACKS if t["level"] > lvl), None)
-            st.caption("🪜 You're quicker than this grid, so two fast rivals join to keep it honest. Full prizes: "
+            st.caption("🪜 You're quicker than this grid, so it steps up to your pace to keep it honest. Full prizes: "
                        "it's the top track you've unlocked"
                        + (f" (**{nxt_['name']}** opens at level {nxt_['level']})." if nxt_ else "."))
         if car["condition"] < 40:

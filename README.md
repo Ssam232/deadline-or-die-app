@@ -115,6 +115,8 @@ Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5
 
 **🏁 How a race finishes.** The leader sets the distance. Everyone else finishes the next time they cross the line, so nobody stops mid-track: cars on the lead lap race to the flag, lapped cars are classified "+1 lap". Places are most laps first, then the order across the line.
 
+**🏷️ Classes and matchmaking.** Every car is in a class: 🚗 Street (Civic Si to Prelude, MX-5, GR86) · 🏁 Sport (Legend, S2000 to TLX Type S, WRX, Evo, Z, Supra) · ⚡ Super (NSX family, GT-R, Z06, 911 GT3 RS) · 🏆 Race (TCR and GT3 cars) · 🔺 Prototype. You only race your own class. The grid runs within ±6% of the track's pace, so racing is close and nobody gets lapped twice. Outclass a track and the whole grid steps up to your pace (it used to be two fast cars and three backmarkers).
+
 **🏎️ What the rivals drive.** Every rival is in a named car (Honda, Acura, or one of 13 others: MX-5, GR86, WRX STI, Evo IX, Nissan Z, GR Supra, GT-R, Corvette Z06, 911 GT3 RS, M4 GT3, 911 GT3 R, Cadillac V-Series.R, Porsche 963) with a tune: tired · stock · Stage 1–3 · overtuned. The car is always one that can really run that pace under the garage's own rules (base + parts up to the chassis cap), so a small car only beats a bigger one by being built harder. Those 13 cars are in the Showroom too, priced and levelled by where they sit in the order. ⭐ Prestige still needs only the Honda/Acura ladder.
 
 **🃏 Lounge hands are saved.** A blackjack hand in play is kept in your save, so a refresh or a sleeping phone brings back the same cards instead of losing the bet. With under 10 coins the bet is simply 5.
