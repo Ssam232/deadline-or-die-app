@@ -302,21 +302,50 @@ def _variant(base: str, L: float, H: float, WB: float, **over) -> dict:
                                  "SILL": b["SILL"] * fz, **over})
 
 
+# Three more body types, drawn from how those kinds of car are laid out (not from any one model's styling):
+PROFILES["boxsedan"] = dict(  # rally sedan: upright three-box, tall glass, a real boot with a wing on it
+    WHEEL=("spoke", "#c9a227", 10), LAMP="tall", EXH="single",
+    L=4.5, H=1.46, WB=2.63, FO=0.93, TD=0.66, SILL=0.2,
+    OUT=[(0.04, 0.24, "c"), (0.0, 0.42), (0.03, 0.64), (0.14, 0.78), (0.6, 0.88), (1.1, 0.97, "c"),
+         (1.42, 1.22), (1.72, 1.42), (2.3, 1.46), (2.98, 1.44), (3.36, 1.28), (3.68, 1.08, "c"), (4.3, 1.06),
+         (4.47, 1.02, "c"), (4.5, 0.85), (4.49, 0.45), (4.45, 0.25, "c")],
+    DLO=[(1.2, 1.0), (1.74, 1.36), (2.96, 1.37), (3.52, 1.07), (1.2, 0.98)],
+    B=2.35, DOORS=[1.18, 2.35, 3.3], BELT=1.0, HEAD=(0.03, 0.36, 0.68, 0.78), TAIL=(4.3, 4.5, 0.86, 0.98),
+    HOOD=(0.25, 1.0), ROOF=(1.85, 2.9), DECK=4.22, CAP=3.7, WING=4, FLARE=True)
+PROFILES["gtcoupe"] = dict(  # front-engine GT: long hood, cabin set well back, short fast tail
+    WHEEL=("twin", "#2e3036", 5), LAMP="slim", EXH="twin",
+    L=4.38, H=1.3, WB=2.5, FO=0.9, TD=0.68, SILL=0.17,
+    OUT=[(0.04, 0.22, "c"), (0.0, 0.4), (0.04, 0.58), (0.25, 0.7), (0.9, 0.8), (1.7, 0.9, "c"),
+         (2.05, 1.1), (2.4, 1.27), (2.8, 1.3), (3.2, 1.26), (3.75, 1.08), (4.1, 1.0, "c"), (4.32, 0.97),
+         (4.38, 0.82), (4.37, 0.45), (4.33, 0.24, "c")],
+    DLO=[(1.78, 0.92), (2.4, 1.22), (3.1, 1.21), (3.6, 1.02), (1.78, 0.9)],
+    B=None, DOORS=[1.72, 2.95], BELT=0.92, HEAD=(0.03, 0.4, 0.6, 0.67), TAIL=(4.2, 4.38, 0.84, 0.94),
+    HOOD=(0.3, 1.6), ROOF=(2.45, 3.15), DECK=4.15, CAP=3.8)
+PROFILES["rearfast"] = dict(  # rear-engine coupe: short low nose, roof peak far forward, one long slope to the tail
+    WHEEL=("spoke", "#c9ccd2", 10), LAMP="tall", EXH="twin",
+    L=4.57, H=1.3, WB=2.46, FO=1.0, TD=0.7, SILL=0.16, MID=True,
+    OUT=[(0.04, 0.2, "c"), (0.0, 0.36), (0.04, 0.56), (0.3, 0.7), (0.8, 0.8), (1.25, 0.9, "c"),
+         (1.6, 1.12), (1.95, 1.28), (2.35, 1.3), (2.9, 1.24), (3.5, 1.1), (4.05, 0.98), (4.45, 0.9, "c"),
+         (4.57, 0.8), (4.56, 0.45), (4.52, 0.22, "c")],
+    DLO=[(1.32, 0.92), (1.95, 1.23), (2.6, 1.22), (3.25, 1.02), (1.32, 0.9)],
+    B=2.5, DOORS=[1.3, 2.5], BELT=0.92, HEAD=(0.04, 0.38, 0.62, 0.74), TAIL=(4.4, 4.57, 0.82, 0.88),
+    HOOD=(0.3, 1.15), ROOF=(1.95, 2.7), DECK=4.3, CAP=3.6)
+
 # the rest of the paddock (each to its own size; shapes stay generic for the type of car, no badges)
 PROFILES["mx5"] = _variant("roadster", 3.915, 1.235, 2.31, WHEEL=("spoke", "#3a3d44", 8), TD=0.60, EXH="twin")
 PROFILES["gr86"] = _variant("coupe", 4.265, 1.31, 2.575, WHEEL=("twin", "#2e3036", 5), WING=2, EXH="twin")
-PROFILES["wrx"] = _variant("sedan", 4.595, 1.475, 2.65, WHEEL=("spoke", "#c9a227", 10), WING=4, FLARE=True, EXH="quad")
-PROFILES["evo"] = _variant("tsx", 4.49, 1.45, 2.625, WHEEL=("spoke", "#efeee8", 6), WING=4, FLARE=True, EXH="single")
-PROFILES["zcar"] = _variant("prelude", 4.38, 1.315, 2.55, WHEEL=("twin", "#2e3036", 5), TD=0.68, EXH="twin", fo=0.94)
-PROFILES["supra"] = _variant("coupe", 4.38, 1.29, 2.47, WHEEL=("twin", "#3a3d44", 5), TD=0.68, WING=2, EXH="twin", fo=1.04)
-PROFILES["gtr"] = _variant("legend", 4.71, 1.37, 2.78, WHEEL=("spoke", "#2e3036", 10), TD=0.72, WING=3, FLARE=True, EXH="quad")
+PROFILES["wrx"] = _variant("boxsedan", 4.595, 1.475, 2.65, EXH="quad")
+PROFILES["evo"] = _variant("boxsedan", 4.49, 1.45, 2.625, WHEEL=("spoke", "#efeee8", 6), LAMP="slim", fo=0.97)
+PROFILES["zcar"] = _variant("gtcoupe", 4.38, 1.315, 2.55, fo=0.96)
+PROFILES["supra"] = _variant("gtcoupe", 4.38, 1.29, 2.47, WHEEL=("twin", "#3a3d44", 5), WING=2, LAMP="tall", fo=1.06)
+PROFILES["gtr"] = _variant("gtcoupe", 4.71, 1.37, 2.78, WHEEL=("spoke", "#2e3036", 10), TD=0.72, WING=3, FLARE=True,
+                           EXH="quad", LAMP="tall")
 PROFILES["z06"] = _variant("super2", 4.685, 1.235, 2.72, WHEEL=("spoke", "#1e1f23", 10), TD=0.70, WING=3, EXH="quad")
-PROFILES["gt3rs"] = _variant("coupe", 4.57, 1.32, 2.457, WHEEL=("spoke", "#c9ccd2", 10), TD=0.70, WING=5, FLARE=True,
-                             EXH="twin", fo=1.12)
-PROFILES["m4gt3"] = _variant("legend", 5.02, 1.31, 2.917, WHEEL=("spoke", "#1e1f23", 6), TD=0.71, SILL=0.13, GT3=True,
+PROFILES["gt3rs"] = _variant("rearfast", 4.57, 1.32, 2.457, WING=5, FLARE=True)
+PROFILES["m4gt3"] = _variant("gtcoupe", 5.02, 1.31, 2.917, WHEEL=("spoke", "#1e1f23", 6), TD=0.71, SILL=0.13, GT3=True,
                              WING=5, FLARE=True)
-PROFILES["gt3r"] = _variant("coupe", 4.62, 1.28, 2.507, WHEEL=("spoke", "#1e1f23", 6), TD=0.71, SILL=0.13, GT3=True,
-                            WING=5, FLARE=True, fo=1.12)
+PROFILES["gt3r"] = _variant("rearfast", 4.62, 1.28, 2.507, WHEEL=("spoke", "#1e1f23", 6), TD=0.71, SILL=0.13, GT3=True,
+                            WING=5, FLARE=True)
 PROFILES["vsr"] = _variant("proto05", 5.1, 1.06, 3.148, TD=0.71)
 PROFILES["p963"] = _variant("proto", 5.1, 1.04, 3.148, TD=0.71)
 BODIES = PROFILES  # (older name, kept for callers)

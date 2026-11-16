@@ -121,7 +121,7 @@ Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5
 
 **🏆 Season counting.** Race history keeps 400 races (a full 8-week season fits), and a logged 🔁 try isn't a season finish.
 
-**💡 Car art.** Bodywork is lit as a rounded 3D surface (SVG lighting filters over the silhouette) with soft ground shadows, instead of flat painted gradients. Shapes stay original, proportion-based drawings with no badges.
+**💡 Car art.** Bodywork is lit as a rounded 3D surface (SVG lighting filters over the silhouette) with soft ground shadows, instead of flat painted gradients. Shapes are originals informed by how each kind of car is laid out (engine position, hood length, roof type, wing), the way GTA does it, not copies of any model: three extra body types (rally sedan, long-hood GT, rear-engine fastback) cover the non-Honda cars. No badges.
 
 **📱 Phone navigation and feel.** On a phone the tabs are a bottom bar that stays under your thumb (swipe it sideways for the later tabs). Buttons respond to presses, numbers don't jitter as they change, and a pile of updates after time away shows as two toasts plus one "🔔 more updates" list instead of a stack.
 
