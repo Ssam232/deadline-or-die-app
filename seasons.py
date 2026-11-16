@@ -40,6 +40,7 @@ def results(state: dict, n: int) -> dict:
     start = EPOCH + timedelta(weeks=SEASON_WEEKS * (n - 1))
     end = start + timedelta(weeks=SEASON_WEEKS) - timedelta(days=1)
     finishes = sum(1 for t in state.get("tasks", []) if t.get("status") in ("done", "redeemed")
+                   and t.get("source") != "attempt"  # a logged try isn't a finish
                    and _in(t.get("completed_at"), start, end))
     races = [r for r in state.get("races", []) if _in(r.get("ts"), start, end)]
     wins = sum(1 for r in races if r.get("pos") == 1)

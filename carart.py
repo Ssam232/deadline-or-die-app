@@ -291,6 +291,34 @@ PROFILES["gt3evo"] = dict(PROFILES["gt3"])
 PROFILES["tcr"] = _scaled(PROFILES["hatch"], 4.6 / 4.59, 1.36 / 1.41, L=4.6, H=1.36, TD=0.68, SILL=0.12, GT3=True,
                           WING=5, FLARE=True, WHEEL=("spoke", "#1e1f23", 6))
 PROFILES["proto05"] = _scaled(PROFILES["proto"], 4.75 / 5.1, 1.03 / 1.06, L=4.75, H=1.03, WB=3.05, TD=0.70)
+
+
+def _variant(base: str, L: float, H: float, WB: float, **over) -> dict:
+    """An original body for another car of the same kind: the base outline re-proportioned to that car's published
+    length, height and wheelbase (facts, not styling), with its own wheels and details."""
+    b = PROFILES[base]
+    fx, fz = L / b["L"], H / b["H"]
+    return _scaled(b, fx, fz, **{"L": L, "H": H, "WB": WB, "FO": b["FO"] * fx * over.pop("fo", 1.0),
+                                 "SILL": b["SILL"] * fz, **over})
+
+
+# the rest of the paddock (each to its own size; shapes stay generic for the type of car, no badges)
+PROFILES["mx5"] = _variant("roadster", 3.915, 1.235, 2.31, WHEEL=("spoke", "#3a3d44", 8), TD=0.60, EXH="twin")
+PROFILES["gr86"] = _variant("coupe", 4.265, 1.31, 2.575, WHEEL=("twin", "#2e3036", 5), WING=2, EXH="twin")
+PROFILES["wrx"] = _variant("sedan", 4.595, 1.475, 2.65, WHEEL=("spoke", "#c9a227", 10), WING=4, FLARE=True, EXH="quad")
+PROFILES["evo"] = _variant("tsx", 4.49, 1.45, 2.625, WHEEL=("spoke", "#efeee8", 6), WING=4, FLARE=True, EXH="single")
+PROFILES["zcar"] = _variant("prelude", 4.38, 1.315, 2.55, WHEEL=("twin", "#2e3036", 5), TD=0.68, EXH="twin", fo=0.94)
+PROFILES["supra"] = _variant("coupe", 4.38, 1.29, 2.47, WHEEL=("twin", "#3a3d44", 5), TD=0.68, WING=2, EXH="twin", fo=1.04)
+PROFILES["gtr"] = _variant("legend", 4.71, 1.37, 2.78, WHEEL=("spoke", "#2e3036", 10), TD=0.72, WING=3, FLARE=True, EXH="quad")
+PROFILES["z06"] = _variant("super2", 4.685, 1.235, 2.72, WHEEL=("spoke", "#1e1f23", 10), TD=0.70, WING=3, EXH="quad")
+PROFILES["gt3rs"] = _variant("coupe", 4.57, 1.32, 2.457, WHEEL=("spoke", "#c9ccd2", 10), TD=0.70, WING=5, FLARE=True,
+                             EXH="twin", fo=1.12)
+PROFILES["m4gt3"] = _variant("legend", 5.02, 1.31, 2.917, WHEEL=("spoke", "#1e1f23", 6), TD=0.71, SILL=0.13, GT3=True,
+                             WING=5, FLARE=True)
+PROFILES["gt3r"] = _variant("coupe", 4.62, 1.28, 2.507, WHEEL=("spoke", "#1e1f23", 6), TD=0.71, SILL=0.13, GT3=True,
+                            WING=5, FLARE=True, fo=1.12)
+PROFILES["vsr"] = _variant("proto05", 5.1, 1.06, 3.148, TD=0.71)
+PROFILES["p963"] = _variant("proto", 5.1, 1.04, 3.148, TD=0.71)
 BODIES = PROFILES  # (older name, kept for callers)
 
 K = 65.0          # SVG units per metre: every car is drawn to the same scale
@@ -637,6 +665,11 @@ TOP = {  # length, width, cabin (x0, x1) from the rear, nose taper, open cockpit
     "proto": (30, 13, (1, 8), 7, False),
     "crx": (19, 10, (-4, 4), 3, False), "s660": (17, 9, (-2, 3), 3, True), "prelude": (23, 11, (-3, 5), 3.2, False),
     "legend": (25, 11, (-4, 5), 3.2, False), "tcr": (23, 13, (-7, 5), 2.5, False), "proto05": (28, 13, (1, 8), 6.5, False),
+    "mx5": (20, 10, (-3, 3), 3.2, True), "gr86": (22, 11, (-3, 5), 3.4, False), "wrx": (24, 11, (-5, 5), 3, False),
+    "evo": (23, 11, (-5, 5), 2.8, False), "zcar": (23, 11, (-4, 4), 3.6, False), "supra": (23, 12, (-4, 4), 3.8, False),
+    "gtr": (25, 12, (-4, 5), 3.2, False), "z06": (25, 13, (-1, 7), 5, False), "gt3rs": (24, 12, (-5, 4), 3.6, False),
+    "m4gt3": (27, 13, (-5, 4), 3.4, False), "gt3r": (25, 13, (-5, 4), 3.6, False), "vsr": (30, 13, (1, 8), 6.5, False),
+    "p963": (30, 13, (1, 8), 7, False),
 }
 
 

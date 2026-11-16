@@ -141,7 +141,7 @@ CARS = [  # one ladder in rough real-world performance order; Honda cars kept th
      "blurb": "Where every Honda guy starts. Rev it out."},
     {"id": "crx", "name": "Honda CR-X SiR", "base": 42, "cost": 150, "level": 1, "body": "crx",
      "blurb": "Two seats, no weight, all fun. The first cheap thrill."},
-    {"id": "mx5", "name": "Mazda MX-5 Miata", "base": 43, "cost": 180, "level": 1, "body": "s660",
+    {"id": "mx5", "name": "Mazda MX-5 Miata", "base": 43, "cost": 180, "level": 1, "body": "mx5",
      "blurb": "Light, simple, rear-drive. The answer to most questions."},
     {"id": "tsx", "name": "Acura TSX", "base": 44, "cost": 250, "level": 2, "body": "tsx",
      "blurb": "The grown-up sport sedan. Quietly quick, and a K24 that loves revs."},
@@ -151,7 +151,7 @@ CARS = [  # one ladder in rough real-world performance order; Honda cars kept th
      "blurb": "A mid-engine roadster small enough to park sideways. Grins per horsepower: off the chart."},
     {"id": "integra_r", "name": "Honda Integra Type R (DC2)", "base": 50, "cost": 400, "level": 2, "body": "coupe",
      "blurb": "Hand-ported legend. Earned, not bought."},
-    {"id": "gr86", "name": "Toyota GR86", "base": 52, "cost": 480, "level": 2, "body": "coupe",
+    {"id": "gr86", "name": "Toyota GR86", "base": 52, "cost": 480, "level": 2, "body": "gr86",
      "blurb": "A flat-four up front, drive at the back, and not much weight between."},
     {"id": "prelude", "name": "Honda Prelude Type SH", "base": 55, "cost": 650, "level": 3, "body": "prelude",
      "blurb": "A front-wheel-drive coupe that steers its own rear end through corners."},
@@ -159,47 +159,47 @@ CARS = [  # one ladder in rough real-world performance order; Honda cars kept th
      "blurb": "The car that started Acura. A long-hood V6 grand tourer."},
     {"id": "s2000", "name": "Honda S2000", "base": 60, "cost": 900, "level": 3, "body": "roadster",
      "blurb": "9,000 rpm. Roof down, deadlines done."},
-    {"id": "wrx_sti", "name": "Subaru WRX STI", "base": 62, "cost": 1050, "level": 3, "body": "sedan",
+    {"id": "wrx_sti", "name": "Subaru WRX STI", "base": 62, "cost": 1050, "level": 3, "body": "wrx",
      "blurb": "A turbo flat-four and all four wheels driven. Rally roots."},
-    {"id": "evo9", "name": "Mitsubishi Lancer Evolution IX", "base": 64, "cost": 1200, "level": 4, "body": "tsx",
+    {"id": "evo9", "name": "Mitsubishi Lancer Evolution IX", "base": 64, "cost": 1200, "level": 4, "body": "evo",
      "blurb": "The other rally sedan. Boost, grip, and a long rivalry."},
     {"id": "integra_s", "name": "Acura Integra Type S", "base": 66, "cost": 1400, "level": 4, "body": "integra_s",
      "blurb": "The Integra name, back with a turbo and three pedals."},
-    {"id": "nissan_z", "name": "Nissan Z", "base": 69, "cost": 1600, "level": 4, "body": "prelude",
+    {"id": "nissan_z", "name": "Nissan Z", "base": 69, "cost": 1600, "level": 4, "body": "zcar",
      "blurb": "A twin-turbo V6 in a long-hood, short-deck coupe."},
     {"id": "ctr", "name": "Honda Civic Type R (FL5)", "base": 72, "cost": 1800, "level": 4, "body": "hatch",
      "blurb": "The wing says it all."},
-    {"id": "supra", "name": "Toyota GR Supra", "base": 76, "cost": 2300, "level": 5, "body": "legend",
+    {"id": "supra", "name": "Toyota GR Supra", "base": 76, "cost": 2300, "level": 5, "body": "supra",
      "blurb": "A turbo straight-six and a famous name. Quick out of the box."},
     {"id": "tlx_s", "name": "Acura TLX Type S", "base": 78, "cost": 2600, "level": 5, "body": "tlx",
      "blurb": "Turbo V6 and a rear axle that pushes you through the corner."},
     {"id": "nsx", "name": "Honda NSX (NA1)", "base": 85, "cost": 3500, "level": 5, "body": "super",
      "blurb": "The one that embarrassed Ferrari."},
-    {"id": "gtr", "name": "Nissan GT-R (R35)", "base": 90, "cost": 4200, "level": 6, "body": "tlx",
+    {"id": "gtr", "name": "Nissan GT-R (R35)", "base": 90, "cost": 4200, "level": 6, "body": "gtr",
      "blurb": "Heavy, all-wheel drive, and faster than it has any right to be."},
     {"id": "acura_nsx", "name": "Acura NSX", "base": 94, "cost": 4800, "level": 6, "body": "super3",
      "blurb": "Three motors, one engine, zero excuses."},
-    {"id": "z06", "name": "Chevrolet Corvette Z06", "base": 97, "cost": 5400, "level": 7, "body": "super2",
+    {"id": "z06", "name": "Chevrolet Corvette Z06", "base": 97, "cost": 5400, "level": 7, "body": "z06",
      "blurb": "A mid-engine V8 that revs like a race engine, because it nearly is one."},
     {"id": "nsx_s", "name": "Honda NSX Type S", "base": 100, "cost": 6000, "level": 7, "body": "super2",
      "blurb": "Final form of the road car."},
-    {"id": "gt3rs", "name": "Porsche 911 GT3 RS", "base": 104, "cost": 6800, "level": 7, "body": "super",
+    {"id": "gt3rs", "name": "Porsche 911 GT3 RS", "base": 104, "cost": 6800, "level": 7, "body": "gt3rs",
      "blurb": "A road car that's mostly wing. The track-day benchmark."},
     {"id": "ctr_tcr", "name": "Honda Civic Type R TCR", "base": 110, "cost": 8000, "level": 8, "body": "tcr",
      "blurb": "The Type R, built for touring-car racing. Your first real race car."},
     {"id": "nsx_gt3", "name": "Honda NSX GT3 Evo", "base": 120, "cost": 10000, "level": 9, "body": "gt3",
      "blurb": "The race car. Same class as your rig — park it next to it."},
-    {"id": "m4_gt3", "name": "BMW M4 GT3", "base": 122, "cost": 10500, "level": 9, "body": "gt3",
+    {"id": "m4_gt3", "name": "BMW M4 GT3", "base": 122, "cost": 10500, "level": 9, "body": "m4gt3",
      "blurb": "A front-engine GT3 car: the same class as the NSX GT3, a different way of getting there."},
-    {"id": "911_gt3r", "name": "Porsche 911 GT3 R", "base": 126, "cost": 11500, "level": 10, "body": "gt3evo",
+    {"id": "911_gt3r", "name": "Porsche 911 GT3 R", "base": 126, "cost": 11500, "level": 10, "body": "gt3r",
      "blurb": "The customer race car half the GT3 grid shows up in."},
     {"id": "nsx_evo22", "name": "Acura NSX GT3 Evo22", "base": 150, "cost": 18000, "level": 12, "body": "gt3evo",
      "blurb": "The final evolution of the GT3 car."},
     {"id": "arx05", "name": "Acura ARX-05", "base": 170, "cost": 28000, "level": 14, "body": "proto05",
      "blurb": "A three-time endurance champion prototype. One step from the top."},
-    {"id": "vseries_r", "name": "Cadillac V-Series.R", "base": 180, "cost": 33000, "level": 15, "body": "proto05",
+    {"id": "vseries_r", "name": "Cadillac V-Series.R", "base": 180, "cost": 33000, "level": 15, "body": "vsr",
      "blurb": "A V8 hybrid prototype. You hear it before you see it."},
-    {"id": "p963", "name": "Porsche 963", "base": 186, "cost": 37000, "level": 15, "body": "proto",
+    {"id": "p963", "name": "Porsche 963", "base": 186, "cost": 37000, "level": 15, "body": "p963",
      "blurb": "The other top-class prototype. The ARX-06's direct rival."},
     {"id": "arx06", "name": "Acura ARX-06", "base": 190, "cost": 40000, "level": 16, "body": "proto",
      "blurb": "A prototype. The top of the ladder — the whole year's work in one car."},
@@ -2644,7 +2644,7 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
     if pos == 1 and not you["dnf"] and kind in ("gp", "inv"):
         state.setdefault("cups", []).append({"kind": kind, "track": track["name"], "date": now().date().isoformat()})
     state["boosts"] = []  # 🧪 one-race consumables are used up
-    del state["races"][100:]
+    del state["races"][400:]  # a whole 8-week season (and then some) has to fit: season points are counted from here
     save_state(state)
     winner = order[0]
     gap = ((you["fin"] or len(history)) - winner["fin"]) * 1.7  # pseudo-seconds between crossing the line
@@ -7103,15 +7103,28 @@ def _cards(cs: list[str], hide_second: bool = False) -> str:
     return " ".join("🂠" if hide_second and i == 1 else f"`{c}`" for i, c in enumerate(cs))
 
 
+def _bet_slider(state: dict, key: str) -> int:
+    """A bet you can afford: 5 up to the table max. With under 10 coins there's nothing to slide, so it's just 5."""
+    top = min(L.MAX_BET, state["coins"] // 5 * 5)
+    if top < 10:
+        st.caption("Bet: **5** 🪙" if state["coins"] >= 5 else "You need at least 5 🪙 to play.")
+        return 5
+    return st.slider("Bet", 5, top, min(10, top), step=5, key=key)
+
+
 def render_lounge(state: dict) -> None:
-    today = now().date().isoformat()
-    reason = L.closed_reason(state, now().date(), black_flag_reasons(state))
-    ticket = L.entry_ticket(state, now().date())
+    today = gtoday().isoformat()  # 🌙 the day you're on
+    reason = L.closed_reason(state, gtoday(), black_flag_reasons(state))
+    ticket = L.entry_ticket(state, gtoday())
     if ticket and not reason:
         st.caption(ticket)
     rec = L.day_record(state, today)
     st.caption(f"Today: {rec['hands']}/{L.MAX_HANDS} hands · net {rec['net']:+d} 🪙 · max bet {L.MAX_BET} · "
                "the house has an edge — this is where coins go to have fun, not to multiply.")
+    # 🃏 a hand in play is kept in your save (the bet's already on the table): a refresh or a sleeping phone
+    # brings you back to the same cards instead of losing the bet
+    if "bj" not in st.session_state and state.get("bj_hand"):
+        st.session_state["bj"] = state["bj_hand"]
     g = st.session_state.get("bj")
     if reason and not (g and not g["over"]):
         st.info(f"🚪 {reason}")
@@ -7122,6 +7135,7 @@ def render_lounge(state: dict) -> None:
         rec["net"] += payout - bet
         if payout:
             bank(state, payout, f"🎰 {label}")
+        state.pop("bj_hand", None)
         save_state(state)
 
     tab_bj, tab_dice = st.tabs(["🃏 Blackjack", "🎲 Snake eyes"])
@@ -7132,7 +7146,7 @@ def render_lounge(state: dict) -> None:
                             f"You {_cards(g['player'])} ({L.hand_value(g['player'])})")
                 (st.success if g["payout"] > g["bet"] else st.info if g["payout"] == g["bet"] else st.error)(
                     f"{g['result']} — {'+' if g['payout'] - g['bet'] >= 0 else ''}{g['payout'] - g['bet']} 🪙")
-            bet = st.slider("Bet", 5, min(L.MAX_BET, max(5, state["coins"])), 10, step=5, key="bj_bet")
+            bet = _bet_slider(state, "bj_bet")
             if st.button("Deal", type="primary", disabled=state["coins"] < bet):
                 bank(state, -bet, "🎰 Blackjack bet")
                 g = L.deal(bet)
@@ -7140,6 +7154,7 @@ def render_lounge(state: dict) -> None:
                 if g["over"]:
                     settle(g["payout"], bet, "Blackjack")
                 else:
+                    state["bj_hand"] = g
                     save_state(state)
                 st.rerun()
         else:
@@ -7150,6 +7165,9 @@ def render_lounge(state: dict) -> None:
                 L.hit(g)
                 if g["over"]:
                     settle(g["payout"], g["bet"], "Blackjack")
+                else:
+                    state["bj_hand"] = g
+                    save_state(state)
                 st.rerun()
             if c2.button("Stand", type="primary", use_container_width=True):
                 L.stand(g)
@@ -7166,7 +7184,7 @@ def render_lounge(state: dict) -> None:
                 + (f"+{last['payout'] - last['bet']} 🪙" if last["payout"] else f"−{last['bet']} 🪙"))
         choice = st.radio("Bet on", list(L.SNAKE_BETS), horizontal=True, key="dice_choice",
                           format_func=lambda k: f"{L.SNAKE_BETS[k][0]} ({L.SNAKE_BETS[k][1]}×)")
-        bet = st.slider("Bet", 5, min(L.MAX_BET, max(5, state["coins"])), 10, step=5, key="dice_bet")
+        bet = _bet_slider(state, "dice_bet")
         if st.button("🎲 Roll", type="primary", disabled=bool(reason) or state["coins"] < bet):
             bank(state, -bet, "🎰 Snake eyes bet")
             dice = L.roll()
@@ -9704,11 +9722,18 @@ with tab_garage:
                         flash(f"🎨 **{name}** unlocked and applied.", celebrate=True, sound="jackpot")
                         st.rerun()
 
-    with fold("showroom", "🏢 Showroom — the Honda & Acura ladder", False) as _fo:
+    with fold("showroom", "🏢 Showroom", False) as _fo:
         if _open(_fo):  # collapsed = not built (faster page, smaller download)
             lvl_now = level_of(state["xp"])
             owned = car.setdefault("owned", ["civic_si"])
+            _mk = st.segmented_control("Makes", ["Honda & Acura", "The rest of the paddock", "Mine"], default="Honda & Acura",
+                                       key="sr_make", label_visibility="collapsed") or "Honda & Acura"
+            st.caption("Same rules for every car: a base pace, parts up to its chassis limit. ⭐ Prestige needs the "
+                       "Honda and Acura ladder only.")
             for m in CARS:
+                if (_mk == "Mine" and m["id"] not in owned) or (_mk == "Honda & Acura" and m["make"] not in HOUSE_MAKES) \
+                        or (_mk == "The rest of the paddock" and m["make"] in HOUSE_MAKES):
+                    continue
                 paint_, num_ = SHOWROOM_PAINT.get(m["id"], ("#c8102e", 1))
                 locked_ = lvl_now < m["level"] and m["id"] not in owned
                 tag = "🟢 driving" if m["id"] == car.get("model") else "✅ owned" if m["id"] in owned else \

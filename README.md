@@ -117,6 +117,10 @@ Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5
 
 **🏎️ What the rivals drive.** Every rival is in a named car (Honda, Acura, or one of 13 others: MX-5, GR86, WRX STI, Evo IX, Nissan Z, GR Supra, GT-R, Corvette Z06, 911 GT3 RS, M4 GT3, 911 GT3 R, Cadillac V-Series.R, Porsche 963) with a tune: tired · stock · Stage 1–3 · overtuned. The car is always one that can really run that pace under the garage's own rules (base + parts up to the chassis cap), so a small car only beats a bigger one by being built harder. Those 13 cars are in the Showroom too, priced and levelled by where they sit in the order. ⭐ Prestige still needs only the Honda/Acura ladder.
 
+**🃏 Lounge hands are saved.** A blackjack hand in play is kept in your save, so a refresh or a sleeping phone brings back the same cards instead of losing the bet. With under 10 coins the bet is simply 5.
+
+**🏆 Season counting.** Race history keeps 400 races (a full 8-week season fits), and a logged 🔁 try isn't a season finish.
+
 **💡 Car art.** Bodywork is lit as a rounded 3D surface (SVG lighting filters over the silhouette) with soft ground shadows, instead of flat painted gradients. Shapes stay original, proportion-based drawings with no badges.
 
 **📱 Phone navigation and feel.** On a phone the tabs are a bottom bar that stays under your thumb (swipe it sideways for the later tabs). Buttons respond to presses, numbers don't jitter as they change, and a pile of updates after time away shows as two toasts plus one "🔔 more updates" list instead of a stack.
