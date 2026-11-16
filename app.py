@@ -28,7 +28,6 @@ import uuid
 from datetime import date, datetime, time as dtime, timedelta
 from collections import defaultdict
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -2894,7 +2893,7 @@ def render_dailies(state: dict) -> None:
                     note = "<div style='color:#2ec4b6;font-size:.88rem'>All done today ✅</div>"
                 elif bail_:
                     left_ = (DL.closes_at(today, TZ, _bailed(state), DAY_END) - now()).total_seconds() / 60
-                    note = (f"<div style='color:#8ab4ff;font-size:.88rem'>🪂 Bailout day"
+                    note = ("<div style='color:#8ab4ff;font-size:.88rem'>🪂 Bailout day"
                             + (f" ({today:%A})" if today != now().date() else "")
                             + f": open till 4 AM · <b>{hmin(max(0, left_))}</b> left. Misses cost nothing and keep "
                               "your streaks; anything you finish still counts.</div>")
@@ -3083,7 +3082,7 @@ def _sug_due_picker(keys: list, opts: dict, fk) -> dict:
     """🕛 Picked suggestions are due at midnight; this popover lets you give any one of them its own time."""
     out = {}
     changed = [k for k in keys if st.session_state.get(f"q_sd_{k}{fk}") not in (None, "End of day")]
-    lbl = (f"🕛 Suggestions due midnight" if not changed else f"🕛 Suggestions due midnight · {len(changed)} changed")
+    lbl = ("🕛 Suggestions due midnight" if not changed else f"🕛 Suggestions due midnight · {len(changed)} changed")
     with st.popover(lbl, use_container_width=False):
         st.caption("Each picked suggestion is due at midnight today. Change any one here.")
         for k in keys:
@@ -3247,7 +3246,7 @@ def _q_tpl(key: str, state: dict) -> None:
 
 
 def render_qualify_form(state: dict) -> None:
-    today = now().date()
+    today = gtoday()  # 🌙 the day you're on
     fk = st.session_state.setdefault("_qf_n", 0)  # bumped after a lock-in to reset every field
     # ── pick from what you already have: tap to select. Grouped by where it came from, short labels. ──
     opts, groups = {}, {"t": [], "b": [], "z": []}
@@ -3286,7 +3285,6 @@ def render_qualify_form(state: dict) -> None:
         k = f"d:{d_['id']}"
         opts[k] = (f"{d_['title'][:48]}" + (f" · {min_label(d_['minutes'])}" if d_.get("minutes") else ""), d_)
         groups.setdefault("d", []).append(k)
-    gname = {g_["id"]: g_["title"] for g_ in state.get("goals", [])}
     for t in sorted((t for t in state["tasks"] if t["status"] == "open" and t.get("goal_id")
                      and (t.get("block") or {}).get("date", "") > today.isoformat()),
                     key=lambda t: t["block"]["date"])[:8]:
@@ -3394,8 +3392,6 @@ def render_qualify_form(state: dict) -> None:
                  f"{daily.min_mission_minutes(state)}. 🔧 Pit checks (inbox, emails, calls…) don't count toward it. "
                  "Add something meatier, or put a time on it (e.g. “45m”).")
         return
-    late_dl = dl if dl > now() + timedelta(minutes=5) else datetime.combine(today, dtime(23, 59), TZ)
-
     def sug_due(k: str) -> datetime:
         """A picked suggestion is due at midnight (11:59 PM) unless you set its own time; a time already gone → midnight."""
         d_ = datetime.combine(today, sug_t.get(k, dtime(23, 59)), TZ)
@@ -3781,8 +3777,8 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
                             + (f"{ext_pct}% of your bank" if ext_cost < _cap else f"capped at what giving up would cost "
                                f"(−{t.get('penalty')} penalty + the {t.get('reward')} reward)")
                             + (f" (the next one on this task: {ext_pct + 5}%)" if t["extensions"] + 1 < s["max_extensions"] else "")
-                            + f". The reward drops 15%"
-                            + (", and it leaves today's mission." if t.get("mission_day") == now().date().isoformat() else "."))
+                            + ". The reward drops 15%"
+                            + (", and it leaves today's mission." if t.get("mission_day") == gtoday().isoformat() else "."))
                 ok_, why_ = daily.extension_check(state, t, now())
                 if not ok_:
                     st.caption(why_)
@@ -4448,7 +4444,7 @@ def render_commitments(state: dict) -> None:
                             f"{need} left · {left} days to go")
                     st.markdown(f"{C_STAKE_DOT[c['stakes']]} **{html.escape(c['name'])}** · {done}/{target} this week · {pace}"
                                 + (f" · 🔥 {c['streak']} wk" if c.get("streak") else "")
-                                + f"<div class='dod-seg'>" + "".join(f"<i class='{'ok' if i < done else ''}'></i>" for i in range(target))
+                                + "<div class='dod-seg'>" + "".join(f"<i class='{'ok' if i < done else ''}'></i>" for i in range(target))
                                 + "</div>", unsafe_allow_html=True)
                     today_ok = not c.get("days") or n_.weekday() in c["days"]
                     if r.get("status") == "visit":
@@ -4963,7 +4959,7 @@ def render_todo(state: dict) -> None:
                     st.rerun()
             if not open_:
                 st.caption("Nothing here. Park anything without a deadline: it'll be offered when you plan your day.")
-            qual = daily.peek_day(state, now().date()).get("qualified")
+            qual = daily.peek_day(state, gtoday()).get("qualified")
             for d_ in open_:
                 c1, c2, ce, c3 = st.columns([6, 1.6, .8, .8], vertical_alignment="center")
                 if c1.checkbox(d_["title"] + (f" · {min_label(d_['minutes'])}" if d_.get("minutes") else ""),
@@ -4977,7 +4973,7 @@ def render_todo(state: dict) -> None:
                              help="Make it a real task due tonight" + (" and add it to today's mission." if qual else ".")):
                     t = todo_to_task(state, d_, datetime.combine(now().date(), dtime(23, 59), TZ))
                     if qual:
-                        t["mission_day"] = now().date().isoformat()
+                        t["mission_day"] = gtoday().isoformat()
                     save_state(state)
                     flash(f"➕ **{t['title']}** is a task now, due tonight" + (" · in today's mission." if qual else "."))
                     st.rerun()
@@ -5049,7 +5045,7 @@ def render_car_card(state: dict) -> None:
     lvl = level_of(state["xp"])
     into, span = state["xp"] - xp_for_level(lvl), xp_for_level(lvl + 1) - xp_for_level(lvl)
     left = max(0, PITY_AFTER - state["since_rare"])
-    flag = (f"<span class='bad'>⬛ Black flag</span>" if reasons else "<span class='ok'>🟢 Green flag</span>")
+    flag = ("<span class='bad'>⬛ Black flag</span>" if reasons else "<span class='ok'>🟢 Green flag</span>")
     col = "#2ec4b6" if cond >= 60 else "#f5c518" if cond >= 30 else "#e10600"
     with st.container(key="car_card"):
         st.markdown(
@@ -5503,8 +5499,8 @@ def _add_quick(state: dict, title: str, minutes: int, due: datetime, category: s
     if at:
         t.update(scheduled=at.isoformat(), scheduled_time=True)
     stt = daily.status(state, now())
-    if due.date() == now().date() and stt["qualified"]:
-        t["mission_day"] = now().date().isoformat()
+    if night_day(parse_dt(t["deadline"])) == gtoday() and stt["qualified"]:
+        t["mission_day"] = gtoday().isoformat()
     state["tasks"].append(t)
     save_state(state)
     return t
@@ -5642,7 +5638,7 @@ def _timer_task(state: dict, name: str, planned: int, wall: int) -> dict:
 def render_timer(state: dict, big: bool = False) -> None:
     tm = state.get("timer")
     open_t = sorted([t for t in state["tasks"] if t["status"] == "open"],
-                    key=lambda t: (t.get("mission_day") != now().date().isoformat(), t["deadline"]))
+                    key=lambda t: (t.get("mission_day") != gtoday().isoformat(), t["deadline"]))
     with fold("timer", "⏱️ **Focus timer**" + (" :red[● running]" if tm and not tm.get("paused") else
                                               " :orange[❚❚ paused]" if tm else ""), card=True) as _fo:
         if _open(_fo):  # collapsed = not built (faster page, smaller download)
@@ -5809,17 +5805,17 @@ def _timer_controls(state: dict) -> None:
             st.caption(f"🌊 {int(eff)} min deep. A real break soon would bank this well.")
     gate_, over_ = PM.gate(tm, eff) if not paused else ("", 0.0)
     if gate_ == "pit_in":
-        st.markdown(f"<div class='dod-flow-chk' style='border-color:#f5c518'>🔧 <b>Box, box. Stint done.</b> "
-                    f"<span>Finish your thought: " + (f"you're {int(over_)} min over, and " if over_ >= 1 else "") + f"up to {PM.PIT_OVER_MAX} extra min still count as work. The "
+        st.markdown("<div class='dod-flow-chk' style='border-color:#f5c518'>🔧 <b>Box, box. Stint done.</b> "
+                    "<span>Finish your thought: " + (f"you're {int(over_)} min over, and " if over_ >= 1 else "") + f"up to {PM.PIT_OVER_MAX} extra min still count as work. The "
                     f"{tm['brk']}-min break starts when you pit in.</span></div>", unsafe_allow_html=True)
         if st.button("🔧 Pit in", type="primary", use_container_width=True, key="tm_pitin"):
             PM.confirm(tm, eff)
             save_state(state)
             st.rerun(scope="app")
     elif gate_ == "pit_out":
-        st.markdown(f"<div class='dod-flow-chk' style='border-color:#3ddc84'>🟢 <b>Break's up. Pit out?</b> "
-                    f"<span>" + (f"{int(over_)} min over the break (that part doesn't count as work). " if over_ >= 1 else "") + "The next stint starts when "
-                    f"you pit out.</span></div>", unsafe_allow_html=True)
+        st.markdown("<div class='dod-flow-chk' style='border-color:#3ddc84'>🟢 <b>Break's up. Pit out?</b> "
+                    "<span>" + (f"{int(over_)} min over the break (that part doesn't count as work). " if over_ >= 1 else "") + "The next stint starts when "
+                    "you pit out.</span></div>", unsafe_allow_html=True)
         if st.button("🟢 Pit out", type="primary", use_container_width=True, key="tm_pitout"):
             PM.confirm(tm, eff)
             save_state(state)
@@ -6568,8 +6564,6 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
 
 def render_race_status(state: dict) -> None:
     """Right-rail status: flag, rivals, penalty box, contracts, ledger, rules — compact."""
-    reasons = black_flag_reasons(state)
-    left = max(0, PITY_AFTER - state["since_rare"])
     unserved = [p for p in state["penalty_box"] if not p["served"]]
     if unserved:
       with fold("penalty", f"🚨 **Penalty box** :gray[{len(unserved)}]", card=True) as _fo:
@@ -6961,8 +6955,8 @@ def render_reading_list(state: dict) -> None:
                 nt = make_task(f"📄 Read: {p['title'][:80]}", f"Proof: photo/screenshot of your notes + a 2-line summary. {p['url']}",
                                datetime.combine(now().date(), dtime(23, 59), TZ), None, "", category="deep", minutes=45)
                 nt["zotero_key"], nt["zotero_keys"] = p["key"], [p["key"]]
-                if daily.peek_day(state, now().date()).get("qualified"):
-                    nt["mission_day"] = now().date().isoformat()
+                if daily.peek_day(state, gtoday()).get("qualified"):
+                    nt["mission_day"] = gtoday().isoformat()
                 state["tasks"].append(nt)
                 save_state(state)
                 flash(f"📄 **{nt['title']}** added, due tonight" + (" · in today's mission" if nt.get("mission_day") else "") + ".")
@@ -8074,7 +8068,7 @@ if _moved_off:
             f"**{t['title']}** (now {date.fromisoformat(t['block']['date']):%a %b} {date.fromisoformat(t['block']['date']).day})"
             for t in _moved_off[:3]) + ". It joins that day's mission instead."]
 _auto_q = daily.auto_qualify(state, now(), bank)
-_made_good = _made_good + DL.fix_claims(state, now().date(), bank)
+_made_good = _made_good + DL.fix_claims(state, DL.day_for(now(), _bailed(state), DAY_END), bank)
 if _auto_q:
     _made_good = _made_good + [_auto_q]
 if _made_good:
@@ -8305,8 +8299,8 @@ with tab_tasks:
             nt = make_task(t["title"], t.get("details", ""), datetime.combine(now().date(), dtime(23, 59), TZ),
                            None, t.get("consequence", ""), t.get("goal_id"), category=t.get("category"),
                            minutes=t.get("minutes"))
-            if daily.peek_day(state, now().date()).get("qualified"):
-                nt["mission_day"] = now().date().isoformat()
+            if daily.peek_day(state, gtoday()).get("qualified"):
+                nt["mission_day"] = gtoday().isoformat()
             state["tasks"].append(nt)
             save_state(state)
             flash(f"↻ **{nt['title']}** again, due tonight" + (" · in today's mission" if nt.get("mission_day") else "") + ".")
@@ -8549,7 +8543,7 @@ def render_block_editor(state: dict, g: dict, only: str | None = None, kp: str =
             for k_ in ("block", "scheduled", "scheduled_time", "own_deadline"):
                 t.pop(k_, None)
             t["deadline"] = due.isoformat()
-            if t.get("mission_day") and t["mission_day"] != now().date().isoformat():
+            if t.get("mission_day") and t["mission_day"] != gtoday().isoformat():
                 t.pop("mission_day", None)
         if t.get("due_before_goal") is not None and g.get("target"):
             t["due_before_goal"] = (date.fromisoformat(g["target"]) - due_d).days
@@ -8669,7 +8663,7 @@ def render_stage_editor(state: dict, g: dict, only: str | None = None, kp: str =
         st.rerun()
     inside = len(R.children(g, sid)) + sum(t.get("node") == sid for t in R.goal_tasks(g, state["tasks"]))
     up = opts.get(n.get("parent") or "", "").strip()
-    if st.checkbox(f"Delete this stage" + (f" (its {inside} item{'s' * (inside != 1)} move up to {up})" if inside else ""),
+    if st.checkbox("Delete this stage" + (f" (its {inside} item{'s' * (inside != 1)} move up to {up})" if inside else ""),
                    key=f"{k}_delchk") and st.button("🗑️ Delete stage", key=f"{k}_del"):
         R.delete_stage(g, state["tasks"], sid)
         st.session_state.pop(f"flow_sel_{gid}", None)

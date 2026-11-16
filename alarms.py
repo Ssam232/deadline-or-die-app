@@ -164,7 +164,7 @@ def _blocks(save: dict, now: datetime) -> list[dict]:
         for lead, prio, title, msg in (
                 (10, 3, f"{'🗺️' if t.get('block') else '⏰'} In 10 min: {t['title']}", f"{b['minutes']} min booked at {_hm(at)}" + (f" for {g}." if g else ".")),
                 (0, 4, f"▶️ Now: {t['title']}", f"Your {b['minutes']}-min block" + (f" for {g}" if g else "") + " starts now. "
-                                                 f"Tap ▶️ and the timer runs.")):
+                                                 "Tap ▶️ and the timer runs.")):
             out.append(_alarm(("block", t["id"], t["scheduled"], lead), at - timedelta(minutes=lead), title, msg,
                               prio, ["world_map"], live, (t["id"], b["minutes"])))
     return out
@@ -174,7 +174,6 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
     if "tasks" not in save:
         return []
     out, rest = [], daily.is_rest(save, d)
-    e = daily.peek_day(save, d)
     c = daily.cfg(save)
     qd = daily.qualify_deadline(save, d, now.tzinfo)
     for mins, prio, title, msg in (

@@ -7,7 +7,7 @@ Cars, paint, parts and coins carry over: a season is a scoreboard, not a reset.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 SEASON_WEEKS = 8
 EPOCH = date(2026, 11, 9)  # Monday: season 1 starts here

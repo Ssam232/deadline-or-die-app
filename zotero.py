@@ -7,7 +7,6 @@ plus write access if you want finished papers tagged "read" automatically).
 """
 from __future__ import annotations
 
-import html
 import os
 import re
 

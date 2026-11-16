@@ -379,7 +379,7 @@ def tidy(n: Notion, page_id: str, budget: float = 60) -> int:
 def _key_sizes(text: str, top: int = 8) -> str:
     """Sizes of the save's top-level keys and of the biggest key one level down (names only, no values)."""
     import re as _re
-    sizes, path, depth, i, n_, starts = {}, [], 0, 0, len(text), {}
+    sizes, depth, i, n_ = {}, 0, 0, len(text)
     key_re = _re.compile(r'"((?:[^"\\]|\\.)*)"\s*:')
     in_str = esc = False
     last_key = {}

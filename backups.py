@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from notion_store import Notion, clean_id, load_json, plain, save_json, rt
+from notion_store import Notion, clean_id, load_json, save_json, rt
 
 ROOT_TITLE = "🗄️ Backups (auto)"
 KEEP = 14

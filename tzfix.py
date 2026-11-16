@@ -9,7 +9,6 @@ changes clocks, use America/Regina (UTC-6 all year, identical from now on).
 from __future__ import annotations
 
 import os
-import zoneinfo
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 

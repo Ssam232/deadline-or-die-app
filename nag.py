@@ -22,7 +22,6 @@ import os
 import random
 import sys
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import commitments as C
 import daily
@@ -172,8 +171,9 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
             out.append(("🚦 LIGHTS OUT",
                         f"You said you'd start at {start:%I:%M %p}. It's {now:%I:%M %p}. "
                         "Open the first mission task and work 10 minutes. Go.", 5, ["checkered_flag"]))
-    stake, lines = DL.at_stake(save, now.date())
-    if daily.is_rest(save, now.date()):  # rest / pit stop / 🪂 bailout: misses are free, nothing to nag about
+    gd = daily.gday(save, now)  # 🌙 the day you're on (your day may end after midnight)
+    stake, lines = DL.at_stake(save, gd)
+    if daily.is_rest(save, gd):  # rest / pit stop / 🪂 bailout: misses are free, nothing to nag about
         stake = 0
     hour_f = now.hour + now.minute / 60
     for key, at_h, prio, title in (("h2230", 22.5, 5, "🔁 LAST CALL on dailies"), ("h20", 20, 4, "🔁 Dailies still open")):
@@ -181,14 +181,14 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
             dm["h20"] = dm[key] = True
             out.append((title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio, ["repeat"]))
             break
-    if not stt["done_today"] and not daily.slice_worked(save, now.date()) and not C.attended_on(save, now.date()) \
+    if not stt["done_today"] and not daily.slice_worked(save, gd) and not C.attended_on(save, gd) \
             and not quiet:
         hour = now.hour + now.minute / 60
         ladder = [("z18", 18, 4, "⚠️ Zero finishes today",
                    f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins and your "
                    f"{stt['day_streak']}-day streak dies. Smallest task, now."),
                   ("z20", 20, 5, "🔴 ZERO-DAY WARNING",
-                   f"Still nothing. 4 hours left. Tomorrow you'll wish you'd done one thing tonight."),
+                   "Still nothing. 4 hours left. Tomorrow you'll wish you'd done one thing tonight."),
                   ("z2130", 21.5, 5, "☠️ LAST CALL",
                    f"2.5 hours to midnight. One proof-backed finish saves the day streak "
                    f"({stt['day_streak']}) and {c['zero_day_penalty']} coins. Tomorrow Tom is already celebrating.")]
