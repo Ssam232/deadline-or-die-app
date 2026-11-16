@@ -138,7 +138,7 @@ def explain(pos: int | str, gap: float, track: str, cond: int, heat: int, eff: d
         lines.append(f"- {icon} This track rewards **{label}** — yours: *{installed(k, eff.get(k, 0))}*."
                      + (f" Next: **{nxt[0]}**." if nxt else ""))
     elif focus:
-        lines.append("- 🏢 Your chassis is maxed for what this track rewards — time to move up the Honda ladder.")
+        lines.append("- 🏢 Your chassis is maxed for what this track rewards — time to move up to a faster car.")
     if pos not in (1, "DNF") and gap < 1.0:
         lines.append("- 🎲 Under a second — that one came down to luck. Run it back.")
     return "\n".join(lines)

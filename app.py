@@ -2670,7 +2670,7 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
     if you["dnf"]:
         res = ("error", f"💥 DNF at {track['name']} — the car gave out. Repair it before the next race.", "fail", False)
     elif pos == 1:
-        res = ("success", f"🏆 **WIN** at {track['name']}! +{payout} coins. Tomorrow Tom eats your dust.", "jackpot", True)
+        res = ("success", f"🏆 **WIN** at {track['name']}! +{payout} coins. {order[1]['name']} eats your dust.", "jackpot", True)
     elif payout:
         res = ("success", f"P{pos} at {track['name']} — +{payout} coins. **{off_}** off {winner['name']}.", "win", False)
     else:
@@ -9767,7 +9767,7 @@ with tab_garage:
 
     st.subheader("Upgrades")
     cap_now = G.cap(model["id"])
-    st.caption(f"This chassis can be tuned to **L{cap_now}**. Parts you buy stay yours — move up the Honda ladder "
+    st.caption(f"This chassis can be tuned to **L{cap_now}**. Parts you buy stay yours — move up the ladder "
                "to unlock the rest. Each upgrade comes with a 💡 lesson.")
     for key, p in PARTS.items():
         lv = car["parts"].setdefault(key, 0)

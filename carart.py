@@ -317,7 +317,7 @@ def _spline(pts: list, closed: bool = False) -> str:
             p0 = p1
         if len(p2) > 2:
             p3 = p2
-        t = 0.18
+        t = 0.235  # rounder sheet metal: real panels have crown, not creases everywhere
         c1 = (p1[0] + (p2[0] - p0[0]) * t, p1[1] + (p2[1] - p0[1]) * t)
         c2 = (p2[0] - (p3[0] - p1[0]) * t, p2[1] - (p3[1] - p1[1]) * t)
         out.append(f"C{c1[0]:.1f},{c1[1]:.1f} {c2[0]:.1f},{c2[1]:.1f} {p2[0]:.1f},{p2[1]:.1f}")
@@ -355,8 +355,8 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
     drop = min(5, (tires + aero) // 2 + (2 if gt3 else 0))
     num = html.escape(str(number))
     dark = "#15161a"
-    u = _uid(model_body, color, str(sorted(lv.items())), condition, studio, "v2")
-    hi, lo, sh = _mix(color, "#ffffff", .4), _mix(color, "#000000", .4), _mix(color, "#000000", .62)
+    u = _uid(model_body, color, str(sorted(lv.items())), condition, studio, "v3")
+    hi, lo, sh = _mix(color, "#ffffff", .16), _mix(color, "#000000", .34), _mix(color, "#000000", .6)  # the light does the rest
     out_pts = [P(r[0], r[1]) + tuple(r[2:]) for r in p["OUT"]]
     top = _spline(out_pts)
     # bottom: from the rear bumper along the sill, cutting the wheel arches, back to the front bumper
@@ -377,16 +377,35 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
          f'</radialGradient>'
          f'<radialGradient id="{u}t" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#ff4d4d"/>'
          f'<stop offset=".55" stop-color="#d90429" stop-opacity=".5"/><stop offset="1" stop-color="#d90429" stop-opacity="0"/>'
-         f'</radialGradient><clipPath id="{u}c"><path d="{body}"/></clipPath></defs>']
+         f'</radialGradient><clipPath id="{u}c"><path d="{body}"/></clipPath>'
+         # 💡 lit bodywork: the silhouette is treated as a rounded 3D surface (a blurred height map) and lit from above
+         # and slightly ahead, so highlights and shading follow the shape instead of being painted on as flat bands
+         f'<filter id="{u}L" x="-4%" y="-12%" width="108%" height="124%" color-interpolation-filters="sRGB">'
+         f'<feGaussianBlur in="SourceAlpha" stdDeviation="4.2" result="hm"/>'
+         f'<feDiffuseLighting in="hm" surfaceScale="7" diffuseConstant="1.05" lighting-color="#ffffff" result="dif">'
+         f'<feDistantLight azimuth="262" elevation="58"/></feDiffuseLighting>'
+         f'<feComposite in="SourceGraphic" in2="dif" operator="arithmetic" k1="1.0" k2=".1" k3="0" k4="0" result="lit"/>'
+         f'<feSpecularLighting in="hm" surfaceScale="7" specularConstant=".85" specularExponent="26" '
+         f'lighting-color="#ffffff" result="sp"><feDistantLight azimuth="258" elevation="50"/></feSpecularLighting>'
+         f'<feComposite in="sp" in2="lit" operator="arithmetic" k1="0" k2=".42" k3="1" k4="0" result="shine"/>'
+         f'<feComposite in="shine" in2="SourceAlpha" operator="in"/></filter>'
+         f'<filter id="{u}S" x="-10%" y="-200%" width="120%" height="500%"><feGaussianBlur stdDeviation="3.2 1.6"/></filter>'
+         f'<linearGradient id="{u}r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cfe2f5" stop-opacity=".0"/>'
+         f'<stop offset=".46" stop-color="#cfe2f5" stop-opacity=".16"/><stop offset=".5" stop-color="#000" stop-opacity=".2"/>'
+         f'<stop offset="1" stop-color="#000" stop-opacity=".0"/></linearGradient></defs>']
     # paint, then light and shadow clipped to the body: shoulder highlight band, lower-body shadow, a soft sweep
     for wx in (rx, fx):  # wheel wells: dark inside the arch, so the tyre sits in the body instead of floating
         g.append(f'<circle cx="{wx:.1f}" cy="{wy:.1f}" r="{arch - .4:.1f}" fill="#060608"/>')
-    g.append(f'<path d="{body}" fill="url(#{u}b)" stroke="#0b0c0e" stroke-width="1.3" stroke-linejoin="round"/>')
+    g.append(f'<path d="{body}" fill="url(#{u}b)" filter="url(#{u}L)"/>'
+             f'<path d="{body}" fill="none" stroke="#0b0c0e" stroke-width="1.1" stroke-linejoin="round"/>'
+             # the horizon: sky reflecting in the upper flanks, the ground in the lower ones, meeting at a soft line
+             f'<rect x="{rear - 5}" y="{belt_y - 2:.1f}" width="{front - rear + 10:.1f}" height="{sill - belt_y + 4:.1f}" '
+             f'fill="url(#{u}r)" clip-path="url(#{u}c)"/>')
     g.append(f'<g clip-path="url(#{u}c)">'
              f'<path d="M{rear - 5},{belt_y + 6:.1f} C{rear + 90},{belt_y + 2:.1f} {front - 90},{belt_y + 2:.1f} {front + 5},{belt_y + 7:.1f} '
              f'L{front + 5},{belt_y + 11:.1f} C{front - 90},{belt_y + 6:.1f} {rear + 90},{belt_y + 6:.1f} {rear - 5},{belt_y + 10:.1f} Z" '
-             f'fill="#ffffff" opacity=".17"/>'
-             f'<rect x="{rear - 5}" y="{sill - 9:.1f}" width="{front - rear + 10:.1f}" height="14" fill="#000" opacity=".3"/>'
+             f'fill="#ffffff" opacity=".07"/>'
+             f'<rect x="{rear - 5}" y="{sill - 7:.1f}" width="{front - rear + 10:.1f}" height="12" fill="#000" opacity=".22"/>'
              f'<path d="M{CX + 30},{roof_y - 5:.1f} L{CX + 70},{roof_y - 5:.1f} L{CX - 40},{sill + 4:.1f} L{CX - 80},{sill + 4:.1f} Z" '
              f'fill="#ffffff" opacity=".05"/>'
              + (f'<path d="M{rx - arch - 4:.1f},{sill:.1f} Q{rx:.1f},{wy - arch - 7:.1f} {rx + arch + 4:.1f},{sill:.1f}" '
@@ -394,7 +413,7 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
                 f'<path d="M{fx - arch - 4:.1f},{sill:.1f} Q{fx:.1f},{wy - arch - 7:.1f} {fx + arch + 4:.1f},{sill:.1f}" '
                 f'fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width="2.5"/>' if p.get("FLARE") or gt3 else "")
              + '</g>')
-    g.append(f'<path d="{top}" fill="none" stroke="#ffffff" stroke-opacity=".35" stroke-width="1.1" transform="translate(0,1.8)"/>')
+    g.append(f'<path d="{top}" fill="none" stroke="#ffffff" stroke-opacity=".16" stroke-width=".9" transform="translate(0,1.6)"/>')
     cl_y = belt_y + (sill - belt_y) * .42  # character line: a light edge over a soft shadow, front to rear
     g.append(f'<g clip-path="url(#{u}c)"><path d="M{rx + arch + 2:.1f},{cl_y + 1.5:.1f} Q{CX:.1f},{cl_y - 1.5:.1f} {fx - arch - 2:.1f},{cl_y - 3:.1f}" '
              f'stroke="#ffffff" stroke-opacity=".22" stroke-width="1" fill="none"/>'
@@ -504,7 +523,7 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
         hw, hh = hx1 - hx0, hy1 - hy0
     elif lamp == "slim":
         g.append(f'<path d="M{hx0 - 3:.1f},{hy0 + hh * .2:.1f} L{hx1:.1f},{hy0 + hh * .55:.1f}" stroke="#fff6d8" stroke-width="1.1" opacity=".9"/>')
-    g.append(f'<ellipse cx="{hx1 + 2:.1f}" cy="{(hy0 + hy1) / 2:.1f}" rx="{hw * .7 + 6:.1f}" ry="{hh + 5:.1f}" fill="url(#{u}h)" opacity=".75"/>'
+    g.append(f'<ellipse cx="{hx1 + 2:.1f}" cy="{(hy0 + hy1) / 2:.1f}" rx="{hw * .45 + 4:.1f}" ry="{hh + 3:.1f}" fill="url(#{u}h)" opacity=".5"/>'
              f'<path d="M{hx0:.1f},{hy0 + hh * .35:.1f} L{hx1 - 1:.1f},{hy0:.1f} Q{hx1 + 1:.1f},{hy0:.1f} {hx1:.1f},{hy1 - 1:.1f} '
              f'L{hx0 + 2:.1f},{hy1:.1f} Z" fill="#eef1f5" stroke="#0b0c0e" stroke-width=".6"/>'
              f'<path d="M{hx0 + 3:.1f},{hy1 - 1.2:.1f} L{hx1 - 2:.1f},{hy1 - 1.8:.1f}" stroke="#ffffff" stroke-width="1"/>')
@@ -585,9 +604,9 @@ def car_svg(model_body: str, color: str, number, parts: dict, condition: int, wi
     wheels = "".join(f'<g transform="translate({wx:.1f},{wy:.1f}) scale({s_:.3f}) translate({-wx:.1f},{-wy:.1f})">'
                      f'{_wheel(wx, wy, tires, brakes, gt3, u + tag, p.get("WHEEL"))}</g>' for wx, tag in ((rx, "a"), (fx, "f")))
     car_g = f'<g transform="translate(0,{drop})">{"".join(g)}</g>{wheels}'
-    shadow = (f'<ellipse cx="{CX:.1f}" cy="{GROUND + 1}" rx="{(front - rear) / 2 + 6:.1f}" ry="5" fill="#000" opacity=".45"/>'
-              f'<ellipse cx="{rx:.1f}" cy="{GROUND}" rx="{rt + 5:.1f}" ry="3" fill="#000" opacity=".5"/>'
-              f'<ellipse cx="{fx:.1f}" cy="{GROUND}" rx="{rt + 5:.1f}" ry="3" fill="#000" opacity=".5"/>')
+    shadow = (f'<g filter="url(#{u}S)"><ellipse cx="{CX:.1f}" cy="{GROUND + 1.5}" rx="{(front - rear) / 2 + 2:.1f}" ry="4.6" fill="#000" opacity=".6"/>'
+              f'<ellipse cx="{rx:.1f}" cy="{GROUND + .5}" rx="{rt + 3:.1f}" ry="2.6" fill="#000" opacity=".75"/>'
+              f'<ellipse cx="{fx:.1f}" cy="{GROUND + .5}" rx="{rt + 3:.1f}" ry="2.6" fill="#000" opacity=".75"/></g>')
     if not studio:
         return (f'<svg viewBox="-6 20 368 112" width="100%" style="max-width:{width}px" xmlns="http://www.w3.org/2000/svg">'
                 f'{shadow}{car_g}</svg>')
