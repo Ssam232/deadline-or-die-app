@@ -242,6 +242,10 @@ def sync_out(n: Notion, m: dict, tasks: list[dict], now: datetime) -> list[str]:
                     n.req("PATCH", f"/pages/{t['out_page']}", json={"archived": True})
                     t["out_archived"] = True
         except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
+            if "archived" in str(e) and t["status"] == "open":  # its card is gone (trashed, or the task came back):
+                for k in ("out_page", "out_archived", "out_state", "out_sig"):  # forget it; a fresh card next save
+                    t.pop(k, None)
+                continue
             errs.append(f"{t['title']}: {e}")
     return errs
 

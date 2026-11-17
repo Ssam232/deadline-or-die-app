@@ -216,7 +216,8 @@ CLASS_LABEL = {k: lbl for k, lbl, _ in CLASSES}
 
 
 def car_class(c: dict) -> str:
-    return [k for k, _, lo in CLASSES if c["base"] >= lo][-1]  # ⭐ prestige is about the Honda/Acura ladder; the others are there to buy and to race
+    return [k for k, _, lo in CLASSES if c["base"] >= lo][-1]
+# ⭐ prestige is about the Honda/Acura ladder; the others are there to buy and to race
 SHOWROOM_PAINT = {"civic_si": ("#b3122a", 21), "integra_r": ("#f1f0ea", 11), "s2000": ("#1f4aa8", 2),
                   "ctr": ("#e7e6e1", 1), "nsx": ("#c8102e", 8), "nsx_s": ("#e8a43a", 30), "nsx_gt3": ("#f2f2ee", 30),
                   "rsx": ("#f0b323", 5), "tsx": ("#2b4a8a", 14), "integra_s": ("#2f6fb5", 23), "tlx_s": ("#b71c1c", 35),
@@ -2554,10 +2555,12 @@ def car_ceiling(c: dict) -> float:
     return c["base"] + G.cap(c["id"]) * sum(v["weight"] for v in PARTS.values()) * 1.15
 
 
-def rival_car(rating: float, rng=random, cls: str | None = None) -> tuple[str, str]:
+def rival_car(rating: float, rng=random, cls: str | None = None, taken: set | None = None) -> tuple[str, str]:
     """(car, tune) for a rival of this pace, from your class: the car is one that can really run that pace under the
-    garage's own rules, and the tune says how far it's been pushed."""
+    garage's own rules, and the tune says how far it's been pushed. Cars already on the grid (taken) are skipped
+    while the class has others, so it isn't five of the same."""
     pool = [c for c in CARS if cls is None or car_class(c) == cls]
+    pool = [c for c in pool if c["name"] not in (taken or ())] or pool
     fits = [c for c in pool if c["base"] * 0.86 <= rating <= car_ceiling(c)]
     if not fits:  # faster than this class can be built (or slower than its slowest car)
         if rating > max(car_ceiling(c) for c in pool):
@@ -2603,8 +2606,10 @@ def simulate_race(state: dict, track: dict, kind: str = "race") -> None:
     mid = car.get("model") if car.get("model") in CAR_BY_ID else CARS[0]["id"]
     cls_ = car_class(CAR_BY_ID[mid])  # 🏷️ you race your own class
     you["car"], you["tune"] = CAR_BY_ID[mid]["name"], ""
+    taken_ = set()
     for r_ in rivals:
-        r_["car"], r_["tune"] = rival_car(r_["rating"], cls=cls_)
+        r_["car"], r_["tune"] = rival_car(r_["rating"], cls=cls_, taken=taken_)
+        taken_.add(r_["car"])
     for f in field:
         f["dist"], f["dnf"], f["fin"], f["goal"] = 0.0, False, None, None
     ticks = track["laps"] * 6
@@ -3651,7 +3656,8 @@ def unfail_task(state: dict, t: dict) -> int:
         state["streak"] = max(state["streak"], int(m.get("streak") or 0))
     state["penalty_box"] = [p for p in state.get("penalty_box", []) if p.get("task_id") != t["id"]]
     t.update(status="open", penalty=m["penalty"])
-    t.pop("failed_at", None)
+    for k in ("failed_at", "out_page", "out_archived", "out_state", "out_sig"):  # its calendar card was retired: a new one
+        t.pop(k, None)
     state.setdefault("late_tries", []).append(now().isoformat())
     del state["late_tries"][:-10]
     return paid
@@ -7233,7 +7239,10 @@ const main=()=>P.querySelector('[data-testid="stMainBlockContainer"]')||P.queryS
 function start(kind,anchor){
   if(pend)finish(true);
   const m=main();if(m){m.style.minHeight=m.offsetHeight+'px';}
-  if(kind==='tab')H.setAttribute('data-dod-switch','1');
+  if(kind==='tab'){H.setAttribute('data-dod-switch','1');
+    // a new tab starts at its top (from the bottom bar you're often deep in the old one: you'd land past its end)
+    const sc=P.querySelector('[data-testid="stMain"]');if(sc)sc.scrollTop=0;try{W.scrollTo(0,0);}catch(e){}
+    const m2=main();if(m2)m2.style.minHeight='';}
   if(anchor)anchor.setAttribute('data-dod-anchor','1');
   pend={t0:Date.now(),saw:false,anchor:anchor};
   clearTimeout(fs);fs=setTimeout(()=>finish(),6000);
@@ -7812,7 +7821,7 @@ h1,h2,h3,h4,.dod-next .t,[data-testid="stExpander"] summary p{text-wrap:balance}
 @media (max-width:640px){
   /* 📱 the tabs become a bottom bar: always under your thumb, wherever you've scrolled */
   .st-key-nav > div > [role="tablist"]{position:fixed;left:0;right:0;bottom:0;z-index:999990;margin:0!important;gap:2px!important;
-    padding:6px 92px calc(6px + env(safe-area-inset-bottom)) 8px;background:rgba(18,21,28,.88);
+    padding:6px 132px calc(6px + env(safe-area-inset-bottom)) 8px;background:rgba(18,21,28,.88);  /* clear of the host's floating buttons */
     backdrop-filter:blur(16px) saturate(1.4);border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
   .st-key-nav > div > [role="tablist"]::-webkit-scrollbar{display:none}
   .st-key-nav > div > [role="tablist"] [role="tab"]{flex:0 0 auto;height:44px;padding:0 12px!important;border-radius:12px;
