@@ -6225,6 +6225,8 @@ function buttons(o){var L_=[];
  if(o.ph==='pitout'&&!S.PA)L_.push(['tm_pitout','🟢 Pit out',0,1]);
  if(!S.FL&&o.ph==='break'&&!S.PA)L_.push(['tm_skip','☕ Skip break',0,0]);
  if(o.due&&!S.PA)L_.push(['tm_flow_ok','🌊 Keep going',0,1]);
+ else if(!S.FL&&!S.PA&&S.EXTOK&&o.ph!=='break'&&o.ph!=='pitin'&&o.ph!=='pitout'&&(o.ph==='done'||S.T*(1-o.frac)<=S.FWIN))
+  L_.push(['tm_ext','🌊 +'+S.FSTEP+' min',0,o.ph==='done']);
  L_.push(['tm_stop','⏹️ Stop & log',0,!o.due&&!S.PA&&o.ph!=='pitin'&&o.ph!=='pitout']);
  var sg=JSON.stringify(L_);if(sg===sig||Date.now()-busy<2500)return;sig=sg;var bt=$('bt');bt.innerHTML='';
  L_.forEach(function(x){var b=document.createElement('button');b.textContent=x[1];b.disabled=!!x[2];if(x[3])b.className='pri';
@@ -6307,6 +6309,8 @@ def _timer_js_state(state: dict, tm: dict | None) -> str:
         "W": tm.get("work") or 0, "B": tm.get("brk") or 0, "T": tm["planned"],
         "WALL": PM.wall_minutes(tm["planned"], tm.get("work") or None, tm.get("brk") or None),
         "FL": bool(tm.get("flow")), "CHK": int(tm.get("check", 0)), "ACC": accent(state)[0],
+        # 🌊 "+15 min" while you're near the end (or past it), same rule as the button under the big timer
+        "EXTOK": tm.get("ext", 0) < FLOW_MAX_EXT, "FWIN": FLOW_WINDOW, "FSTEP": FLOW_STEP,
         "title": (t["title"] if t else "Focus session")[:60],
         "trkD": trk["d"], "trkL": f"{trk['name'].upper()} · {trk['km']:.3f} KM · {trk['series']}", "sprite": sprite,
         "canPause": can_p, "pauseLabel": p_lbl,
