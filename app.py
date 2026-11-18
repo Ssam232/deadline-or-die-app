@@ -3903,11 +3903,11 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
                                f"(−{t.get('penalty')} penalty + the {t.get('reward')} reward)")
                             + (f" (the next one on this task: {ext_pct + 5}%)" if t["extensions"] + 1 < s["max_extensions"] else "")
                             + ". The reward drops 15%"
-                            + (", and it leaves today's mission." if t.get("mission_day") == gtoday().isoformat() else "."))
-                ok_, why_ = daily.extension_check(state, t, now())
-                if not ok_:
-                    st.caption(why_)
-                elif st.button(f"⏳ Pay {ext_cost} 🪙 and extend", key=f"{scope}ext_{t['id']}", use_container_width=True):
+                            + (", and it leaves today's mission." if t.get("mission_day") == gtoday().isoformat()
+                               and not daily.extension_holds(state, t, now()) else "."))
+                if daily.extension_holds(state, t, now()):
+                    st.caption("It's holding up today's qualifying hour, so it stays on today's mission: only the deadline moves.")
+                if st.button(f"⏳ Pay {ext_cost} 🪙 and extend", key=f"{scope}ext_{t['id']}", use_container_width=True):
                     done_, msg_ = daily.extend(state, t, now(), s["extension_hours"], bank)
                     if done_:
                         save_state(state)

@@ -533,12 +533,15 @@ def extension_cost(save: dict, t: dict) -> tuple[int, int]:
     return max(floor, min(cap, round(max(0, save.get("coins", 0)) * pct / 100))), pct
 
 
-def extension_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
+def extension_holds(save: dict, t: dict, now: datetime) -> bool:
+    """Is this task holding up today's qualifying hour? Then an extension moves its deadline but not its place."""
     d = gday(save, now)
-    if t.get("mission_day") == d.isoformat() and peek_day(save, d).get("qualified"):
-        need = min_mission_minutes(save)
-        if mission_minutes(save, d, without=t["id"]) < need:
-            return False, f"It's holding up today's mission: without it you'd drop under {need} min. Add something first."
+    return (t.get("mission_day") == d.isoformat() and bool(peek_day(save, d).get("qualified"))
+            and mission_minutes(save, d, without=t["id"]) < min_mission_minutes(save))
+
+
+def extension_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
+    """You can always buy time. (Kept for callers: never refuses now.)"""
     return True, ""
 
 
@@ -554,11 +557,13 @@ def extend(save: dict, t: dict, now: datetime, hours: int, bank) -> tuple[bool, 
     dl = dl if dl.tzinfo else dl.replace(tzinfo=now.tzinfo)
     t["deadline"] = (dl + timedelta(hours=hours)).isoformat()
     t["extensions"] = int(t.get("extensions") or 0) + 1
-    off = t.get("mission_day") == gday(save, now).isoformat()
+    held = extension_holds(save, t, now)  # checked before anything moves
+    off = t.get("mission_day") == gday(save, now).isoformat() and not held
     if off:
         t.pop("mission_day", None)
     return True, (f"⏳ Extended to {datetime.fromisoformat(t['deadline']):%a %b %d, %I:%M %p} for {cost} 🪙. "
-                  "Reward cut 15%." + (" It's off today's mission." if off else ""))
+                  "Reward cut 15%." + (" It's off today's mission." if off else
+                                       " It stays on today's mission: it's holding up your hour." if held else ""))
 
 
 # 🔁 Tried, but it's blocked: things you can't finish alone (a reply, a payment that bounced, an office that was
