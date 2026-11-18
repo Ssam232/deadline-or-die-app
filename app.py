@@ -686,7 +686,26 @@ def _push_tasks(n: Notion, ids: dict, state: dict, _retry: bool = True) -> list[
         from notion_store import _dress_db  # a long-running server can predate newer columns: add them, retry once
         _dress_db(n, ids["tasks_db"])
         errors = _push_tasks_once(n, ids, state)
+    if _retry and any("archived" in e for e in errors) and _tasks_db_gone(n, ids):
+        # 🗑️ the Tasks table itself was deleted / trashed in Notion (even a brand-new row fails): build a fresh one on
+        # the same page, point this server at it, and send every task again
+        from notion_store import ensure_workspace
+        parent = (n.req("GET", f"/databases/{ids['tasks_db']}").get("parent") or {}).get("page_id")
+        if parent:
+            ids.update(ensure_workspace(n, parent))  # the archived table isn't listed any more, so this makes a new one
+            for t in state["tasks"]:
+                t.pop("sync_page", None)
+                t.pop("_sig", None)
+            errors = _push_tasks_once(n, ids, state)
     return errors
+
+
+def _tasks_db_gone(n: Notion, ids: dict) -> bool:
+    try:
+        d = n.req("GET", f"/databases/{ids['tasks_db']}")
+        return bool(d.get("archived") or d.get("in_trash"))
+    except NotionError:
+        return True
 
 
 def _push_tasks_once(n: Notion, ids: dict, state: dict) -> list[str]:
@@ -1163,7 +1182,7 @@ def save_state(state: dict) -> None:
                 _saver().dirty = True
                 raise
             if errs:
-                flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(errs[:3]), "warning")
+                flash("⚠️ Some tasks didn't sync to Notion: " + "; ".join(list(dict.fromkeys(errs))[:3]), "warning")
             return
         _saver().submit(state, snapshot, (get_secret("NOTION_TOKEN"), ids, out_map, get_secret("APP_URL"), in_map,
                                           jr_map))
@@ -8303,7 +8322,7 @@ if notion_cfg():
     with _saver().lock:
         _bg_errs, _saver().errors = _saver().errors[:], []
     if _bg_errs:
-        st.warning("⚠️ Some changes didn't sync to Notion: " + "; ".join(_bg_errs[:3]))
+        st.warning("⚠️ Some changes didn't sync to Notion: " + "; ".join(list(dict.fromkeys(_bg_errs))[:3]))
 for m in crash_msgs:
     st.error(m)
 if rust_msg:
