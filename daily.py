@@ -533,11 +533,18 @@ def extension_cost(save: dict, t: dict) -> tuple[int, int]:
     return max(floor, min(cap, round(max(0, save.get("coins", 0)) * pct / 100))), pct
 
 
+def activity_minutes(save: dict, d: date) -> int:
+    """🏃 Minutes of real sessions you showed up for on d (commitments that count as an activity: coaching, a shift,
+    training). They count toward the day's hour, so a day of showing up isn't a zero day for want of desk work."""
+    return sum(int(c.get("minutes") or 60) for c in C.active_on(save, d))
+
+
 def extension_holds(save: dict, t: dict, now: datetime) -> bool:
-    """Is this task holding up today's qualifying hour? Then an extension moves its deadline but not its place."""
+    """Is this task holding up today's hour (60 min)? Then an extension moves its deadline but not its place. Sessions
+    you showed up for today count toward that hour."""
     d = gday(save, now)
     return (t.get("mission_day") == d.isoformat() and bool(peek_day(save, d).get("qualified"))
-            and mission_minutes(save, d, without=t["id"]) < min_mission_minutes(save))
+            and mission_minutes(save, d, without=t["id"]) + activity_minutes(save, d) < min_mission_minutes(save))
 
 
 def extension_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:

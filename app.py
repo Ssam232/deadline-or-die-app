@@ -3906,7 +3906,8 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
                             + (", and it leaves today's mission." if t.get("mission_day") == gtoday().isoformat()
                                and not daily.extension_holds(state, t, now()) else "."))
                 if daily.extension_holds(state, t, now()):
-                    st.caption("It's holding up today's qualifying hour, so it stays on today's mission: only the deadline moves.")
+                    st.caption("It's holding up today's hour, so it stays on today's mission: only the deadline moves. "
+                               "(A session you've ticked off today, like coaching, counts toward that hour.)")
                 if st.button(f"⏳ Pay {ext_cost} 🪙 and extend", key=f"{scope}ext_{t['id']}", use_container_width=True):
                     done_, msg_ = daily.extend(state, t, now(), s["extension_hours"], bank)
                     if done_:
