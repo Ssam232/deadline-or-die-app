@@ -1091,7 +1091,7 @@ def needs_settle(state: dict, n_: datetime) -> bool:
     y = daily.gday(state, n_) - timedelta(days=1)  # 🌙 the day before the one you're on (not the calendar's)
     since = state.get("daily_since")
     tm = state.get("timer")
-    held_ = bool(tm and tm.get("start") and daily.gday(state, parse_dt(tm["start"])) <= y)  # 🏁 settles once logged
+    held_ = bool(timer_live(tm) and daily.gday(state, parse_dt(tm["start"])) <= y)  # 🏁 settles once logged
     if since and since <= y.isoformat() and not held_ and not (state.get("days", {}).get(y.isoformat()) or {}).get("settled"):
         return True
     yd = DL.day_for(n_, _bailed(state), DAY_END) - timedelta(days=1)
@@ -1603,12 +1603,44 @@ SOUNDS = {
 CLUTCH_PROOF_MIN = 30  # 🏁 under the flag: after a timer that crossed the deadline stops, this long to hand in proof
 
 
+TIMER_MAX_H = 5  # no session runs longer (a 4 h flow + its hour): an older timer is a forgotten one, and trusts nothing
+
+
+def timer_live(tm: dict | None) -> bool:
+    return bool(tm and tm.get("start")) and now() - parse_dt(tm["start"]) < timedelta(hours=TIMER_MAX_H)
+
+
+def retire_stale_timer(state: dict) -> None:
+    """⏹️ A timer an hour past its flag (a flow past its ceiling, or one older than TIMER_MAX_H) ends itself, logging
+    what an unconfirmed stop would: up to FINISH_GRACE past the flag. A forgotten timer can't hold deadlines or days."""
+    tm = state.get("timer")
+    if not tm or not tm.get("start"):
+        return
+    ts = now().timestamp()
+    eff = PM.effective_elapsed(tm, ts)
+    paused_out = bool(tm.get("paused_at")) and PM.paused_for(tm, ts) > PM.PAUSE_LIMIT_MIN
+    if timer_live(tm) and not paused_out and (
+            overtime(tm, eff) <= OVERTIME_MAX if not tm.get("flow") else eff < FLOW_CAP + FLOW_GRACE):
+        return
+    t = next((x for x in state["tasks"] if x["id"] == tm.get("task_id")), None)
+    mins = min(FLOW_CAP, PM.credited(tm, eff)) if tm.get("flow") else session_minutes(tm, eff)
+    state.pop("timer", None)
+    st.session_state.pop("tm_over_ask", None)
+    if mins >= 1 and t:
+        _log_session(state, t, parse_dt(tm["start"]), mins, tm)
+    else:
+        save_state(state)
+    flash(f"⏹️ The timer on *{t['title'] if t else 'a task'}* (started {parse_dt(tm['start']).astimezone(TZ):%a %I:%M %p}) "
+          f"was still running long past its finish, so it ended itself and logged {int(mins)} min, what a stop "
+          f"without confirming overtime gives. It no longer holds a deadline or a day open.", "warning")
+
+
 def under_the_flag(state: dict, t: dict) -> bool:
     """🏁 A timer you started on this task before its deadline is still running (or paused): the deadline waits for it,
     like a car that crossed the line before the flag gets to finish its lap. After you stop, CLUTCH_PROOF_MIN to prove it."""
     grace = timedelta(minutes=state["settings"]["grace_minutes"])
     tm = state.get("timer")
-    if tm and tm.get("task_id") == t["id"] and parse_dt(tm["start"]) < parse_dt(t["deadline"]) + grace:
+    if timer_live(tm) and tm.get("task_id") == t["id"] and parse_dt(tm["start"]) < parse_dt(t["deadline"]) + grace:
         return True
     return bool(t.get("clutch_until")) and now() < parse_dt(t["clutch_until"])
 
@@ -6700,7 +6732,8 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
         save_state(state)
         drop_msg = (drop_msg + "\n\n" if drop_msg else "") + f"🌊 **Flow bonus +{fb}** for {int(fmin)} extra minutes."
     grace_ = timedelta(minutes=state["settings"]["grace_minutes"])
-    if t.get("status") == "open" and now() > parse_dt(t["deadline"]) + grace_ and start < parse_dt(t["deadline"]) + grace_:
+    if t.get("status") == "open" and now() > parse_dt(t["deadline"]) + grace_ and start < parse_dt(t["deadline"]) + grace_ \
+            and now() - start < timedelta(hours=TIMER_MAX_H):  # a forgotten timer earns no clutch
         t["clutch_until"] = (now() + timedelta(minutes=CLUTCH_PROOF_MIN)).isoformat()  # 🏁 crossed the line before the flag
         save_state(state)
         drop_msg = (drop_msg + "\n\n" if drop_msg else "") + (
@@ -8253,6 +8286,7 @@ st.session_state.pop("_fresh_this_run", None)
 if st.session_state.pop("_resave", False) or (getattr(_saver(), "dirty", False) and not _saver().pending()):
     st.session_state["_needs_save"] = True  # a save that didn't reach Notion goes again
 _T_SETTLE = time.time()
+retire_stale_timer(state)
 crash_msgs = process_overdue(state)
 crash_msgs += daily.settle(state, now(), bank, make_safety_car)
 _excused = daily.excuse_outages(state, bank)

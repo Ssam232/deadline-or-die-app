@@ -312,7 +312,8 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
     charged, forgiven = 0, 0
     tm = save.get("timer")
     while d < today:
-        if tm and tm.get("start") and gday(save, datetime.fromisoformat(tm["start"])) <= d:
+        if (tm and tm.get("start") and gday(save, datetime.fromisoformat(tm["start"])) <= d
+                and now - datetime.fromisoformat(tm["start"]) < timedelta(hours=5)):  # a forgotten timer holds nothing
             break  # 🏁 a session that started that day is still running: the day settles once it's logged
         e = day(save, d)
         if not e.get("settled"):
