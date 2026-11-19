@@ -2062,6 +2062,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else
                               " — optional, pays in full" if partial else ""),
                               type=PROOF_TYPES, key=f"file_{k}", **touch)
+        st.caption("📋 Or paste a screenshot: Ctrl/⌘+V here, or paste into the box above on a phone.")
         link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}", **touch)
     actual = None
     if not timer_ok and not (partial and not up and not link.strip()):  # the timer isn't the proof: ask how long it took
@@ -8167,11 +8168,35 @@ def _server_started() -> float:
     return time.time()
 
 
+# 📋 Paste a screenshot as proof: Ctrl/⌘+V anywhere (or paste into a text box on a phone) drops a copied image into
+# the proof uploader nearest to where you are, as if you'd picked the file. Installed into the page once.
+PASTE_PROOF_JS = r"""<script>(function(){var P;try{P=parent;P.document;}catch(e){return;}
+if(P.__dodPaste==='v2')return;P.__dodPaste='v2';var D=P.document,last=null;
+var SEL='[class*="st-key-file_"] input[type=file],[class*="_up"] input[type=file]';
+function vis(i){var b=i.closest('[data-testid=stFileUploader]')||i.parentElement;if(!b)return false;
+ var r=b.getBoundingClientRect();return r.height>0&&r.width>0&&(b.checkVisibility?b.checkVisibility({visibilityProperty:true}):b.offsetParent!==null);}
+D.addEventListener('pointerdown',function(e){var c=e.target;while(c&&c!==D.body){var i=c.querySelector&&c.querySelector(SEL);
+ if(i){last=i;return;}c=c.parentElement;}},true);
+function target(){var all=[].slice.call(D.querySelectorAll(SEL)).filter(vis);if(!all.length)return null;
+ var a=D.activeElement;while(a&&a!==D.body){var i=a.querySelector&&a.querySelector(SEL);if(i&&vis(i))return i;a=a.parentElement;}
+ if(last&&D.contains(last)&&vis(last))return last;return all.length===1?all[0]:null;}
+function toast(m){var d=D.createElement('div');d.textContent=m;d.style.cssText='position:fixed;left:50%;bottom:96px;transform:translateX(-50%);'+
+ 'background:#1f2430;color:#ece8df;border:1px solid #3a4050;padding:8px 14px;border-radius:10px;z-index:99999;font:14px sans-serif';
+ D.body.appendChild(d);setTimeout(function(){d.remove();},2200);}
+D.addEventListener('paste',function(e){var cd=e.clipboardData;if(!cd)return;var f=null;
+ for(var k=0;k<cd.items.length;k++){var it=cd.items[k];if(it.kind==='file'&&/^image\//.test(it.type)){f=it.getAsFile();break;}}
+ if(!f)return;var inp=target();if(!inp){toast('Open the proof form first, then paste');return;}
+ var ext=(f.type.split('/')[1]||'png').replace('jpeg','jpg'),n='pasted-'+new Date().toISOString().slice(0,19).replace(/[T:]/g,'-')+'.'+ext;
+ var dt=new DataTransfer();dt.items.add(new File([f],n,{type:f.type}));inp.files=dt.files;
+ inp.dispatchEvent(new Event('change',{bubbles:true}));e.preventDefault();toast('📋 Screenshot added as proof');},true);
+})();</script>"""
+
+
 _COLD = time.time() - _server_started() < 90 and st.session_state.setdefault("_cold", True)
 st.markdown(CSS, unsafe_allow_html=True)
 with st.container(key="audio_session"):  # iOS: app sounds mix with your music instead of pausing it
     st.iframe("<script>try{for(const w of [window,parent])if(w.navigator.audioSession)"
-              "w.navigator.audioSession.type='ambient';}catch(e){}</script>" + TRANSITIONS_JS, height=1)
+              "w.navigator.audioSession.type='ambient';}catch(e){}</script>" + TRANSITIONS_JS + PASTE_PROOF_JS, height=1)
 if get_secret("NTFY_TOPIC") and not os.getenv("NTFY_TOPIC"):
     os.environ["NTFY_TOPIC"] = get_secret("NTFY_TOPIC")  # same secret seed as the nagger for surprise events
 
