@@ -242,9 +242,12 @@ def sync_out(n: Notion, m: dict, tasks: list[dict], now: datetime) -> list[str]:
                     n.req("PATCH", f"/pages/{t['out_page']}", json={"archived": True})
                     t["out_archived"] = True
         except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
-            if "archived" in str(e) and t["status"] == "open":  # its card is gone (trashed, or the task came back):
-                for k in ("out_page", "out_archived", "out_state", "out_sig"):  # forget it; a fresh card next save
-                    t.pop(k, None)
+            if "archived" in str(e):  # its card was trashed in Notion
+                if t["status"] == "open":  # still on the plan (or it came back): forget it; a fresh card next save
+                    for k in ("out_page", "out_archived", "out_state", "out_sig"):
+                        t.pop(k, None)
+                else:  # finished or dropped: the card being gone is where it was headed anyway, so stop touching it
+                    t.update(out_archived=True, out_state=t["status"])
                 continue
             errs.append(f"{t['title']}: {e}")
     return errs
@@ -296,6 +299,13 @@ def sync_goals(n: Notion, m: dict, goals: list[dict]) -> list[str]:
                 n.req("PATCH", f"/pages/{g['assign_out']}", json={"properties": goal_props(m, g)})
                 g["assign_sig"] = sig
         except Exception as e:  # noqa: BLE001 — a board hiccup must never block the game
+            if "archived" in str(e):  # its card was trashed: an open goal gets a fresh one, a claimed one is done
+                if g.get("claimed"):
+                    g["assign_sig"] = sig
+                else:
+                    g.pop("assign_out", None)
+                    g.pop("assign_sig", None)
+                continue
             errs.append(f"goal {g['title']}: {e}")
     return errs
 
