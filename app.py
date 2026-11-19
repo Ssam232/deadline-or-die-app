@@ -2062,7 +2062,7 @@ def render_proof_form(state: dict, t: dict, mode: str, scope: str = "") -> None:
         up = st.file_uploader("Proof file (photo, screenshot, PDF, code…)" + (" — optional" if timer_ok else
                               " — optional, pays in full" if partial else ""),
                               type=PROOF_TYPES, key=f"file_{k}", **touch)
-        st.caption("📋 Or paste a screenshot: Ctrl/⌘+V here, or paste into the box above on a phone.")
+        st.button("📋 Paste screenshot from clipboard", key=f"paste_{k}")  # read in the page (PASTE_PROOF_JS); Ctrl/⌘+V works too
         link = st.text_input("Link (optional — commit, Google Doc, Overleaf…)", key=f"link_{k}", **touch)
     actual = None
     if not timer_ok and not (partial and not up and not link.strip()):  # the timer isn't the proof: ask how long it took
@@ -8171,7 +8171,7 @@ def _server_started() -> float:
 # 📋 Paste a screenshot as proof: Ctrl/⌘+V anywhere (or paste into a text box on a phone) drops a copied image into
 # the proof uploader nearest to where you are, as if you'd picked the file. Installed into the page once.
 PASTE_PROOF_JS = r"""<script>(function(){var P;try{P=parent;P.document;}catch(e){return;}
-if(P.__dodPaste==='v2')return;P.__dodPaste='v2';var D=P.document,last=null;
+if(P.__dodPaste==='v3')return;P.__dodPaste='v3';var D=P.document,last=null;
 var SEL='[class*="st-key-file_"] input[type=file],[class*="_up"] input[type=file]';
 function vis(i){var b=i.closest('[data-testid=stFileUploader]')||i.parentElement;if(!b)return false;
  var r=b.getBoundingClientRect();return r.height>0&&r.width>0&&(b.checkVisibility?b.checkVisibility({visibilityProperty:true}):b.offsetParent!==null);}
@@ -8183,12 +8183,23 @@ function target(){var all=[].slice.call(D.querySelectorAll(SEL)).filter(vis);if(
 function toast(m){var d=D.createElement('div');d.textContent=m;d.style.cssText='position:fixed;left:50%;bottom:96px;transform:translateX(-50%);'+
  'background:#1f2430;color:#ece8df;border:1px solid #3a4050;padding:8px 14px;border-radius:10px;z-index:99999;font:14px sans-serif';
  D.body.appendChild(d);setTimeout(function(){d.remove();},2200);}
+function put(inp,f){var ext=(f.type.split('/')[1]||'png').replace('jpeg','jpg'),
+ n='pasted-'+new Date().toISOString().slice(0,19).replace(/[T:]/g,'-')+'.'+ext;
+ var dt=new DataTransfer();dt.items.add(new File([f],n,{type:f.type}));inp.files=dt.files;
+ inp.dispatchEvent(new Event('change',{bubbles:true}));toast('📋 Screenshot added as proof');}
+D.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[class*="st-key-paste_"]');if(!b)return;
+ e.preventDefault();e.stopImmediatePropagation();  // the clipboard is read here in the page; the app needn't rerun
+ var k=(b.className.match(/st-key-paste_(\S+)/)||[])[1],inp=k&&D.querySelector('.st-key-file_'+k+' input[type=file]');
+ if(!inp){toast('Open the proof form first');return;}
+ var cb=P.navigator.clipboard;if(!cb||!cb.read){toast('This browser can’t read the clipboard here: press Ctrl/⌘+V instead');return;}
+ cb.read().then(function(items){for(var i=0;i<items.length;i++){var ty=items[i].types.filter(function(x){return /^image\//.test(x);})[0];
+   if(ty)return items[i].getType(ty).then(function(bl){put(inp,new File([bl],'clip',{type:ty}));});}
+  toast('No image on your clipboard: copy a screenshot first');})
+ .catch(function(){toast('Clipboard access was blocked: allow it, or press Ctrl/⌘+V');});},true);
 D.addEventListener('paste',function(e){var cd=e.clipboardData;if(!cd)return;var f=null;
  for(var k=0;k<cd.items.length;k++){var it=cd.items[k];if(it.kind==='file'&&/^image\//.test(it.type)){f=it.getAsFile();break;}}
  if(!f)return;var inp=target();if(!inp){toast('Open the proof form first, then paste');return;}
- var ext=(f.type.split('/')[1]||'png').replace('jpeg','jpg'),n='pasted-'+new Date().toISOString().slice(0,19).replace(/[T:]/g,'-')+'.'+ext;
- var dt=new DataTransfer();dt.items.add(new File([f],n,{type:f.type}));inp.files=dt.files;
- inp.dispatchEvent(new Event('change',{bubbles:true}));e.preventDefault();toast('📋 Screenshot added as proof');},true);
+ e.preventDefault();put(inp,f);},true);
 })();</script>"""
 
 

@@ -159,7 +159,7 @@ Self-entered habits that must happen every day: 💧 water ×8, 🕌 prayers ×5
 
 **🏁 Under the flag.** If you started a timer on a task before its deadline, the deadline waits for it: while that timer runs (or is paused) the task can't be marked missed, like a car that crossed the line before the flag gets to finish its lap. When you stop, you have 30 min to hand in proof, and the finish counts as on time, for the deadline's own day (a midnight clutch keeps yesterday's streak and mission). The day's zero-day check waits until that session is logged. A timer started after the deadline doesn't count.
 
-**📋 Paste a screenshot as proof.** With a proof form open, Ctrl/⌘+V drops a copied image into its file box (on a phone, paste into the "What did you do?" box). If two forms are open, it goes to the one you last tapped.
+**📋 Paste a screenshot as proof.** Copy a screenshot, then tap **📋 Paste screenshot from clipboard** under the proof file box and it's attached, as if you'd picked the file (your browser may ask once to allow clipboard access). Ctrl/⌘+V with a proof form open works too.
 
 **⏹️ Forgotten timers end themselves.** A timed session that runs an hour past its finish, a flow past its 4 h ceiling, a pause past its limit, or any timer older than 5 hours ends on the next load. It logs what a stop without confirming overtime gives (the planned time plus 15 min), earns no clutch, and stops holding the deadline or the day's settle, so a timer left running can't keep a task safe forever. The app tells you when it happens.
 
