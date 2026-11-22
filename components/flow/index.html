@@ -14,11 +14,13 @@ svg.has-sel g.node:not(.sel){opacity:.55}svg.has-sel g.node:not(.sel):hover{opac
 g.plus{cursor:pointer;opacity:.75}g.plus:hover{opacity:1}
 g.plus circle{fill:#f5d76e;stroke:#0e1117;stroke-width:1.5}
 g.plus text{fill:#2a2410;font:700 12px system-ui,sans-serif;pointer-events:none}
+g.play{cursor:pointer;opacity:.85}g.play:hover{opacity:1}g.play:hover circle{filter:brightness(1.2)}
+g.play circle{fill:#2ec4b6;stroke:#0e1117;stroke-width:1.5}g.play path{fill:#08201d;pointer-events:none}
 </style>
 <script src="viz-standalone.js"></script>
 </head>
 <body>
-<div id="wrap"></div><div id="hint">Tap a box to open it in the editor below · ＋ adds a note to it.</div>
+<div id="wrap"></div><div id="hint">Tap a box to open it in the editor below · ▶ starts a timer on it · ＋ adds a note to it.</div>
 <script>
 // 🗺️ The roadmap flow chart, drawn with Graphviz (viz.js, MIT) and clickable: tapping a box sends its id back to
 // the app, which opens that block / stage / goal for editing right under the chart.
@@ -26,7 +28,7 @@ const send = (type, extra) => window.parent.postMessage(Object.assign({isStreaml
 let lastDot = null, lastSel = null, vizP = Viz.instance();
 const height = () => send("streamlit:setFrameHeight", {height: document.body.scrollHeight + 4});
 function mark(sel) {
-  sel = (sel || "").replace(/^add:/, "");
+  sel = (sel || "").replace(/^(add|play):/, "");
   const svg = document.querySelector("#wrap svg");
   if (svg) svg.classList.toggle("has-sel", !!sel);
   document.querySelectorAll("g.node").forEach(g => {
@@ -38,6 +40,7 @@ window.addEventListener("message", ev => {
   const d = ev.data || {};
   if (d.type !== "streamlit:render") return;
   const a = d.args || {};
+  const plays = new Set(a.play || []);
   if (a.dot === lastDot) { if (a.sel !== lastSel) { lastSel = a.sel; mark(a.sel); } return; }
   lastDot = a.dot; lastSel = a.sel;
   vizP.then(viz => {
@@ -63,7 +66,22 @@ window.addEventListener("message", ev => {
         send("streamlit:setComponentValue", {value: {id: id, add: true, t: Date.now()}, dataType: "json"});
       });
       g.parentNode.appendChild(p);
+      if (!plays.has(id)) return;
+      // ▶ badge on the left edge of an open block (clear of its text): start a focus timer on it
+      const q = document.createElementNS(NS, "g");
+      q.setAttribute("class", "play");
+      q.setAttribute("transform", "translate(" + (b.x - 5) + "," + (b.y + b.height / 2) + ")");
+      q.innerHTML = '<title>Start a focus timer on it</title><circle r="10"></circle><path d="M-3,-5 L5,0 L-3,5 Z"></path>';
+      q.addEventListener("click", e => {
+        e.stopPropagation(); mark(id);
+        send("streamlit:setComponentValue", {value: {id: id, play: true, t: Date.now()}, dataType: "json"});
+      });
+      g.parentNode.appendChild(q);
     });
+    if (plays.size) {  // room for the ▶ badges that sit out past the left-most boxes
+      const vb = (svg.getAttribute("viewBox") || "").split(/[ ,]+/).map(Number);
+      if (vb.length === 4) svg.setAttribute("viewBox", [vb[0] - 18, vb[1], vb[2] + 18, vb[3]].join(" "));
+    }
     mark(a.sel); height();
     setTimeout(height, 120);
   }).catch(e => { document.getElementById("wrap").textContent = "Couldn't draw the chart: " + e; height(); });

@@ -9117,13 +9117,15 @@ def render_flow(state: dict, g: dict) -> None:
     dot = R.dot(g, state["tasks"], now(), accent(state)[0])
     sel = st.session_state.get(f"flow_sel_{gid}")
     try:
-        ev = _FLOW(dot=dot, sel=sel or "", key=f"flow_{gid}", default=None)
+        plays = [f"t_{x['id']}" for x in R.goal_tasks(g, state["tasks"]) if x["status"] == "open"]
+        ev = _FLOW(dot=dot, sel=sel or "", play=plays, key=f"flow_{gid}", default=None)
     except Exception:  # noqa: BLE001 — never lose the chart: fall back to the plain (non-tappable) one
         ev = None
         st.graphviz_chart(dot, use_container_width=True)
     if ev and ev.get("t") != st.session_state.get(f"flow_t_{gid}"):
         st.session_state[f"flow_t_{gid}"] = ev.get("t")
-        sel = st.session_state[f"flow_sel_{gid}"] = ("add:" if ev.get("add") else "") + (ev.get("id") or "")
+        sel = st.session_state[f"flow_sel_{gid}"] = ("add:" if ev.get("add") else "play:" if ev.get("play") else "") \
+            + (ev.get("id") or "")
         _flow_preselect(state, g, sel)
     if not sel:
         return False
@@ -9134,6 +9136,14 @@ def render_flow(state: dict, g: dict) -> None:
             st.rerun()
         if sel.startswith("add:"):  # the ＋ badge: just a quick note, nothing else
             render_quick_note(state, g, sel[4:], c1)
+            return False
+        if sel.startswith("play:"):  # the ▶ badge: straight to starting a timer on that block
+            t = next((x for x in state["tasks"] if x["id"] == sel[7:]), None)
+            if t and t["status"] == "open":
+                c1.markdown(f"**▶ Start on {html.escape(t['title'])}**")
+                render_block_play(state, t, kp="fpl", inline=True)
+            else:
+                c1.caption("That block isn't open any more.")
             return False
         t = next((x for x in state["tasks"] if x["id"] == sel[2:]), None) if sel.startswith("t_") else None
         n = next((x for x in R.stages(g) if x["id"] == sel[2:]), None) if sel.startswith("s_") else None
@@ -9172,13 +9182,14 @@ def start_block(state: dict, t: dict, mins: int, every: int = FLOW_CHECK) -> Non
         flash(f"▶️ **{t['title']}** — {mins}-min focus timer running. Phone face-down.", sound="win")
 
 
-def render_block_play(state: dict, t: dict, kp: str = "bp") -> None:
+def render_block_play(state: dict, t: dict, kp: str = "bp", inline: bool = False) -> None:
     """The ▶ on a block: asks flow (default) or a set timer, then starts it."""
     if t["status"] != "open":
         return
     running = state.get("timer")
-    with st.popover("▶ Start a focus timer on it" if kp == "fbp" else "▶", help="Start the focus timer on this block",
-                    use_container_width=True):
+    with (st.container() if inline else
+          st.popover("▶ Start a focus timer on it" if kp == "fbp" else "▶", help="Start the focus timer on this block",
+                     use_container_width=True)):
         if running:
             cur = next((x["title"] for x in state["tasks"] if x["id"] == running.get("task_id")), "another task")
             st.warning(f"⏱️ A timer is already running on **{cur}**. Stop it first.")
