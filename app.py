@@ -9394,6 +9394,11 @@ with tab_goals:
                     state["goals"].remove(g)
                     save_state(state)
                     st.rerun()
+            else:
+                n_o = sum(1 for t in gtasks if t["status"] == "open")
+                st.caption(f"🗑️ To delete this goal, first finish or remove its {n_o} open "
+                           f"block{'s' if n_o != 1 else ''} (🗑️ Remove with a reason, on the task). Its blocks can't "
+                           f"be dodged by deleting the goal.")
 
 # ── Stats ──
 VIZ = {"normal": "#3987e5", "dead": "#d95926", "peak": "#199e70", "low": "#1d2735", "grid": "#2b2e36"}
