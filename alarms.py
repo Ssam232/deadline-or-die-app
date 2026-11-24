@@ -170,16 +170,30 @@ def _blocks(save: dict, now: datetime) -> list[dict]:
     return out
 
 
+def _close_word(save: dict, d: date, tz) -> str:
+    """🌙 When day d scores: "midnight", or "2 AM" with the day ending at 2."""
+    close = daily.day_close(save, d, tz) + timedelta(minutes=1)
+    return "midnight" if close.hour == 0 else close.strftime("%I %p").lstrip("0")
+
+
+def _left_until(save: dict, d: date, tz, hh: int, mm: int) -> str:
+    """Time left from hh:mm on day d until the day scores, e.g. "4 hours" or "2.5 hours"."""
+    at = datetime.combine(d, datetime.min.time(), tz).replace(hour=hh, minute=mm)
+    h = round((daily.day_close(save, d, tz) + timedelta(minutes=1) - at).total_seconds() / 3600, 1)
+    return f"{h:g} hour{'s' * (h != 1)}"
+
+
 def _day(save: dict, d: date, now: datetime) -> list[dict]:
     if "tasks" not in save:
         return []
     out, rest = [], daily.is_rest(save, d)
     c = daily.cfg(save)
     qd = daily.qualify_deadline(save, d, now.tzinfo)
+    mid = _close_word(save, d, now.tzinfo)  # 🌙 when the day scores
     for mins, prio, title, msg in (
             (60, 4, "🚦 1 hour to qualify", f"Lock in 1–3 things before {_hm(qd)} for +{c['qualify_fuel']} fuel."),
             (30, 5, "🚦 30 MIN TO QUALIFY", f"No mission locked in. At {_hm(qd)} you lose {c['qualify_penalty']} "
-                                           "coins and the safety car picks your task. Takes 30 seconds."),
+                                           "coins and the safety car comes out (30 min of work, by tonight). Takes 30 seconds."),
             (10, 5, "🚦 10 MIN TO QUALIFY", "Open the app and lock in today's mission. Now.")):
         out.append(_alarm(("q", d, mins), qd - timedelta(minutes=mins), title, msg, prio, ["vertical_traffic_light"],
                           not rest and not daily.qualified(save, d) and not daily.qualify_optional(d)))
@@ -206,23 +220,24 @@ def _day(save: dict, d: date, now: datetime) -> list[dict]:
     zero = (not rest and d.weekday() not in daily.WEEKEND and not daily.finished_on(save, d)
             and not daily.slice_worked(save, d) and not C.attended_on(save, d))  # weekends optional; slices/showing up count
     for hh, mm, prio, title, msg in (
-            (18, 0, 4, "⚠️ Zero finishes today", f"6 PM and nothing done. Midnight = −{c['zero_day_penalty']} coins "
-                                                "and the day streak dies. Smallest task, now."),
-            (20, 0, 5, "🔴 ZERO-DAY WARNING", "Still nothing. 4 hours left. One proof-backed finish saves the day."),
-            (21, 30, 5, "☠️ LAST CALL", f"2.5 hours to midnight. One finish saves the streak and "
-                                        f"{c['zero_day_penalty']} coins.")):
+            (18, 0, 4, "⚠️ Zero finishes today", f"6 PM and nothing done. At {mid}: −{c['zero_day_penalty']} coins "
+                                                "and the day streak dies. Smallest task, now (a pit check counts)."),
+            (20, 0, 5, "🔴 ZERO-DAY WARNING", f"Still nothing. {_left_until(save, d, now.tzinfo, 20, 0)} left. "
+                                              "One proof-backed finish saves the day."),
+            (21, 30, 5, "☠️ LAST CALL", f"{_left_until(save, d, now.tzinfo, 21, 30)} to {mid}. One finish saves the "
+                                        f"streak and {c['zero_day_penalty']} coins.")):
         out.append(_alarm(("z", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
                           title, msg, prio, ["warning"], zero))
     stake, lines = DL.at_stake(save, d)
     for hh, mm, prio, title in ((20, 0, 4, "🔁 Dailies still open"), (22, 30, 5, "🔁 LAST CALL on dailies")):
         out.append(_alarm(("dl", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
-                          title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio,
+                          title, f"{' · '.join(lines)}\n−{stake} coins at {mid} if they're not done.", prio,
                           ["repeat"], bool(stake) and not rest))
     # ⏱️ committed slices still short: 8 PM and 10:30 PM, cancelled as soon as the timer covers them
     pen, lines = daily.slice_penalty(save, d)
     for hh, mm, prio, title in ((20, 0, 4, "⏱️ Slices still open"), (22, 30, 5, "⏱️ LAST CALL on slices")):
         out.append(_alarm(("sl", d, hh), datetime.combine(d, datetime.min.time(), now.tzinfo).replace(hour=hh, minute=mm),
-                          title, "\n".join(lines[:3]) + f"\n−{pen} coins at midnight for the minutes you don't log.",
+                          title, "\n".join(lines[:3]) + f"\n−{pen} coins at {mid} for the minutes you don't log.",
                           prio, ["stopwatch"], bool(pen) and not rest))
     # 🗓️ Sunday-evening weekly recap
     if d.weekday() == J.RECAP_DAY:

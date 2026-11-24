@@ -145,24 +145,16 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
         dm["date"] = now.date().isoformat()
     out = []
     if not stt["qualified"] and not stt["optional"]:
-        left = (stt["deadline"] - now).total_seconds() / 60
-        if 0 < left <= 60:
-            pass  # the 60/30/10-min countdown is queued on ntfy (alarms.py)
-        elif 0 < left <= 30 and not dm.get("q30"):
-            dm["q30"] = dm["q60"] = True
-            out.append((f"🚦 {int(left)} MIN TO QUALIFY",
-                        f"No mission locked in. At {stt['deadline']:%I:%M %p} you lose {c['qualify_penalty']} coins "
-                        "and the safety car picks your task for you. Takes 30 seconds — do it now.", 5, ["vertical_traffic_light"]))
-        elif 30 < left <= 60 and not dm.get("q60"):
-            dm["q60"] = True
-            out.append(("🚦 1 hour to qualify",
-                        f"What are you finishing today? Lock in 1–3 things before {stt['deadline']:%I:%M %p} "
-                        f"for +{c['qualify_fuel']} fuel.", 4, ["vertical_traffic_light"]))
-        elif left <= 0 and not dm.get("qmiss") and not quiet:
-            dm["qmiss"] = dm["q30"] = dm["q60"] = True
+        left = (stt["deadline"] - now).total_seconds() / 60  # (the 60/30/10-min countdown is queued on ntfy: alarms.py)
+        if left <= 0 and not dm.get("qmiss") and not quiet:
+            dm["qmiss"] = True
+            gd_ = daily.gday(save, now)  # when the safety car is due: the same rule the app uses when it deploys it
+            sc_due = min(max(datetime.combine(gd_, datetime.min.time(), now.tzinfo).replace(hour=int(c["safety_car_hour"])),
+                             now + timedelta(hours=3)), daily.day_close(save, gd_, now.tzinfo))
             out.append(("🚨 Missed qualifying — safety car out",
-                        f"−{c['qualify_penalty']} coins, rivals faster. Your task now: 30 min of focused work, proof by "
-                        f"{int(c['safety_car_hour'])}:00. Open the app to see it.", 5, ["rotating_light"]))
+                        f"−{c['qualify_penalty']} coins, rivals faster. The safety car wants 30 min of timer time on "
+                        f"anything (pit checks count, sessions add up) by {sc_due:%I:%M %p}. Start small: even clearing "
+                        "your inbox gets you moving.", 5, ["rotating_light"]))
     elif stt["start_at"] and not dm.get("lights") and not stt["done_today"]:
         h, m = (int(x) for x in stt["start_at"].split(":"))
         start = now.replace(hour=h, minute=m, second=0, microsecond=0)
@@ -179,7 +171,7 @@ def daily_nags(save: dict, mem: dict, now: datetime, quiet: bool) -> list[tuple]
     for key, at_h, prio, title in (("h2230", 22.5, 5, "🔁 LAST CALL on dailies"), ("h20", 20, 4, "🔁 Dailies still open")):
         if stake and hour_f >= at_h and not dm.get(key):
             dm["h20"] = dm[key] = True
-            out.append((title, f"{' · '.join(lines)}\n−{stake} coins at midnight if they're not done.", prio, ["repeat"]))
+            out.append((title, f"{' · '.join(lines)}\n−{stake} coins at {AL._close_word(save, gd, now.tzinfo)} if they're not done.", prio, ["repeat"]))
             break
     if not stt["done_today"] and not daily.slice_worked(save, gd) and not C.attended_on(save, gd) \
             and not quiet:
@@ -243,8 +235,8 @@ def suggestion_candidates(n: Notion, save: dict, now: datetime) -> list[tuple[st
             papers = Z.to_read(zu, zk, save.get("settings", {}).get("zotero_collection") or "To Read")
             if papers:
                 p = random.choice(papers[:10])
-                out.append(("📄 From your reading list", f"{Z.label(p)} — 45 min of deep work = +51. "
-                                                        "Open the app and add it."))
+                out.append(("📄 From your reading list", f"{Z.label(p)}: one deep-work session. "
+                                                        "Open the app and add it to today."))
         except Exception as e:
             print(f"zotero suggestion skipped: {e}")
     return out
