@@ -3495,7 +3495,6 @@ def render_qualify_form(state: dict) -> None:
     sl_new = _slice_picker(state, today, picked, opts, fk)  # ⏱️ time into something bigger, deadline untouched
     _q_restore(state)
     pending = st.session_state["q_pending"]
-    queue_slot = st.container()  # drawn after the form runs, so a new entry shows without a second redraw
     # timing lives in one small popover: start + done-by, with the current choice on its label
     sk, dk = f"q_start{fk}_chip", f"q_due{fk}_chip"
     s_chip, d_chip = st.session_state.get(sk, "30m"), st.session_state.get(dk, "9 PM")
@@ -3517,6 +3516,8 @@ def render_qualify_form(state: dict) -> None:
     need = daily.min_mission_minutes(state)
     st.pills("Quick add", [x[0] for x in Q.TEMPLATES], key=f"q_tpl{fk}", selection_mode="single",
              label_visibility="collapsed", on_change=_q_tpl, args=(f"q_tpl{fk}", state))
+    # queued tasks sit right above the box you type in (drawn after the form runs, so a new one shows at once)
+    queue_slot = st.container(key=f"q_queue{fk}")
     with st.form(f"q_form{fk}", clear_on_submit=True, border=False, enter_to_submit=True):
         c1, c2, c3 = st.columns([0.8, 1.05, 0.3], vertical_alignment="bottom")
         txt_ = c1.text_input("New task", key=f"q_new{fk}", label_visibility="collapsed",
@@ -3541,6 +3542,8 @@ def render_qualify_form(state: dict) -> None:
     if (add_ or go_) and (txt_ or "").strip():
         _q_put(txt_, TIME_CHIPS.get(min_) if min_ else None, state)
         pending = st.session_state["q_pending"]
+        if add_ and not go_:
+            st.toast(f"➕ Queued **{html.escape(txt_.strip()[:60])}**, just above the box", icon="📝")
     _render_queue(queue_slot, pending, fk, state)
     if not go_:
         return
