@@ -2765,7 +2765,8 @@ def remember_key(pw: str) -> str:
 
 
 def make_safety_car(due: datetime) -> dict:
-    return make_task(daily.SAFETY_CAR_TITLE, "Proof: a screenshot of a 30-min timer + one line on what you did.",
+    return make_task(daily.SAFETY_CAR_TITLE, "30 min of timer time on any task (pit checks count) brings it in by itself, "
+                     "adding up across sessions. Or a screenshot of a 30-min timer + one line on what you did.",
                      due, None, "🔒 Games locked on PC + phone until it's done", category="deep", minutes=30)
 
 
@@ -6676,6 +6677,45 @@ def flow_bonus(tm: dict, mins: float) -> tuple[int, float]:
     return min(FLOW_BONUS_CAP, int(flow // FLOW_COIN_PER)), flow
 
 
+SAFETY_CAR_MIN = 30
+
+
+def safety_car_minutes(state: dict, sc: dict) -> float:
+    """Timer minutes logged on any other task since the safety car came out (pit checks too: on a rough day, a small
+    start is the point). A session that began before it came out counts only its part after."""
+    out_at, total = parse_dt(sc["created"]), 0.0
+    for x in state.get("focus_log", []):
+        if x.get("task") == sc["id"] or not x.get("start"):
+            continue
+        s_ = parse_dt(x["start"])
+        e_ = s_ + timedelta(minutes=float(x.get("min") or 0))
+        if e_ > out_at:
+            total += (e_ - max(s_, out_at)).total_seconds() / 60
+    return total
+
+
+def clear_safety_car(state: dict) -> str:
+    """🚨 The safety car asks for 30 focused minutes on anything real, so 30 timer minutes on any task after it came
+    out (adding up across sessions) bring it in: done and paid, the proof being those sessions."""
+    sc_id = daily.peek_day(state, gtoday()).get("safety_car")
+    sc = next((x for x in state["tasks"] if x["id"] == sc_id and x["status"] == "open"), None) if sc_id else None
+    if not sc:
+        return ""
+    got = safety_car_minutes(state, sc)
+    if got < SAFETY_CAR_MIN:
+        return f"🚨 Safety car: **{int(got)}/{SAFETY_CAR_MIN} min** of timer time logged since it came out."
+    at = now()
+    reward, why = compute_reward(state, sc, at)
+    bank(state, reward, f"🏁 Done: {sc['title']}")
+    sc.update(status="done", earned=reward, completed_at=at.isoformat(), proof_timer=round(got, 1), proof_kind="timer",
+              proof_note=f"Cleared by {int(got)} min of timer time on your own tasks after the safety car came out.")
+    state["xp"] += max(1, int(sc.get("xp") or 0))
+    state["streak"] += 1
+    state["best_streak"] = max(state["best_streak"], state["streak"])
+    save_state(state)
+    return f"🟢 **Safety car in.** Your {int(got)} timer minutes cleared it: **+{reward} coins** ({why}). Green flag, keep going."
+
+
 def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -> None:
     """Credit a finished/stopped focus session: focus minutes, XP, loot drop, focus challenge."""
     full = mins >= 25 if tm.get("flow") else mins >= tm["planned"]
@@ -6743,6 +6783,9 @@ def _log_session(state: dict, t: dict, start: datetime, mins: float, tm: dict) -
         drop_msg = (drop_msg + "\n\n" if drop_msg else "") + (
             f"🏁 **Under the flag.** You were on it when the deadline hit, so it isn't late: hand in proof in the next "
             f"{CLUTCH_PROOF_MIN} min and it counts as on time, for {parse_dt(t['deadline']):%A}.")
+    sc_msg = clear_safety_car(state)
+    if sc_msg:
+        drop_msg = (drop_msg + "\n\n" if drop_msg else "") + sc_msg
     flash(f"⏱️ Logged **{int(mins)} min** on *{t['title']}*" + (" — full session! 🔥" if full else "")
           + f" +{int(mins // 5)} XP. Today: {focus_today(state)} min." + (f"\n\n{drop_msg}" if drop_msg else ""),
           sound=snd, celebrate=bool(drop_msg))

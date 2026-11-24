@@ -372,8 +372,8 @@ def settle(save: dict, now: datetime, bank, make_safety_car) -> list[str]:
         save["tasks"].append(t)
         e["safety_car"] = t["id"]
         msgs.append(f"### 🚦 MISSED QUALIFYING\nNo mission by {c['qualify_by']}:00. −{c['qualify_penalty']} coins, "
-                    f"rivals faster.\n\n🚨 **Safety car deployed:** 30 min of focused work, proof due "
-                    f"{due:%I:%M %p}. You can still add your own mission below.")
+                    f"rivals faster.\n\n🚨 **Safety car deployed:** 30 min of focused work by {due:%I:%M %p}. Timer time on "
+                    f"anything counts, pit checks too, so your own mission (add it below) brings it in.")
     return msgs
 
 
