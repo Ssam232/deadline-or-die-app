@@ -574,6 +574,48 @@ def extend(save: dict, t: dict, now: datetime, hours: int, bank) -> tuple[bool, 
                                        " It stays on today's mission: it's holding up your hour." if held else ""))
 
 
+# 🔖 Bookmark: a paper can take more than one sitting. Stop partway and today's timer minutes on it count today (as a
+# finished slice: they go toward the hour and keep the day from being a zero day), and the task moves to tomorrow with
+# no fee and no reward cut. Its timer minutes carry over, so tomorrow picks up where you stopped. Guards: real time
+# first (BOOKMARK_MIN today), once a day, BOOKMARK_MAX times per task.
+BOOKMARK_MIN, BOOKMARK_MAX = 20, 3
+
+
+def bookmark_check(save: dict, t: dict, now: datetime) -> tuple[bool, str]:
+    if t.get("status") != "open":
+        return False, "Only open tasks."
+    d = gday(save, now)
+    if d.isoformat() in (t.get("bookmarks") or []):
+        return False, "Already bookmarked today. It's on tomorrow."
+    if len(t.get("bookmarks") or []) >= BOOKMARK_MAX:
+        return False, f"Bookmarked {BOOKMARK_MAX} times already: this sitting finishes it."
+    got = slice_logged(save, t["id"], d)
+    if got < BOOKMARK_MIN:
+        return False, f"Put {BOOKMARK_MIN} min on the timer on it today first ({got:.0f} so far)."
+    return True, f"{got:.0f} min today count toward today."
+
+
+def bookmark(save: dict, t: dict, now: datetime, where: str) -> tuple[bool, str]:
+    ok, why = bookmark_check(save, t, now)
+    if not ok:
+        return False, why
+    d = gday(save, now)
+    got = int(slice_logged(save, t["id"], d))
+    sl = next((x for x in peek_day(save, d).get("slices", []) if x["tid"] == t["id"]), None)
+    if not sl:  # today's minutes become a slice already met (an existing slice keeps its own size)
+        add_slice(save, d, t, got)
+    if t.get("mission_day") == d.isoformat():
+        t.pop("mission_day", None)
+    tomorrow = day_close(save, d + timedelta(days=1), now.tzinfo)
+    if datetime.fromisoformat(t["deadline"]) < tomorrow:
+        t["deadline"] = tomorrow.isoformat()
+    t.setdefault("bookmarks", []).append(d.isoformat())
+    t["bookmark"] = where.strip()[:160]
+    left = max(0, int((t.get("minutes") or 60) - float(t.get("focus_min") or 0)))
+    return True, (f"🔖 **Bookmarked.** {got} min count today; it's due tomorrow by {tomorrow:%I:%M %p}, no fee. "
+                  f"Your {int(float(t.get('focus_min') or 0))} min carry over" + (f", about {left} to go." if left else "."))
+
+
 # 🔁 Tried, but it's blocked: things you can't finish alone (a reply, a payment that bounced, an office that was
 # closed). You did your part, so the attempt counts today as a small finished item (a quarter of the reward, keeps
 # the mission and the day streak honest), and the task comes back on a retry day of your choosing with no fee.

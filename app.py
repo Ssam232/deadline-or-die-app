@@ -3769,6 +3769,36 @@ def render_blocked(state: dict, t: dict, scope: str) -> None:
                 st.error(msg_)
 
 
+def render_bookmark(state: dict, t: dict, scope: str) -> None:
+    """🔖 A paper over two sittings: stop partway, today's minutes count, it's due tomorrow, the minutes carry over."""
+    if not (paper_keys(t) or READING_TASK.search(t.get("title", ""))):
+        return
+    if t.get("bookmark"):
+        st.caption(f"🔖 Stopped at: {html.escape(t['bookmark'])}")
+    ok, why = daily.bookmark_check(state, t, now())
+    with st.popover("🔖 Stop here, continue tomorrow", use_container_width=True,
+                    help="A paper over two sittings: today's time counts, tomorrow picks up where you stopped"):
+        if not ok:
+            st.caption(why)
+            return
+        st.caption(f"{why} It moves to tomorrow with no fee and no reward cut, and its timer minutes carry over. "
+                   f"Up to {daily.BOOKMARK_MAX} times per task.")
+        with st.form(f"{scope}bmf_{t['id']}", border=False):
+            where = st.text_input("Where did you stop?", key=f"{scope}bmw_{t['id']}", max_chars=160,
+                                  placeholder="e.g. Results, Fig 3 · p. 9 · halfway through Methods")
+            go_ = st.form_submit_button("🔖 Bookmark it", type="primary", use_container_width=True)
+        if go_ and len(where.strip()) < 3:
+            st.error("Say where you stopped, so tomorrow starts there.")
+        elif go_:
+            done_, msg_ = daily.bookmark(state, t, now(), where)
+            if done_:
+                save_state(state)
+                flash(msg_)
+                st.rerun()
+            else:
+                st.error(msg_)
+
+
 def render_remove(state: dict, t: dict, scope: str) -> None:
     left = REMOVALS_PER_WEEK - removals_this_week(state)
     with st.popover(f"🗑️ Remove with a reason · {max(0, left)} left this week", use_container_width=True):
@@ -3975,6 +4005,7 @@ def render_task_row(state: dict, t: dict, scope: str = "") -> None:
         else:
             ca.caption("No extensions left.")
         render_blocked(state, t, scope)
+        render_bookmark(state, t, scope)
         young = now() - parse_dt(t["created"]) < timedelta(minutes=FREE_DELETE_MIN)
         if not young:
             render_remove(state, t, scope)
@@ -5914,6 +5945,8 @@ def render_timer(state: dict, big: bool = False) -> None:
                 st.rerun()
             title = (t["title"] if t else "—")
             st.markdown(f"#### ⏱️ {html.escape(title[:42] + ('…' if len(title) > 42 else ''))}")
+            if t and t.get("bookmark"):
+                st.caption(f"🔖 Pick up at: {html.escape(t['bookmark'])}")
             if t and (pl_ := paper_links(state, t)):  # 📄 reading on the clock: the paper's one tap away
                 with st.container(horizontal=True, horizontal_alignment="center", key="tm_papers"):
                     for i_, (ttl_, u_) in enumerate(pl_):
