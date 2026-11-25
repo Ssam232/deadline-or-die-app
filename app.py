@@ -7032,9 +7032,28 @@ def render_paper_inbox(state: dict, zc: tuple, papers: list[dict]) -> None:
             st.rerun()
         for it in items:
             k = it["key"]
-            st.markdown(f"<a href='{html.escape(it['url'], quote=True)}' target='_blank'>{html.escape(it['title'])}</a>"
+            t1, t2 = st.columns([5, 1], vertical_alignment="top")
+            t1.markdown(f"<a href='{html.escape(it['url'], quote=True)}' target='_blank'>{html.escape(it['title'])}</a>"
                         f"<br><small style='color:#8b909c'>{html.escape(' · '.join(x for x in (it['who'], it['year'], it['journal']) if x))}</small>",
                         unsafe_allow_html=True)
+            dup = next((p for p in papers if p["key"] != k and Z.same_paper(p, it)), None) or \
+                next((x for x in items if x["key"] != k and Z.same_paper(x, it) and x["key"] < k), None)
+            if dup:
+                where_ = (f"your reading list ({dup['order'] or READING_LABELS.get(dup.get('status'), 'filed')})"
+                          if dup in papers else "this Inbox")
+                t1.caption(f"⚠️ Looks like a duplicate: the same title is already in {where_}.")
+            with t2.popover("🗑️", use_container_width=True, help="Delete it from the Inbox (duplicates and such)"):
+                st.caption("Only in the Inbox → goes to the Zotero trash (restore it from there). Also filed somewhere "
+                           "else → it just leaves the Inbox.")
+                if st.button("🗑️ Delete it", key=f"inbox_del_{k}", type="primary", use_container_width=True):
+                    try:
+                        how = Z.discard_from_inbox(zc[0], zc[1], k, box)
+                        flash("🗑️ Moved to the Zotero trash." if how == "trash" else "🗑️ Taken out of the Inbox "
+                              "(it's still filed elsewhere in Zotero).")
+                    except Exception as e:  # noqa: BLE001
+                        flash(f"Couldn't delete that paper: {e}", "error")
+                    _zotero_inbox.clear()
+                    st.rerun()
             done_ = st.segmented_control(f"Already read {it['title'][:60]}?", ["Not yet", "Already read it"],
                                          default="Not yet", key=f"inbox_read_{k}") or "Not yet"
             qs = st.multiselect("Questions it answers", Z.QUESTIONS, key=f"inbox_q_{k}", placeholder="Optional")

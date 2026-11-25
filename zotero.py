@@ -211,6 +211,32 @@ def set_status(user: str, key: str, item_key: str, status: str, collection: str 
             raise ZoteroError(f"Zotero couldn't save that ({r.status_code}): {detail}")
 
 
+def discard_from_inbox(user: str, key: str, item_key: str, inbox: str) -> str:
+    """🗑️ A duplicate or a paper you don't want: one that's only in the Inbox goes to the Zotero trash (you can restore
+    it there); one that's also filed elsewhere just leaves the Inbox. Returns "trash" or "unfiled"."""
+    for attempt in (1, 2):
+        r = requests.get(f"{API}/users/{user}/items/{item_key}", headers=_h(key), timeout=20)
+        if r.status_code != 200:
+            raise ZoteroError(f"Zotero {r.status_code}")
+        it = r.json()
+        rest = [c for c in it["data"].get("collections", []) if c != inbox]
+        body, how = ({"collections": rest}, "unfiled") if rest else ({"deleted": 1}, "trash")
+        r = requests.patch(f"{API}/users/{user}/items/{item_key}",
+                           headers={**_h(key), "If-Unmodified-Since-Version": str(it["version"])}, json=body, timeout=20)
+        if r.status_code in (200, 204):
+            return how
+        if r.status_code != 412 or attempt == 2:
+            detail = "the key needs write access" if r.status_code == 403 else r.text[:120]
+            raise ZoteroError(f"Zotero couldn't remove that ({r.status_code}): {detail}")
+    return ""
+
+
+def same_paper(a: dict, b: dict) -> bool:
+    """Two entries for one paper: same title once case, spacing and punctuation are ignored."""
+    n = lambda x: re.sub(r"[^a-z0-9]+", "", (x or "").casefold())  # noqa: E731
+    return bool(n(a.get("title"))) and n(a.get("title")) == n(b.get("title"))
+
+
 def set_order(user: str, key: str, item_key: str, level: str, num: int) -> str:
     """Writes 'Read order: A03' into the paper's Extra field (replacing any old one, keeping the rest). Needs write
     access. Returns the new order label."""
