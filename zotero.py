@@ -120,6 +120,7 @@ def reading_list(user: str, key: str, collection: str = "To Read") -> list[dict]
         who = who_of(d.get("creators", []))
         m = _ORDER.search(d.get("extra") or "")
         out.append({"key": it["key"], "title": d.get("title") or "(untitled)", "who": who,
+                    "pi": pi_of(d.get("creators", [])), "who_last": last_of(d.get("creators", [])),
                     "year": (d.get("date") or "")[:4], "journal": d.get("publicationTitle") or d.get("websiteTitle") or "",
                     "url": d.get("url") or f"https://www.zotero.org/users/{user}/items/{it['key']}",
                     "status": _status(d.get("tags", [])), "facets": _facets(d.get("tags", [])),
@@ -146,12 +147,32 @@ def to_read(user: str, key: str, collection: str = "To Read", limit: int = 50) -
     return sorted((p for p in reading_list(user, key, collection) if p["rank"]), key=lambda p: p["rank"])[:limit]
 
 
-def who_of(creators: list[dict]) -> str:
-    """'Smith et al.' (or 'Smith' for one author). Falls back to any creator when none is tagged as an author."""
+def _people(creators: list[dict]) -> list[dict]:
+    """The authors (any creator when none is tagged as one), with a name."""
     people = [c for c in creators if c.get("creatorType") == "author"] or list(creators)
-    names = [(c.get("lastName") or c.get("name") or "").strip() for c in people]
-    names = [x for x in names if x]
-    return (names[0] + (" et al." if len(names) > 1 else "")) if names else ""
+    return [c for c in people if (c.get("lastName") or c.get("name") or "").strip()]
+
+
+def _full(c: dict) -> str:
+    return (c.get("name") or f"{c.get('firstName') or ''} {c.get('lastName') or ''}").strip()
+
+
+def who_of(creators: list[dict]) -> str:
+    """The first author's first and last name: 'Gary C. Sieck et al.' (or just the name for one author)."""
+    people = _people(creators)
+    return (_full(people[0]) + (" et al." if len(people) > 1 else "")) if people else ""
+
+
+def pi_of(creators: list[dict]) -> str:
+    """The last author, usually the principal investigator: searched on, so a lab's papers turn up by its PI."""
+    people = _people(creators)
+    return _full(people[-1]) if len(people) > 1 else ""
+
+
+def last_of(creators: list[dict]) -> str:
+    """The first author's last name, for sorting by author."""
+    people = _people(creators)
+    return (people[0].get("lastName") or people[0].get("name") or "").strip() if people else ""
 
 
 def label(p: dict) -> str:
@@ -270,6 +291,7 @@ def inbox_items(user: str, key: str, folder: str) -> list[dict]:
         if d.get("itemType") in SKIP_TYPES:
             continue
         out.append({"key": it["key"], "title": d.get("title") or "(untitled)", "who": who_of(d.get("creators", [])),
+                    "pi": pi_of(d.get("creators", [])),
                     "year": (d.get("date") or "")[:4], "journal": d.get("publicationTitle") or d.get("websiteTitle") or "",
                     "url": d.get("url") or f"https://www.zotero.org/users/{user}/items/{it['key']}"})
     return out

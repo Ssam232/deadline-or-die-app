@@ -3793,6 +3793,15 @@ def render_bookmark(state: dict, t: dict, scope: str) -> None:
             done_, msg_ = daily.bookmark(state, t, now(), where)
             if done_:
                 save_state(state)
+                zc = zotero_cfg(state) if paper_keys(t) else None
+                if zc:  # 📄 its paper(s) show as reading, in Zotero and the Reading list
+                    try:
+                        for k_ in paper_keys(t):
+                            Z.set_status(zc[0], zc[1], k_, "reading", zc[2])
+                        _zotero_reading.clear()
+                        _zotero_list.clear()
+                    except Exception as e:  # noqa: BLE001 — the bookmark stands either way
+                        msg_ += f" (Couldn't mark it reading in Zotero: {e})"
                 flash(msg_)
                 st.rerun()
             else:
@@ -6911,7 +6920,7 @@ READING_SORTS = {"Rank": lambda p: p.get("rank") or 9999,
                  "Newest first": lambda p: -int(p["year"]) if p["year"].isdigit() else 1,
                  "Oldest first": lambda p: int(p["year"]) if p["year"].isdigit() else 9999,
                  "Title": lambda p: p["title"].casefold(),
-                 "Author": lambda p: p["who"].casefold() or "~",
+                 "Author": lambda p: (p.get("who_last") or p["who"]).casefold() or "~",
                  "Question": lambda p: (sorted(p["facets"].get("question", [])) or ["~"])[0],
                  "Subject": lambda p: (p["facets"].get("subject", []) or ["~"])[0].casefold()}
 READING_FILTERS = {"question": "Question", "subject": "Subject", "species": "Species", "sex": "Sex", "type": "Type", "source": "Added by", "scholarship": "Scholarship"}
@@ -7144,7 +7153,7 @@ def render_reading_list(state: dict) -> None:
         if _open(_fo):  # collapsed = not built (faster page, smaller download)
             c1, c2 = st.columns(2)
             sort = c1.selectbox("Sort by", list(READING_SORTS), key="reading_sort")
-            search = c2.text_input("Search", placeholder="Title, author or journal", key="reading_search").strip().casefold()
+            search = c2.text_input("Search", placeholder="Title, author, PI or journal", key="reading_search").strip().casefold()
             options = {f: sorted({v for p in papers for v in p["facets"].get(f, [])}) for f in READING_FILTERS}
             years = sorted({p["year"] for p in papers if p["year"]}, reverse=True)
             cols = st.columns(2)
@@ -7155,7 +7164,7 @@ def render_reading_list(state: dict) -> None:
     shown = [p for p in papers if p["status"] in views[view]
              and (not picked_years or p["year"] in picked_years)
              and all(not vals or set(vals) & set(p["facets"].get(f, [])) for f, vals in picked.items())
-             and (not search or search in f"{p['title']} {p['who']} {p['journal']}".casefold())]
+             and (not search or search in f"{p['title']} {p['who']} {p.get('pi', '')} {p['journal']}".casefold())]
     shown.sort(key=READING_SORTS[sort])  # stable, so ties stay in read order
     if filtered:
         c1, c2 = st.columns([4, 1.2], vertical_alignment="center")
@@ -7178,7 +7187,12 @@ def render_reading_list(state: dict) -> None:
             seen_levels["last"] = head
             st.markdown(f"<div class='dod-sec' style='margin-top:.9rem'>{html.escape(head)}</div>", unsafe_allow_html=True)
         meta = " · ".join(html.escape(x) for x in (p["journal"], "needs check" if p["needs_check"] else "") if x)
-        who_ = f"<b style='color:#c9ccd4'>{html.escape(p['who'])}</b>" if p["who"] else "<i>author unknown</i>"
+        who_ = (f"<b style='color:#c9ccd4'>{html.escape(p['who'])}</b>" if p["who"] else "<i>author unknown</i>") \
+            + (f" · PI {html.escape(p['pi'])}" if p.get("pi") else "")
+        bm_ = next((t["bookmark"] for t in state["tasks"] if t["status"] == "open" and t.get("bookmark")
+                    and p["key"] in paper_keys(t)), "")
+        if bm_:
+            who_ += f"<br>🔖 Stopped at: <b>{html.escape(bm_)}</b>"
         num = (f"<b style='color:#e10600'>#{p['rank']}</b> · " if p.get("rank") else "") + \
               (f"<b>{html.escape(p['order'])}</b> · " if p["order"] else "")
         st.markdown(f"{num}<a href='{html.escape(p['url'], quote=True)}' target='_blank'>{html.escape(p['title'])}</a>"
