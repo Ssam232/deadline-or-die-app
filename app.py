@@ -4197,6 +4197,7 @@ def render_today(state: dict) -> None:
                                      expanded=proof_open(f"today_open_{t['id']}")):
                         render_tags(state, t, "m", extra=lambda t_=t: render_send_back(state, t_, f"m_{t_['id']}"))
                         render_paper_pair(state, t, "today_")
+                        render_bookmark(state, t, "today_")  # 🔖 a paper over two sittings
                         render_proof_form(state, t, "open", scope="today_")
                     running = bool(tm) and tm.get("task_id") == t["id"]
                     if c2.button("⏱️" if running else "▶", key=f"mgo_{t['id']}", use_container_width=True,
