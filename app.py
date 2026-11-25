@@ -7154,6 +7154,19 @@ def render_reading_list(state: dict) -> None:
     if not papers:
         st.caption(f"Nothing in “{zc[2]}” yet.")
         return
+    # 🔖 a paper you've bookmarked is being read: put it there (catches ones bookmarked before this was automatic)
+    bm_keys = {k for t in state["tasks"] if t["status"] == "open" and t.get("bookmark") for k in paper_keys(t)}
+    stale = [p for p in papers if p["key"] in bm_keys and p["status"] == "unread"]
+    if stale:
+        try:
+            for p in stale:
+                Z.set_status(zc[0], zc[1], p["key"], "reading", zc[2])
+                p["status"] = "reading"
+            Z.rank_papers(papers)
+            _zotero_reading.clear()
+            _zotero_list.clear()
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"(Couldn't mark a bookmarked paper as reading in Zotero: {e})")
     count = {s_: sum(p["status"] == s_ for p in papers) for s_ in READING_LABELS}
     kept = len(papers) - count["dropped"]
     st.progress(count["read"] / kept if kept else 0.0,
@@ -7210,12 +7223,11 @@ def render_reading_list(state: dict) -> None:
             + (f" · PI {html.escape(p['pi'])}" if p.get("pi") else "")
         bm_ = next((t["bookmark"] for t in state["tasks"] if t["status"] == "open" and t.get("bookmark")
                     and p["key"] in paper_keys(t)), "")
-        if bm_:
-            who_ += f"<br>🔖 Stopped at: <b>{html.escape(bm_)}</b>"
         num = (f"<b style='color:#e10600'>#{p['rank']}</b> · " if p.get("rank") else "") + \
               (f"<b>{html.escape(p['order'])}</b> · " if p["order"] else "")
         st.markdown(f"{num}<a href='{html.escape(p['url'], quote=True)}' target='_blank'>{html.escape(p['title'])}</a>"
-                    + f"<br><small style='color:#8b909c'>{who_}{' · ' + meta if meta else ''}</small>",
+                    + f"<br><small style='color:#8b909c'>{who_}{' · ' + meta if meta else ''}"
+                    + (f"<br>🔖 Stopped at: <b>{html.escape(bm_)}</b>" if bm_ else "") + "</small>",
                     unsafe_allow_html=True)
         tags = _paper_tags(p)
         if tags:
