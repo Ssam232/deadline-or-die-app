@@ -686,31 +686,38 @@ def _push_tasks(n: Notion, ids: dict, state: dict, _retry: bool = True) -> list[
         from notion_store import _dress_db  # a long-running server can predate newer columns: add them, retry once
         _dress_db(n, ids["tasks_db"])
         errors = _push_tasks_once(n, ids, state)
-    if _retry and any("archived" in e for e in errors) and _tasks_db_gone(n, ids):
-        # 🗑️ the Tasks table itself was deleted / trashed in Notion (even a brand-new row fails): build a fresh one on
-        # the same page, point this server at it, and send every task again
-        from notion_store import ensure_workspace
-        parent = (n.req("GET", f"/databases/{ids['tasks_db']}").get("parent") or {}).get("page_id")
-        if parent:
-            ids.update(ensure_workspace(n, parent))  # the archived table isn't listed any more, so this makes a new one
-            for t in state["tasks"]:
-                t.pop("sync_page", None)
-                t.pop("_sig", None)
-            errors = _push_tasks_once(n, ids, state)
+    refused = [t for t in state["tasks"] if t.get("_push_fail") == "new row"]
+    if _retry and refused:
+        # 🗑️ Notion refused even a brand-new row as "archived": the Tasks table (or the block it sits in) is in the
+        # trash, whatever a plain read of it says. Build a fresh table on the app's page, point this server at it, and
+        # send every task again
+        from notion_store import _tasks_db_schema, clean_id, ensure_workspace
+        old = ids["tasks_db"]
+        parent = clean_id(get_secret("NOTION_PARENT_PAGE") or "")
+        try:
+            if parent:
+                ids.update(ensure_workspace(n, parent))
+                if ids["tasks_db"] == old:  # the old table still shows on the page: make a new one anyway
+                    ids["tasks_db"] = n.req("POST", "/databases", json=_tasks_db_schema(parent))["id"]
+                for t in state["tasks"]:
+                    t.pop("sync_page", None)
+                    t.pop("_sig", None)
+                errors = _push_tasks_once(n, ids, state)
+        except NotionError as e:
+            errors.append(f"rebuilding the Tasks table: {e}")
+        for t in state["tasks"]:  # 🔥 still refused in a fresh table: that row is the problem, so stop sending it
+            if t.get("_push_fail") == "new row":
+                t["notion_burned"] = now().isoformat()
+                t.pop("_push_fail", None)
+                errors = [e for e in errors if not e.startswith(f"{t['title']}: ")]
     return errors
-
-
-def _tasks_db_gone(n: Notion, ids: dict) -> bool:
-    try:
-        d = n.req("GET", f"/databases/{ids['tasks_db']}")
-        return bool(d.get("archived") or d.get("in_trash"))
-    except NotionError:
-        return True
 
 
 def _push_tasks_once(n: Notion, ids: dict, state: dict) -> list[str]:
     errors = []
     for t in state["tasks"]:
+        if t.get("notion_burned"):  # 🔥 a row Notion kept refusing even in a fresh table: not synced any more
+            continue
         goal = goal_title(state, t.get("goal_id"))
         sig = hashlib.md5(json.dumps(task_props(t, goal), sort_keys=True, default=str).encode()).hexdigest()
         if t.get("_sig") == sig and t.get("sync_page"):
@@ -722,8 +729,10 @@ def _push_tasks_once(n: Notion, ids: dict, state: dict) -> list[str]:
                 t.pop("sync_page", None)
                 upsert_task(n, ids["tasks_db"], t, goal)
             except NotionError as e:
+                t["_push_fail"] = "new row" if "archived" in str(e) else ""  # even a brand-new row was refused
                 errors.append(f"{t['title']}: {e}")
                 continue
+        t.pop("_push_fail", None)
         t["_sig"] = sig
     return errors
 
